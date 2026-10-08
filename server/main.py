@@ -9,9 +9,10 @@ from fastapi import FastAPI, HTTPException, Query
 
 import bus_api
 import fusion
+import geocode
 import ocr
 from bus_api import get_eta_seconds
-from contract import NearestStop, VerifyRequest, VerifyResponse
+from contract import NearestStop, RouteSuggestions, VerifyRequest, VerifyResponse
 
 @asynccontextmanager
 async def lifespan(app):
@@ -38,6 +39,25 @@ def nearest(lat: float = Query(ge=-90, le=90), lon: float = Query(ge=-180, le=18
         return bus_api.nearest_stop(lat, lon)
     except (httpx.HTTPError, RuntimeError):
         raise HTTPException(status_code=503, detail="Bus data unavailable")
+
+
+@app.get("/routes/suggest", response_model=RouteSuggestions)
+def suggest(
+    lat: float = Query(ge=-90, le=90),
+    lon: float = Query(ge=-180, le=180),
+    to: str = Query(min_length=1, max_length=100, description="Destination place name, e.g. Улсын их дэлгүүр"),
+):
+    try:
+        dest = geocode.geocode(to.strip())
+    except (httpx.HTTPError, ValueError):
+        raise HTTPException(status_code=503, detail="Place search unavailable")
+    if dest is None:
+        raise HTTPException(status_code=404, detail="Destination not found")
+    try:
+        trips = bus_api.plan_trip(lat, lon, dest["lat"], dest["lon"])
+    except (httpx.HTTPError, ValueError, KeyError):
+        raise HTTPException(status_code=503, detail="Bus data unavailable")
+    return {"destination": dest, "suggestions": trips}
 
 
 @app.post("/verify", response_model=VerifyResponse)
