@@ -75,12 +75,13 @@ If the server doesn't answer within **1 second**, the app says "Not sure, please
 ## Team roles
 | Who | Role | Owns |
 |---|---|---|
-| Coder 1 | Lead + app | Next.js app, camera, voice input, integration, scope |
-| Coder 2 | Model | Frames, Roboflow dataset, YOLO11n training, ONNX export, frame voting, accuracy |
-| Coder 3 | Backend + AI | FastAPI, bus API, PaddleOCR, fusion, destination suggestion, AI assistant |
-| Coder 4 | Guidance + safety | Beacon, clock directions, steps, compass lock, moving-bus warning, bus-leaving, SOS |
-| Coder 5 | Data | Filming, labeling, Mongolian voice lines, 10 assistant test questions |
-| Coder 6 | Users + pitch | Blind-user interviews, tests, timing, decks, demo videos |
+| Lead | Lead + backend | FastAPI, bus API, PaddleOCR, fusion, destination suggestion, AI assistant backend, data contract, integration, deploy |
+| Khaliun | Model + AI UI | YOLO11n training, ONNX on phone, IoU tracker, 5-of-7 voting, accuracy; AI assistant voice UI |
+| Chuluunbat | App | Next.js PWA screens, camera, Mongolian voice input, choose → wait → verify → board flow |
+| Uranzul | Guidance + safety | Beacon, clock directions, compass lock, moving-bus warning, bus-leaving, SOS |
+| Otgonjargal | Data + support | Filming, Roboflow labeling, Mongolian voice lines, 10 assistant test questions, help with user tests + demo video |
+
+User interviews and pitch are shared by Chuluunbat and Otgonjargal. Task tracker: https://claude.ai/code/artifact/677ebbd7-ff83-4db8-9599-3a0facb1cf15
 
 ## Rules for AI-written code
 1. **One owner per module** — only that person has AI change it.
@@ -90,11 +91,23 @@ If the server doesn't answer within **1 second**, the app says "Not sure, please
 5. **Test on the phone daily**, not just the laptop.
 6. Everyone can explain their module in 2 minutes without notes.
 
+## Code style 
+-Use function(){}syntax. No arrow functions (ESLint checks).
+-In array methods, name the parameter `item`.
+-One component per file, in /components
+
+## Every session
+-Start: read NOTES.md
+-Finish: run lint, check the page in chrome, update NOTES.md.
+
 ## Final presentation numbers to collect
 Route number correct (X/Y), wrong "yes" (must be 0), mismatches caught, door reached (X/Y), avg time bus-stop → door, assistant X/10 correct, beacon vs clock directions, one blind tester quote.
 
-## Notes log
-After writing or changing any file, add a dated entry to `NOTES.md` (newest first): what changed, which file, and why.
+## Memory cycle (handoff)
+Work → update notes → `/clear` → read notes → continue. Every session.
+- **Start of session:** read `NOTES.md` first (Next / Decisions / Done).
+- **After changing files:** add a dated line under **Done** (what, which file, why).
+- **Before `/clear`** ("Update NOTES.md with what we did, the decisions, and what's next."): update all three sections — Done, Decisions (with why), Next (open tasks, top = most urgent).
 
 ## Plan before work
 Before writing or changing code/files: show a short plan (steps, files to touch) and ask any open questions. Wait for the user's answers/approval before starting.

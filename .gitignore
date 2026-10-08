@@ -1,0 +1,12 @@
+CLAUDE.local.md
+
+# Python
+.venv/
+__pycache__/
+.pytest_cache/
+
+# Secrets
+.env
+
+# OMC plugin state
+.omc/
