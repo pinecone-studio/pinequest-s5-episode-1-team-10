@@ -4,7 +4,7 @@ Read this first every session. Before `/clear`, update all three sections:
 "Update NOTES.md with what we did, the decisions, and what's next."
 
 ## Next
-- [ ] **Rider flow on branch `feat/rider-flow` — not committed yet** (commit/PR when the user says so). Run:
+- [ ] **Rider flow: PR #5** (https://github.com/pinecone-studio/pinequest-s5-episode-1-team-10/pull/5, branch `feat/rider-flow`) — get review from Lead + Chuluunbat, merge. No Claude attribution in these commits (user's choice). Run:
   - server: `cd server && set -a && . ../.env && set +a && .venv/bin/python -m uvicorn main:app --port 8000`
   - app: `cd app && npm install && npm run dev` → http://localhost:3000 (test GPS: `?lat=47.9187&lon=106.9176`; recorded video instead of camera: `&video=/test/bus_34.webm`)
 - [ ] **Say real destinations into the mic** (user): tap → beep → say the stop. Only synthetic (TTS) voices were tested; collect ~20 real recordings from the team to measure accuracy. Mic permission needs the user's click.
