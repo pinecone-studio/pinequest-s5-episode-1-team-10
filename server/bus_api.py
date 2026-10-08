@@ -46,6 +46,11 @@ def nearest_stop(lat, lon):
     return {**stop, "distance_m": round(d)}
 
 
+def routes_at_stop(stop_id):
+    """busRouteNo list for a stop, or None if the stop isn't known."""
+    return next((s["routes"] for s in _stops() if s["stop_id"] == stop_id), None)
+
+
 def get_eta_seconds(stop_id, route):
     # No live positions yet (Hamuga /cluster returns 503); never fake an ETA.
     return None

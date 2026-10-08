@@ -3,6 +3,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import bus_api
+import ocr
 from main import app
 
 client = TestClient(app)
@@ -63,8 +64,48 @@ def test_nearest_hamuga_failure_is_503(monkeypatch):
     assert r.json()["detail"] == "Bus data unavailable"
 
 
-def test_verify_stub_is_unsure_with_null_eta():
-    r = client.post("/verify", json={"sign_crop": "aGk=", "stop_id": "000000529", "wanted_route": "Ч:81"})
+def verify(monkeypatch, texts, wanted="Ч:81", stop="000000529", sign="aGk="):
+    if isinstance(texts, Exception):
+        def read(_):
+            raise texts
+    else:
+        def read(_):
+            return texts
+
+    monkeypatch.setattr(ocr, "read_texts", read)
+    return client.post("/verify", json={"sign_crop": sign, "stop_id": stop, "wanted_route": wanted})
+
+
+def test_verify_yes(monkeypatch):
+    r = verify(monkeypatch, [("81", 0.95)])
+    assert r.status_code == 200
+    assert r.json() == {"verdict": "yes", "confidence": 0.95, "eta_seconds": None}
+
+
+def test_verify_other_number_is_no(monkeypatch):
+    assert verify(monkeypatch, [("12", 0.9)]).json()["verdict"] == "no"
+
+
+def test_verify_route_not_at_stop_is_unsure(monkeypatch):
+    assert verify(monkeypatch, [("81", 0.95)], wanted="Ч:81", stop="000000378").json()["verdict"] == "unsure"
+
+
+def test_verify_bus_data_down_is_never_yes(monkeypatch):
+    def boom(path, params=None):
+        raise httpx.ConnectError("down")
+
+    monkeypatch.setattr(bus_api, "_get", boom)
+    r = verify(monkeypatch, [("81", 0.95)])
+    assert r.status_code == 200
+    assert r.json()["verdict"] == "unsure"
+
+
+def test_verify_invalid_base64_is_422(monkeypatch):
+    assert verify(monkeypatch, [], sign="not base64!!").status_code == 422
+
+
+def test_verify_ocr_failure_is_unsure(monkeypatch):
+    r = verify(monkeypatch, RuntimeError("boom"))
     assert r.status_code == 200
     assert r.json() == {"verdict": "unsure", "confidence": 0.0, "eta_seconds": None}
 
