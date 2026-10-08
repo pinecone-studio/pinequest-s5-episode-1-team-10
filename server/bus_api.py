@@ -6,6 +6,7 @@ from math import asin, cos, radians, sin, sqrt
 import httpx
 
 BASE = "https://gateway.hamuga.mn/transport"
+ROUTE_BASE = "https://gateway.hamuga.mn/route"
 PER_PAGE = 5000
 
 
@@ -49,6 +50,40 @@ def nearest_stop(lat, lon):
 def routes_at_stop(stop_id):
     """busRouteNo list for a stop, or None if the stop isn't known."""
     return next((s["routes"] for s in _stops() if s["stop_id"] == stop_id), None)
+
+
+def _plan(from_lat, from_lon, to_lat, to_lon):
+    r = httpx.get(
+        ROUTE_BASE + "/routers/default/plan",
+        params={"fromPlace": f"{from_lat},{from_lon}", "toPlace": f"{to_lat},{to_lon}", "mode": "WALK,BUS"},
+        headers={"x-api-key": os.environ["HAMUGA_API_KEY"]},
+        timeout=10,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+def plan_trip(from_lat, from_lon, to_lat, to_lon, limit=3):
+    """Fastest one-bus trip per route from Hamuga's trip planner (OpenTripPlanner), fastest first."""
+    trips = {}
+    for it in (_plan(from_lat, from_lon, to_lat, to_lon).get("plan") or {}).get("itineraries", []):
+        buses = [leg for leg in it["legs"] if leg["mode"] == "BUS"]
+        if len(buses) != 1:
+            continue  # transfers are cut from scope
+        bus = buses[0]
+        trip = {
+            "route": bus["routeShortName"],
+            # Planner stop ids are "1:" + Hamuga busStopId.
+            "board_stop_id": bus["from"]["stopId"].split(":", 1)[-1],
+            "board_stop_name": bus["from"]["name"],
+            "alight_stop_id": bus["to"]["stopId"].split(":", 1)[-1],
+            "alight_stop_name": bus["to"]["name"],
+            "walk_m": round(it.get("walkDistance", 0)),
+            "duration_s": it["duration"],
+        }
+        if trip["route"] not in trips or trip["duration_s"] < trips[trip["route"]]["duration_s"]:
+            trips[trip["route"]] = trip
+    return sorted(trips.values(), key=lambda t: t["duration_s"])[:limit]
 
 
 def get_eta_seconds(stop_id, route):
