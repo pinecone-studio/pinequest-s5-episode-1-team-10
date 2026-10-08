@@ -42,6 +42,9 @@ def decide(texts, wanted_route, routes_here):
         # LED "Ч:55" with a faint colon reads as "455": a leading "4" may be the prefix letter Ч.
         if "4" + wanted in found:
             return "unsure", 0.0
+        # Only part of the number was read ("8" or "1" for 81): the rest may be there.
+        if any(f != wanted and (wanted.startswith(f) or wanted.endswith(f)) for f in found):
+            return "unsure", 0.0
         return "no", max(found.values())
     if routes_here is None or wanted_route not in routes_here:
         return "unsure", 0.0

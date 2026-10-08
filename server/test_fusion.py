@@ -75,3 +75,10 @@ def test_fleet_and_phone_numbers_are_ignored():
 
 def test_other_extra_digit_is_still_no():
     assert decide([("17", 0.9)], "Ч:7", HERE) == ("no", 0.9)
+
+
+def test_partial_read_is_unsure():
+    # 1280px close-up read "81" as "8" before the 640px cap; never answer "no" on half a number.
+    assert decide([("8", 0.99)], "Ч:81", HERE) == ("unsure", 0.0)
+    assert decide([("1", 0.99)], "Ч:81", HERE) == ("unsure", 0.0)
+    assert decide([("3", 0.9)], "М:3Ма", ["М:3Ма"]) == ("unsure", 0.0)
