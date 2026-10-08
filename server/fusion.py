@@ -7,6 +7,8 @@ CONF_MIN = 0.8
 # Latin look-alikes -> Cyrillic; Hamuga and OCR mix them freely.
 _LOOKALIKE = str.maketrans("aAMHeocxpKTB", "аАМНеосхрКТВ")
 _TOKEN = re.compile(r"\d{1,3}[^\W\d_]{0,2}")
+# "Ч:58" is read as "4:58" by the English model: drop whatever sits before a colon.
+_PREFIX = re.compile(r"\S*:")
 
 
 def _normalize(s):
@@ -24,7 +26,7 @@ def candidates(texts):
     for text, conf in texts:
         if conf < CONF_MIN:
             continue
-        for tok in re.split(r"[\s:]+", text):
+        for tok in _PREFIX.sub(" ", text).split():
             tok = _normalize(tok)
             if _TOKEN.fullmatch(tok):
                 found[tok] = max(conf, found.get(tok, 0.0))
@@ -37,6 +39,9 @@ def decide(texts, wanted_route, routes_here):
         return "unsure", 0.0
     wanted = route_number(wanted_route)
     if wanted not in found:
+        # LED "Ч:55" with a faint colon reads as "455": a leading "4" may be the prefix letter Ч.
+        if "4" + wanted in found:
+            return "unsure", 0.0
         return "no", max(found.values())
     if routes_here is None or wanted_route not in routes_here:
         return "unsure", 0.0

@@ -54,3 +54,24 @@ def test_bus_data_unavailable_never_yes():
 def test_garbage_is_unsure():
     assert decide([("Хангарьд цогцолбор", 0.99), ("12345", 0.99), ("", 0.9)], "Ч:81", HERE) == ("unsure", 0.0)
     assert decide([], "Ч:81", HERE) == ("unsure", 0.0)
+
+
+# Strings below are what PaddleOCR read from real photos at Төв номын сан (2026-10-08).
+def test_prefix_misread_as_digit_is_not_a_route():
+    assert decide([("4:58", 0.95)], "М:4", HERE) == ("no", 0.95)
+
+
+def test_prefix_misread_still_matches_number():
+    assert decide([("4:58", 0.95)], "Ч:58", ["Ч:58"]) == ("yes", 0.95)
+
+
+def test_extra_leading_digit_is_unsure():
+    assert decide([("455 H 1000-E", 0.94)], "Ч:55", ["Ч:55"]) == ("unsure", 0.0)
+
+
+def test_fleet_and_phone_numbers_are_ignored():
+    assert decide([("5-2690", 0.9), ("13-195", 1.0), ("7004-4040", 0.84)], "Ч:5", ["Ч:5"]) == ("unsure", 0.0)
+
+
+def test_other_extra_digit_is_still_no():
+    assert decide([("17", 0.9)], "Ч:7", HERE) == ("no", 0.9)
