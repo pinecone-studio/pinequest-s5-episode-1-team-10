@@ -5,3 +5,11 @@ pytest==8.4.2
 httpx==0.28.1
 paddlepaddle==3.2.2
 paddleocr==3.3.3
+# TTS (needs Python >= 3.12). torch/torchaudio 2.8: newer torchaudio needs torchcodec + FFmpeg dylibs.
+torch==2.8.0
+torchaudio==2.8.0
+f5-tts==1.1.22
+oron-tts @ git+https://github.com/btseee/oron-tts.git@494c3940518cf2246fec5833b45da1a78acd7f03
+soundfile==0.14.0
+transformers==5.19.0  # speech recognition (stt.py)
+librosa==1.0.0
