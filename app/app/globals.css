@@ -1,0 +1,289 @@
+/* High contrast, huge tap targets: the rider may see nothing, a little, or rely on a helper. */
+:root {
+  --bg: #000;
+  --fg: #fff;
+  --accent: #ffd400;
+  --ok: #00e676;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, sans-serif;
+}
+
+.flow {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.message {
+  min-height: 3em;
+  font-size: 1.3rem;
+  line-height: 1.4;
+  margin: 0;
+}
+
+.big {
+  flex: 1;
+  min-height: 45dvh;
+  font-size: 2.4rem;
+  font-weight: 800;
+  border-radius: 24px;
+  border: 0;
+  background: var(--accent);
+  color: #000;
+  padding: 24px;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.big:disabled {
+  opacity: 0.6;
+}
+
+.busy {
+  background: #333;
+  color: var(--fg);
+}
+
+.found {
+  background: var(--ok);
+  font-size: 3rem;
+}
+
+.small {
+  font-size: 1.3rem;
+  padding: 16px;
+  border-radius: 16px;
+  border: 2px solid var(--fg);
+  background: transparent;
+  color: var(--fg);
+}
+
+.typed {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  font-size: 1.1rem;
+}
+
+.typed input {
+  flex: 1;
+  min-width: 0;
+  font-size: 1.2rem;
+  padding: 12px;
+  border-radius: 12px;
+  border: 2px solid var(--fg);
+  background: #111;
+  color: var(--fg);
+}
+
+.typed button {
+  font-size: 1.2rem;
+  padding: 12px 20px;
+  border-radius: 12px;
+  border: 0;
+  background: var(--fg);
+  color: #000;
+}
+
+.card {
+  border: 3px solid var(--accent);
+  border-radius: 24px;
+  padding: 16px 20px;
+  font-size: 1.3rem;
+}
+
+.card p {
+  margin: 8px 0;
+}
+
+.route,
+.route-banner {
+  font-size: 3.5rem;
+  font-weight: 900;
+  color: var(--accent);
+  margin: 0;
+}
+
+.route-banner {
+  text-align: center;
+}
+
+.camera {
+  position: relative;
+  width: 100%;
+}
+
+.camera-video,
+.camera-overlay {
+  width: 100%;
+  border-radius: 16px;
+  display: block;
+}
+
+.camera-overlay {
+  position: absolute;
+  inset: 0;
+  height: auto;
+}
+
+.camera-status {
+  font-size: 1rem;
+  opacity: 0.8;
+}
+
+.listening {
+  background: #ff1744;
+  color: #fff;
+}
+
+.heard {
+  opacity: 0.8;
+  font-style: italic;
+}
+
+.start {
+  min-height: calc(100dvh - 32px);
+  flex-direction: column;
+  gap: 16px;
+}
+
+.hint {
+  font-size: 1.1rem;
+  font-weight: 500;
+}
+
+.place {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+/* The VoiceMenu touch surface: the whole middle of the screen. */
+.voice-menu {
+  flex: 1;
+  min-height: 55dvh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 3px solid #333;
+  border-radius: 24px;
+  padding: 16px;
+  touch-action: none; /* swipes are ours, not scrolling */
+  user-select: none;
+  -webkit-user-select: none;
+  outline: none;
+}
+
+.voice-menu:focus-visible {
+  border-color: var(--accent);
+}
+
+.voice-current {
+  margin: auto 0 0;
+  min-height: 2.4em;
+  font-size: 2.2rem;
+  font-weight: 800;
+  color: var(--accent);
+  text-align: center;
+}
+
+.voice-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.voice-item {
+  width: 100%;
+  font-size: 1.2rem;
+  padding: 12px 16px;
+  border-radius: 14px;
+  border: 2px solid #444;
+  background: #111;
+  color: var(--fg);
+  text-align: left;
+  pointer-events: none; /* taps go to the surface: one tap reads, two taps choose */
+}
+
+.voice-item.focused {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #000;
+  font-weight: 800;
+}
+
+.found {
+  margin: 0;
+  padding: 24px;
+  border-radius: 24px;
+  background: var(--ok);
+  color: #000;
+  font-size: 3rem;
+  font-weight: 900;
+  text-align: center;
+}
+
+.ride {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+.ride-left {
+  margin: 0;
+  font-size: 1.8rem;
+  font-weight: 900;
+  color: var(--accent);
+  text-align: center;
+}
+
+.ride-error {
+  margin: 0;
+  color: #ff9100;
+}
+
+.ride-stops {
+  margin: 0;
+  padding-left: 1.6em;
+  max-height: 34dvh;
+  overflow-y: auto;
+  font-size: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ride-stops .passed {
+  opacity: 0.45;
+}
+
+.ride-stops .here {
+  color: var(--accent);
+  font-weight: 800;
+}
+
+.ride-stops .off {
+  color: var(--ok);
+  font-weight: 800;
+}

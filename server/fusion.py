@@ -9,6 +9,7 @@ _LOOKALIKE = str.maketrans("aAMHeocxpKTB", "аАМНеосхрКТВ")
 _TOKEN = re.compile(r"\d{1,3}[^\W\d_]{0,2}")
 # "Ч:58" is read as "4:58" by the English model: drop whatever sits before a colon.
 _PREFIX = re.compile(r"\S*:")
+_GLUED = re.compile(r"(\d{1,3})(?:[^\W\d_]{3,}|[^\W\d_]+\d)")
 
 
 def _normalize(s):
@@ -20,26 +21,53 @@ def route_number(route_no):
     return _normalize(route_no.rsplit(":", 1)[-1])
 
 
-def candidates(texts):
-    """Route-number tokens from OCR as {number: best confidence}."""
+def _tokens(texts):
+    """Number-like tokens from OCR as {token: best confidence}."""
     found = {}
     for text, conf in texts:
         if conf < CONF_MIN:
             continue
         for tok in _PREFIX.sub(" ", text).split():
             tok = _normalize(tok)
-            if _TOKEN.fullmatch(tok):
-                found[tok] = max(conf, found.get(tok, 0.0))
+            glued = _GLUED.match(tok)  # "455H1000-E": number run into the destination text
+            for t in (tok, glued.group(1) if glued else None):
+                if t and _TOKEN.fullmatch(t):
+                    found[t] = max(conf, found.get(t, 0.0))
     return found
 
 
-def decide(texts, wanted_route, routes_here):
-    found = candidates(texts)
+def candidates(texts, routes_here=None, city_numbers=None):
+    """Route numbers read on the sign as {number: best confidence}.
+
+    With routes_here, only numbers of routes serving this stop count: fleet numbers ("13-278"),
+    phone numbers and misreads can't make a verdict. On dot-matrix LED signs the letter Ч is drawn
+    like a 4, so "Ч55" reads "455": "4"+N counts as N when a Ч route N stops here and no route in
+    the city (city_numbers) is numbered "4"+N.
+    """
+    found = _tokens(texts)
+    if routes_here is None:
+        return found
+    here = {route_number(r) for r in routes_here}
+    che_here = {route_number(r) for r in routes_here if r.strip().startswith("Ч")}
+    out = {}
+    for tok, conf in found.items():
+        if tok in here:
+            num = tok
+        elif city_numbers is not None and tok.startswith("4") and tok[1:] in che_here and tok not in city_numbers:
+            num = tok[1:]
+        else:
+            continue
+        out[num] = max(conf, out.get(num, 0.0))
+    return out
+
+
+def decide(texts, wanted_route, routes_here, city_numbers=None):
+    found = candidates(texts, routes_here, city_numbers)
     if not found:
         return "unsure", 0.0
     wanted = route_number(wanted_route)
     if wanted not in found:
-        # LED "Ч:55" with a faint colon reads as "455": a leading "4" may be the prefix letter Ч.
+        # Without bus data, LED "Ч:55" read as "455" can't be told from a route 455: stay unsure.
         if "4" + wanted in found:
             return "unsure", 0.0
         return "no", max(found.values())
