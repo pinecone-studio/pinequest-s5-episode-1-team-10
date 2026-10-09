@@ -158,3 +158,132 @@ body {
   opacity: 0.8;
   font-style: italic;
 }
+
+.start {
+  min-height: calc(100dvh - 32px);
+  flex-direction: column;
+  gap: 16px;
+}
+
+.hint {
+  font-size: 1.1rem;
+  font-weight: 500;
+}
+
+.place {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+/* The VoiceMenu touch surface: the whole middle of the screen. */
+.voice-menu {
+  flex: 1;
+  min-height: 55dvh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 3px solid #333;
+  border-radius: 24px;
+  padding: 16px;
+  touch-action: none; /* swipes are ours, not scrolling */
+  user-select: none;
+  -webkit-user-select: none;
+  outline: none;
+}
+
+.voice-menu:focus-visible {
+  border-color: var(--accent);
+}
+
+.voice-current {
+  margin: auto 0 0;
+  min-height: 2.4em;
+  font-size: 2.2rem;
+  font-weight: 800;
+  color: var(--accent);
+  text-align: center;
+}
+
+.voice-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.voice-item {
+  width: 100%;
+  font-size: 1.2rem;
+  padding: 12px 16px;
+  border-radius: 14px;
+  border: 2px solid #444;
+  background: #111;
+  color: var(--fg);
+  text-align: left;
+  pointer-events: none; /* taps go to the surface: one tap reads, two taps choose */
+}
+
+.voice-item.focused {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #000;
+  font-weight: 800;
+}
+
+.found {
+  margin: 0;
+  padding: 24px;
+  border-radius: 24px;
+  background: var(--ok);
+  color: #000;
+  font-size: 3rem;
+  font-weight: 900;
+  text-align: center;
+}
+
+.ride {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+.ride-left {
+  margin: 0;
+  font-size: 1.8rem;
+  font-weight: 900;
+  color: var(--accent);
+  text-align: center;
+}
+
+.ride-error {
+  margin: 0;
+  color: #ff9100;
+}
+
+.ride-stops {
+  margin: 0;
+  padding-left: 1.6em;
+  max-height: 34dvh;
+  overflow-y: auto;
+  font-size: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ride-stops .passed {
+  opacity: 0.45;
+}
+
+.ride-stops .here {
+  color: var(--accent);
+  font-weight: 800;
+}
+
+.ride-stops .off {
+  color: var(--ok);
+  font-weight: 800;
+}

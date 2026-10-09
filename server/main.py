@@ -3,8 +3,8 @@ import binascii
 import os
 from contextlib import asynccontextmanager
 
-import cv2
 import httpx
+import cv2
 import numpy as np
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
@@ -17,7 +17,8 @@ import planner
 import stt
 import tts
 from bus_api import get_eta_seconds
-from contract import NearestStop, PlanRequest, PlanResponse, VerifyRequest, VerifyResponse, VoicePlanResponse
+from contract import (NearestStop, PlanRequest, PlanResponse, RideResponse, VerifyRequest, VerifyResponse,
+                      VoiceLocateResponse, VoicePlanResponse)
 
 @asynccontextmanager
 async def lifespan(app):
@@ -72,8 +73,11 @@ def plan(req: PlanRequest):
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@app.post("/plan/voice", response_model=VoicePlanResponse)
-async def plan_voice(request: Request, lat: float = Query(ge=-90, le=90), lon: float = Query(ge=-180, le=180)):
+NOT_HEARD = "Сонсогдсонгүй. Дэлгэцийг дахин дараад хэлнэ үү."
+
+
+async def _hear(request):
+    """What the rider said in the WAV body ('' for silence)."""
     body = await request.body()
     if not body or len(body) > 2_000_000:
         raise HTTPException(status_code=422, detail="Send a WAV body under 2 MB")
@@ -81,9 +85,39 @@ async def plan_voice(request: Request, lat: float = Query(ge=-90, le=90), lon: f
         audio = await run_in_threadpool(stt.load_audio, body)
     except Exception:  # noqa: BLE001 - any decode failure is the client's audio
         raise HTTPException(status_code=422, detail="Audio is not a readable WAV")
-    heard = await run_in_threadpool(stt.transcribe, audio)
+    return await run_in_threadpool(stt.transcribe, audio)
+
+
+@app.get("/locate", response_model=VoiceLocateResponse)
+def locate_text(text: str = Query(min_length=1, max_length=200)):
+    """Typed version of /locate/voice."""
+    return _locate(text)
+
+
+@app.post("/locate/voice", response_model=VoiceLocateResponse)
+async def locate_voice(request: Request):
+    heard = await _hear(request)
     if not heard:
-        return VoicePlanResponse(heard="", message="Сонсогдсонгүй. Дэлгэцийг дахин дараад хэлнэ үү.")
+        return VoiceLocateResponse(heard="", message=NOT_HEARD)
+    return await run_in_threadpool(_locate, heard)
+
+
+def _locate(heard):
+    try:
+        stop = planner.locate(heard)
+    except (httpx.HTTPError, RuntimeError):
+        raise HTTPException(status_code=503, detail="Bus data unavailable")
+    print(f"locate: heard {heard!r} -> {stop['name'] if stop else None!r}")
+    if not stop:
+        return VoiceLocateResponse(heard=heard, message=f"\"{heard}\" нэртэй зогсоол олдсонгүй. Ойролцоох зогсоолын нэрийг хэлнэ үү.")
+    return VoiceLocateResponse(heard=heard, stop={k: stop[k] for k in ("stop_id", "name", "lat", "lon")})
+
+
+@app.post("/plan/voice", response_model=VoicePlanResponse)
+async def plan_voice(request: Request, lat: float = Query(ge=-90, le=90), lon: float = Query(ge=-180, le=180)):
+    heard = await _hear(request)
+    if not heard:
+        return VoicePlanResponse(heard="", message=NOT_HEARD)
     try:
         result = await run_in_threadpool(_suggest, heard, lat, lon)
     except planner.PlanError as e:
@@ -92,6 +126,22 @@ async def plan_voice(request: Request, lat: float = Query(ge=-90, le=90), lon: f
     print(f"voice: heard {heard!r} -> {result['route']} from {result['board_stop']['name']!r} "
           f"to {result['alight_stop']['name']!r} ({result['stops_to_ride']} stops), asked {result['destination']['name']!r}")
     return VoicePlanResponse(heard=heard, plan=result)
+
+
+@app.get("/ride", response_model=RideResponse)
+def ride(route: str = Query(min_length=1, max_length=16), board: str = Query(min_length=1, max_length=64),
+         alight: str = Query(min_length=1, max_length=64)):
+    try:
+        stops = bus_api.ride_stops(route, board, alight)
+    except (httpx.HTTPError, RuntimeError):
+        raise HTTPException(status_code=503, detail="Bus data unavailable")
+    if not stops:
+        raise HTTPException(status_code=404, detail="This route doesn't go from that stop to that stop")
+    for s in stops:
+        s["speech"] = planner.next_stop_speech(s["name"]) if s["name"] else ""
+    # Stop names are said on the bus a minute or more from now: make them while the rider boards.
+    tts.prefetch_in_background([s["speech"] for s in stops[1:] if s["speech"]], live=True)
+    return {"route": route, "stops": stops}
 
 
 @app.get("/tts")
@@ -115,9 +165,10 @@ def verify(req: VerifyRequest):
         return VerifyResponse(verdict="unsure", confidence=0.0, eta_seconds=None)
     try:
         routes_here = bus_api.routes_at_stop(req.stop_id)
+        city_numbers = bus_api.city_route_numbers()
     except (httpx.HTTPError, RuntimeError):
-        routes_here = None  # without bus data, fusion can never say "yes"
-    verdict, confidence = fusion.decide(texts, req.wanted_route, routes_here)
+        routes_here = city_numbers = None  # without bus data, fusion can never say "yes"
+    verdict, confidence = fusion.decide(texts, req.wanted_route, routes_here, city_numbers)
     return VerifyResponse(
         verdict=verdict,
         confidence=confidence,

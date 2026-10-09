@@ -32,9 +32,9 @@ def fake_hamuga(monkeypatch):
         return GROUP_INFO if path == "/api/bus/v1/group/info" else STATIONS
 
     monkeypatch.setattr(bus_api, "_get", fake_get)
-    bus_api._stops.cache_clear()
+    bus_api._stops.cache_clear(); bus_api._stations.cache_clear()
     yield
-    bus_api._stops.cache_clear()
+    bus_api._stops.cache_clear(); bus_api._stations.cache_clear()
 
 
 def test_nearest_stop_dedupes_routes():
@@ -82,8 +82,12 @@ def test_verify_yes(monkeypatch):
     assert r.json() == {"verdict": "yes", "confidence": 0.95, "eta_seconds": None}
 
 
-def test_verify_other_number_is_no(monkeypatch):
-    assert verify(monkeypatch, [("12", 0.9)]).json()["verdict"] == "no"
+def test_verify_other_route_here_is_no(monkeypatch):
+    assert verify(monkeypatch, [("4", 0.9)]).json()["verdict"] == "no"
+
+
+def test_verify_number_of_no_route_here_is_unsure(monkeypatch):
+    assert verify(monkeypatch, [("12", 0.9)]).json()["verdict"] == "unsure"
 
 
 def test_verify_route_not_at_stop_is_unsure(monkeypatch):

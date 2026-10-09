@@ -10,6 +10,7 @@ const NOISE_MS = 250; // first part measures background noise
 export interface Recording {
   done: Promise<Blob | null>; // WAV, or null if nothing was said / no microphone
   stop: () => void; // end now (rider tapped again)
+  noMic: () => boolean; // true if the microphone was denied or missing
 }
 
 function toWav(samples: Float32Array): Blob {
@@ -49,14 +50,26 @@ function rms(block: Float32Array): number {
 
 export function record(): Recording {
   let stopNow: () => void = function () {};
+  let micDenied = false;
   const done = new Promise<Blob | null>(function (resolve) {
     let finished = false;
+    let started = false;
     stopNow = function () {
       finished = true;
+      if (!started) {
+        resolve(null); // stopped before the microphone came on (e.g. still asking permission)
+      }
     };
     navigator.mediaDevices
       .getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } })
       .then(async function (stream) {
+        if (finished) {
+          stream.getTracks().forEach(function (item) {
+            item.stop();
+          });
+          return;
+        }
+        started = true;
         const ctx = new AudioContext({ sampleRate: RATE });
         await ctx.audioWorklet.addModule("/recorder-worklet.js");
         const source = ctx.createMediaStreamSource(stream);
@@ -113,6 +126,7 @@ export function record(): Recording {
         };
       })
       .catch(function () {
+        micDenied = true;
         resolve(null);
       });
   });
@@ -120,6 +134,9 @@ export function record(): Recording {
     done,
     stop: function () {
       stopNow();
+    },
+    noMic: function () {
+      return micDenied;
     },
   };
 }

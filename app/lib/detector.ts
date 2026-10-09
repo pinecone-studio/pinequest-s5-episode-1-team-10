@@ -14,6 +14,15 @@ const MODEL_URL = "/models/yolo11n.onnx";
 const SIZE = 640; // model input is SIZE x SIZE
 const BUS_CLASS = 5; // COCO "bus"
 const MIN_SCORE = 0.4;
+// Weaker hits (a bus half out of frame, a car) aren't tracked, but their area is blacked out of
+// other buses' sign crops so a neighbour's sign is never read as this bus's (tov_nomyn_san_2.png).
+const MASK_CLASSES = [2, 5, 7]; // car, bus, truck
+const MASK_SCORE = 0.2;
+
+export interface Detections {
+  buses: Box[]; // tracked
+  others: Box[]; // masked out of sign crops
+}
 const NMS_IOU = 0.5;
 
 type OrtModule = typeof Ort;
@@ -96,9 +105,9 @@ function nms(boxes: Box[]): Box[] {
   return kept;
 }
 
-export async function detectBuses(video: HTMLVideoElement): Promise<Box[]> {
+export async function detectBuses(video: HTMLVideoElement): Promise<Detections> {
   if (!session || !ort || !video.videoWidth) {
-    return [];
+    return { buses: [], others: [] };
   }
   const { data, scale, padX, padY } = toTensor(video);
   const input = new ort.Tensor("float32", data, [1, 3, SIZE, SIZE]);
@@ -107,21 +116,36 @@ export async function detectBuses(video: HTMLVideoElement): Promise<Box[]> {
   const out = output[session.outputNames[0]];
   const values = out.data as Float32Array;
   const n = out.dims[2];
-  const found: Box[] = [];
+  const buses: Box[] = [];
+  const weak: Box[] = [];
   for (let i = 0; i < n; i++) {
-    const score = values[(4 + BUS_CLASS) * n + i];
-    if (score < MIN_SCORE) {
+    const busScore = values[(4 + BUS_CLASS) * n + i];
+    let maskScore = 0;
+    MASK_CLASSES.forEach(function (item) {
+      maskScore = Math.max(maskScore, values[(4 + item) * n + i]);
+    });
+    if (maskScore < MASK_SCORE) {
       continue;
     }
     const w = values[2 * n + i] / scale;
     const h = values[3 * n + i] / scale;
-    found.push({
-      x: (values[i] - padX) / scale - w / 2,
-      y: (values[n + i] - padY) / scale - h / 2,
-      w,
-      h,
-      score,
-    });
+    const box = { x: (values[i] - padX) / scale - w / 2, y: (values[n + i] - padY) / scale - h / 2, w, h, score: busScore };
+    if (busScore >= MIN_SCORE) {
+      buses.push(box);
+    } else {
+      weak.push({ ...box, score: maskScore });
+    }
   }
-  return nms(found);
+  const kept = nms(buses);
+  const others = nms(weak).filter(function (item) {
+    for (const b of kept) {
+      // The same bus seen weakly, or a big piece of it (its front half): masking it would hide its own sign.
+      const inside = iou(b, item) * (b.w * b.h + item.w * item.h) / (1 + iou(b, item)) / (item.w * item.h);
+      if (iou(b, item) > NMS_IOU || (inside > 0.8 && item.w * item.h > 0.3 * b.w * b.h)) {
+        return false;
+      }
+    }
+    return true;
+  });
+  return { buses: kept, others };
 }

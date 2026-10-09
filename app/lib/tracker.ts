@@ -18,6 +18,8 @@ export interface Track {
   announced: Decision; // last decision spoken to the rider
   pending: boolean; // a /verify request is in flight
   lastAsked: number;
+  lastAnswer: number; // when /verify last answered for this bus (or when it was first seen)
+  vx: number; // horizontal speed of the box centre, px/ms, smoothed (+ = moving right)
 }
 
 let nextId = 1;
@@ -40,6 +42,9 @@ export function updateTracks(tracks: Track[], boxes: Box[], now: number): Track[
     }
     if (best) {
       const t: Track = best;
+      const dt = Math.max(1, now - t.lastSeen);
+      const dx = item.x + item.w / 2 - (t.box.x + t.box.w / 2);
+      t.vx = 0.7 * t.vx + 0.3 * (dx / dt);
       t.box = item;
       t.lastSeen = now;
       used.add(t.id);
@@ -53,6 +58,8 @@ export function updateTracks(tracks: Track[], boxes: Box[], now: number): Track[
         announced: "checking",
         pending: false,
         lastAsked: 0,
+        lastAnswer: now,
+        vx: 0,
       };
       live.push(t);
       used.add(t.id);

@@ -1,10 +1,16 @@
 // Calls to the FastAPI server, proxied under /api (next.config.ts).
-import type { PlanResponse, VerifyRequest, VerifyResponse, VoicePlanResponse } from "../../shared/contract";
+import type {
+  NearestStop,
+  PlanResponse,
+  VerifyRequest,
+  VerifyResponse,
+  VoiceLocateResponse,
+  VoicePlanResponse,
+} from "../../shared/contract";
 import { VERIFY_TIMEOUT_MS } from "../../shared/contract";
 
 export type PlanResult = { ok: true; plan: PlanResponse } | { ok: false; message: string };
 
-const UNSURE: VerifyResponse = { verdict: "unsure", confidence: 0, eta_seconds: null };
 
 export async function requestPlan(text: string, lat: number, lon: number): Promise<PlanResult> {
   let res: Response;
@@ -41,8 +47,38 @@ export async function requestVoicePlan(wav: Blob, lat: number, lon: number): Pro
   }
 }
 
-// Never throws and never waits longer than VERIFY_TIMEOUT_MS: no answer means "unsure".
-export async function verifySign(req: VerifyRequest): Promise<VerifyResponse> {
+// Closest stop to a GPS position, so the rider hears and sees where the app thinks they are.
+export async function nearestStop(lat: number, lon: number): Promise<NearestStop | null> {
+  try {
+    const res = await fetch("/api/stops/nearest?lat=" + lat + "&lon=" + lon);
+    return res.ok ? ((await res.json()) as NearestStop) : null;
+  } catch {
+    return null;
+  }
+}
+
+// Where the rider says they are (WAV) or types it. null = server unreachable or down.
+export async function locateBySpeech(wav: Blob): Promise<VoiceLocateResponse | null> {
+  try {
+    const res = await fetch("/api/locate/voice", { method: "POST", headers: { "Content-Type": "audio/wav" }, body: wav });
+    return res.ok ? ((await res.json()) as VoiceLocateResponse) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function locateByText(text: string): Promise<VoiceLocateResponse | null> {
+  try {
+    const res = await fetch("/api/locate?text=" + encodeURIComponent(text));
+    return res.ok ? ((await res.json()) as VoiceLocateResponse) : null;
+  } catch {
+    return null;
+  }
+}
+
+// Never throws and never waits longer than VERIFY_TIMEOUT_MS. null = no answer in time, which says
+// nothing about the sign, so it isn't a vote (the camera says "not sure" if answers stop coming).
+export async function verifySign(req: VerifyRequest): Promise<VerifyResponse | null> {
   const controller = new AbortController();
   const timer = setTimeout(function () {
     controller.abort();
@@ -54,9 +90,9 @@ export async function verifySign(req: VerifyRequest): Promise<VerifyResponse> {
       body: JSON.stringify(req),
       signal: controller.signal,
     });
-    return res.ok ? ((await res.json()) as VerifyResponse) : UNSURE;
+    return res.ok ? ((await res.json()) as VerifyResponse) : null;
   } catch {
-    return UNSURE;
+    return null;
   } finally {
     clearTimeout(timer);
   }

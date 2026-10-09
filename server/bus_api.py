@@ -23,13 +23,20 @@ def _get(path, params=None):
     return body["data"]
 
 
+@cache
+def _stations():
+    """Every station with coordinates: {busStopId: {"name", "lat", "lon"}}."""
+    stations = _get("/api/bus/v1/bus_station_list", {"perPage": PER_PAGE, "page": 1})
+    assert len(stations) < PER_PAGE, "station list may be truncated"
+    return {s["busStopId"]: {"name": s.get("busStopName") or "", "lat": float(s["gpxY"]), "lon": float(s["gpxX"])}
+            for s in stations if s.get("gpxY") and s.get("gpxX")}
+
+
 # ponytail: cached for process lifetime, restart to refresh. Stations may be truncated if a full page comes back.
 @cache
 def _stops():
     """Stops that have coordinates and at least one route."""
-    stations = _get("/api/bus/v1/bus_station_list", {"perPage": PER_PAGE, "page": 1})
-    assert len(stations) < PER_PAGE, "station list may be truncated"
-    coords = {s["busStopId"]: (float(s["gpxY"]), float(s["gpxX"])) for s in stations if s.get("gpxY") and s.get("gpxX")}
+    coords = {sid: (s["lat"], s["lon"]) for sid, s in _stations().items()}
     stops = []
     for g in _get("/api/bus/v1/group/info"):
         route_ids = {}  # one busRouteNo can have several busRouteIds (variants)
@@ -60,6 +67,13 @@ def nearest_stop(lat, lon):
     return nearest_stops(lat, lon, float("inf"), 1)[0]
 
 
+def city_route_numbers():
+    """Every route number in the city ('81', '3ма'), to tell a misread prefix from a real route."""
+    from fusion import route_number
+
+    return {route_number(r) for s in _stops() for r in s["routes"]}
+
+
 def routes_at_stop(stop_id):
     """busRouteNo list for a stop, or None if the stop isn't known."""
     return next((s["routes"] for s in _stops() if s["stop_id"] == stop_id), None)
@@ -70,10 +84,19 @@ def base_name(name):
     return " ".join(re.sub(r"/[^/]*/|\([^)]*\)", " ", name).lower().split())
 
 
+NUMBER_SCORE = 6  # a matching number pins the stop down more than a matching word
+
+
 def _stem_match(word, name_words):
     """Letters of word matched by a name word: the word itself, or minus up to 3 trailing letters
-    (Mongolian suffixes: 'сансарт', 'сансарын' -> 'сансар'), never shorter than 4 letters."""
-    for n in range(len(word), max(3, min(4, len(word)), len(word) - 3) - 1, -1):
+    (Mongolian suffixes: 'сансарт', 'сансарын' -> 'сансар'), never shorter than 4 letters.
+    A number must match a name word's whole number ('1000' matches '1000-ын', not '1-р')."""
+    if word.isdigit():
+        return NUMBER_SCORE if any(re.match(r"\d+", nw) and re.match(r"\d+", nw).group() == word
+                                   for nw in name_words) else 0
+    if len(word) <= 3:  # "хүн" must not match "хүнс": short words match whole words only ("төв")
+        return len(word) if word in name_words else 0
+    for n in range(len(word), max(4, len(word) - 3) - 1, -1):
         if any(nw.startswith(word[:n]) for nw in name_words):
             return n
     return 0
@@ -125,6 +148,26 @@ def stops_between(route_ids, from_id, to_id):
                 if n > 0 and (best is None or n < best):
                     best = n
     return best
+
+
+def ride_stops(route_no, board_id, alight_id):
+    """Stops from boarding to alighting, inclusive, in riding order, on the variant/direction with the
+    fewest stops; [] if the route doesn't go there. A stop Hamuga has no coordinates for keeps its
+    place (lat/lon None) so "stops left" stays right."""
+    board = next((s for s in _stops() if s["stop_id"] == board_id), None)
+    if not board or route_no not in board["route_ids"]:
+        return []
+    best = None
+    for rid in board["route_ids"][route_no]:
+        for order in route_directions(rid):
+            if board_id in order and alight_id in order and order.index(board_id) < order.index(alight_id):
+                seg = order[order.index(board_id): order.index(alight_id) + 1]
+                if best is None or len(seg) < len(best):
+                    best = seg
+    stations = _stations()
+    names = {s["stop_id"]: s["name"] for s in _stops()}  # the names used everywhere else
+    return [{"stop_id": sid, "name": names.get(sid) or stations.get(sid, {}).get("name", ""),
+             "lat": stations.get(sid, {}).get("lat"), "lon": stations.get(sid, {}).get("lon")} for sid in best or []]
 
 
 def get_eta_seconds(stop_id, route):

@@ -53,12 +53,41 @@ export interface PlanResponse {
   found_speech: string; // Mongolian "this is your bus" sentence for when /verify says yes
 }
 
+// POST /locate/voice with a WAV body (or GET /locate?text=): the rider says where they are,
+// when GPS is off or imprecise.
+export interface LocatedStop {
+  stop_id: string;
+  name: string;
+  lat: number;
+  lon: number;
+}
+
+export interface VoiceLocateResponse {
+  heard: string; // what speech recognition heard ("" if nothing)
+  stop: LocatedStop | null; // the stop the rider said they're at; use its lat/lon
+  message: string | null; // Mongolian reason when stop is null; speak it
+}
+
 // POST /plan/voice?lat=&lon= with a WAV body (16 kHz mono): speech recognition + /plan in one call.
 // 200 always (422 = bad audio, 503 = bus data down).
 export interface VoicePlanResponse {
   heard: string; // what speech recognition heard ("" if nothing)
   plan: PlanResponse | null; // the bus to take; null if none
   message: string | null; // Mongolian reason when plan is null; speak it
+}
+
+// GET /ride?route=Ч:55&board=000000282&alight=000000204: the stops to ride, for on-bus announcements.
+export interface RideStop {
+  stop_id: string;
+  name: string; // "" if Hamuga doesn't know the stop
+  lat: number | null; // null if Hamuga has no coordinates; still counts as a stop
+  lon: number | null;
+  speech: string; // "Дараагийн зогсоол: ..." to say as this stop comes up ("" if unnamed)
+}
+
+export interface RideResponse {
+  route: string;
+  stops: RideStop[]; // boarding stop first, alighting stop last, in riding order
 }
 
 // GET /tts?text=... -> audio/wav (Mongolian, OronTTS). Fixed phrases: shared/phrases.json.

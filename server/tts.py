@@ -52,6 +52,13 @@ def speakable(text):
     try:
         return _normalizer().normalize(text, strict=True)
     except ValueError:
+        pass
+    # The normalizer refuses number+suffix forms it has no verified table entry for ("1000-ын"):
+    # read the bare number instead ("мянга") rather than not speaking at all.
+    text = re.sub(r"(\d+)-[^\W\d_]+", r"\1", text)
+    try:
+        return _normalizer().normalize(text, strict=True)
+    except ValueError:
         return _normalizer().normalize(text)
 
 

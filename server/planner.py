@@ -3,14 +3,19 @@ import difflib
 import re
 
 import bus_api
+import numwords
 
-PHRASE_MATCH_MIN = 0.75  # measured: near-misses score 0.88-0.92, misheard garbage <= 0.54
+PHRASE_FIRST_MIN = 0.85
+PHRASE_FIRST_MARGIN = 0.05  # "19-р сургууль" vs "149-р сургууль" (0.95 vs 0.91) is left to the number match
+PHRASE_MATCH_MIN = 0.75
+COVERAGE_MIN = 0.6  # measured: near-misses score 0.88-0.92, misheard garbage <= 0.54
 SAME_PLACE_M = 1000  # stops with the named stop's name this close are its other sides of the street
 DEST_RADIUS_M = 500  # other stops this close are a fallback when no bus reaches the named stop
-WALK_MAX_M = 800  # ponytail: farthest boarding stop we suggest to a blind rider
+WALK_MAX_M = 800
+AT_STOP_M = 30  # closer than this: "you're at the stop", not "walk 0 m"  # ponytail: farthest boarding stop we suggest to a blind rider
 ORIGIN_LIMIT = 8
 # Filler words riders say around a place name ("Сансар руу явмаар байна").
-STOPWORDS = {"руу", "рүү", "луу", "лүү", "уруу", "явах", "явна", "явмаар", "очих", "очно", "очмоор", "хүрэх",
+STOPWORDS = {"энэ", "тэр", "уу", "үү", "нь", "бол", "ч", "би", "дээр", "байгаа", "одоо", "ойрхон", "хажууд", "буудлын", "зогсоолын", "руу", "рүү", "луу", "лүү", "уруу", "явах", "явна", "явмаар", "очих", "очно", "очмоор", "хүрэх",
              "хүрмээр", "байна", "би", "минь", "вэ", "хүртэл", "зогсоол", "буудал", "автобус", "автобусаар"}
 
 
@@ -19,24 +24,69 @@ class PlanError(Exception):
 
 
 def query_words(text):
-    words = re.findall(r"[^\W\d_]+", text.lower())
-    return [w for w in words if w not in STOPWORDS and len(w) >= 3]
+    """Place words and numbers: 'Дэнжийн 1000 руу' -> ['дэнжийн', '1000']. Numbers matter: many stops
+    differ only by one ('Дэнжийн 1-р зогсоол' vs 'Дэнжийн 1000-ын эцэс')."""
+    words = numwords.to_digits(re.findall(r"[^\W\d_]+|\d+", text.lower()))
+    return [w for w in words if w.isdigit() or (w not in STOPWORDS and len(w) >= 2)]
 
 
 def _similarity(phrase, stop):
     return difflib.SequenceMatcher(None, phrase, bus_api.base_name(stop["name"])).ratio()
 
 
+def _squash(s):
+    return re.sub(r"[\s\-]", "", s)
+
+
+def _clear_phrase_match(words):
+    """Stops of the one name the whole phrase spells, ignoring spaces, when that's clear-cut.
+    Speech recognition splits words ('Сөх Баатарын тал бай' for 'Сүхбаатарын талбай': 0.94), which
+    breaks a word-by-word search. Measured: right names 0.86-1.0, garbage <= 0.53."""
+    phrase = _squash(" ".join(words))
+    by_name = {}
+    for s in bus_api._stops():
+        by_name.setdefault(_squash(bus_api.base_name(s["name"])), []).append(s)
+    scored = sorted(((difflib.SequenceMatcher(None, phrase, n).ratio(), n) for n in by_name), reverse=True)
+    (best, name), (second, _) = scored[0], scored[1]
+    return by_name[name] if best >= PHRASE_FIRST_MIN and best - second >= PHRASE_FIRST_MARGIN else []
+
+
+def _coverage(words, stop):
+    """Share of the rider's letters that the stop's name accounts for."""
+    name_words = bus_api.base_name(stop["name"]).split()
+    matched = sum(len(w) if w.isdigit() and bus_api._stem_match(w, name_words) else bus_api._stem_match(w, name_words)
+                  for w in words)
+    return matched / sum(len(w) for w in words)
+
+
+def _conflicts(words, stop):
+    """A word the rider said that isn't in the name, while the name has a word they didn't say:
+    'Их тойруу' (a road) vs 'Гадна тойруу' -- a different place, not a mishearing."""
+    name_words = bus_api.base_name(stop["name"]).split()
+    said_not_in_name = [w for w in words if not bus_api._stem_match(w, name_words)]
+    name_not_said = [nw for nw in name_words if not any(bus_api._stem_match(w, [nw]) for w in words)]
+    return bool(said_not_in_name and name_not_said)
+
+
+def _covering(words, stops):
+    """Only stops whose name accounts for most of what was said, with no conflicting word:
+    'Төв шуудан' must not become 'Төв номын сан' just because 'төв' matched."""
+    return [s for s in stops if _coverage(words, s) >= COVERAGE_MIN and not _conflicts(words, s)]
+
+
 def _candidates(words):
-    """Stops whose name matches the words. Speech recognition often gets a letter or two wrong, so
-    after an exact-stem search this retries with each word swapped for the closest stop-name word
-    ('сансаар' -> 'сансар'), then the whole phrase against whole names ('улсын их дэлгуур')."""
-    found = bus_api.search_stops(words)
+    """Stops whose name matches the words: a clear whole-phrase match first, then an exact-stem search,
+    then each word swapped for the closest stop-name word ('сансаар' -> 'сансар'), then the whole
+    phrase against whole names at a lower bar ('улсын их дэлгуур')."""
+    found = _clear_phrase_match(words)
     if found:
         return found
-    vocab = {w for s in bus_api._stops() for w in bus_api.base_name(s["name"]).split() if len(w) >= 3}
-    fixed = [(difflib.get_close_matches(w, vocab, n=1, cutoff=0.75) or [w])[0] for w in words]
-    found = bus_api.search_stops(fixed) if fixed != words else []
+    found = _covering(words, bus_api.search_stops(words))
+    if found:
+        return found
+    vocab = {w for s in bus_api._stops() for w in bus_api.base_name(s["name"]).split() if len(w) >= 4}
+    fixed = [(difflib.get_close_matches(w, vocab, n=1, cutoff=0.75) or [w])[0] if len(w) >= 4 else w for w in words]
+    found = _covering(fixed, bus_api.search_stops(fixed)) if fixed != words else []
     if found:
         return found
     by_name = {}
@@ -82,6 +132,18 @@ def _best_ride(origins, dests):
         if best:
             return best
     return None
+
+
+def locate(text):
+    """The stop the rider says they're at ('Би Төв номын сангийн буудал дээр байна'), or None."""
+    words = query_words(text)
+    named, _ = find_destination(words) if words else ([], [])
+    return named[0] if named else None
+
+
+def next_stop_speech(name):
+    """Said on the bus when a stop is coming up."""
+    return f"Дараагийн зогсоол: {spoken_stop(name)}."
 
 
 def side(name):
@@ -159,6 +221,7 @@ def suggest(text, lat, lon):
                 "routes_at_stop": o["routes"],
                 # One clip per part: the first is pre-made per route, the rest are made while it plays.
                 "speech": [take_speech(route),
+                           f"{spoken_stop(o['name'])} зогсоол дээр байна." if o["distance_m"] < AT_STOP_M else
                            f"{spoken_stop(o['name'])} зогсоол руу {round(o['distance_m'], -1)} метр алхана.",
                            get_off],
                 "found_speech": found_speech(route),

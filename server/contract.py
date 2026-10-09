@@ -54,6 +54,32 @@ class PlanResponse(BaseModel):
     found_speech: str = Field(description='Mongolian "this is your bus" sentence for when /verify says yes')
 
 
+class LocatedStop(BaseModel):
+    stop_id: str
+    name: str
+    lat: float
+    lon: float
+
+
+class VoiceLocateResponse(BaseModel):
+    heard: str = Field(description="What speech recognition heard ('' if nothing)")
+    stop: Optional[LocatedStop] = Field(default=None, description="The stop the rider said they're at; use its lat/lon")
+    message: Optional[str] = Field(default=None, description="Mongolian reason when stop is null; speak it")
+
+
+class RideStop(BaseModel):
+    stop_id: str
+    name: str = Field(description="'' if Hamuga doesn't know the stop")
+    lat: Optional[float] = Field(default=None, description="null if Hamuga has no coordinates; still counts as a stop")
+    lon: Optional[float] = None
+    speech: str = Field(description='"Дараагийн зогсоол: ..." to say as this stop comes up ("" if unnamed)')
+
+
+class RideResponse(BaseModel):
+    route: str
+    stops: list[RideStop] = Field(description="Boarding stop first, alighting stop last, in riding order")
+
+
 class VoicePlanResponse(BaseModel):
     heard: str = Field(description="What speech recognition heard ('' if nothing)")
     plan: Optional[PlanResponse] = Field(default=None, description="The bus to take; null if none")
