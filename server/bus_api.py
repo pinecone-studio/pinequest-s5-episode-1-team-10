@@ -12,6 +12,9 @@ import httpx
 BASE = "https://gateway.hamuga.mn/transport"
 PER_PAGE = 5000
 ROUTE_CACHE = Path(__file__).parent / "hamuga_cache"  # stop order per route; delete to refresh
+# Lite server (Vercel): the station and stop lists saved at deploy time (save_snapshot), so a new
+# instance answers at once instead of making two billed Hamuga calls (~2 s) first.
+SNAPSHOT = None
 
 
 def _get(path, params=None):
@@ -24,8 +27,19 @@ def _get(path, params=None):
 
 
 @cache
+def _snapshot():
+    return json.loads(SNAPSHOT.read_text(encoding="utf-8")) if SNAPSHOT and SNAPSHOT.exists() else None
+
+
+def save_snapshot(path):
+    Path(path).write_text(json.dumps({"stations": _stations(), "stops": _stops()}, ensure_ascii=False), encoding="utf-8")
+
+
+@cache
 def _stations():
     """Every station with coordinates: {busStopId: {"name", "lat", "lon"}}."""
+    if _snapshot():
+        return _snapshot()["stations"]
     stations = _get("/api/bus/v1/bus_station_list", {"perPage": PER_PAGE, "page": 1})
     assert len(stations) < PER_PAGE, "station list may be truncated"
     return {s["busStopId"]: {"name": s.get("busStopName") or "", "lat": float(s["gpxY"]), "lon": float(s["gpxX"])}
@@ -36,6 +50,8 @@ def _stations():
 @cache
 def _stops():
     """Stops that have coordinates and at least one route."""
+    if _snapshot():
+        return _snapshot()["stops"]
     coords = {sid: (s["lat"], s["lon"]) for sid, s in _stations().items()}
     stops = []
     for g in _get("/api/bus/v1/group/info"):

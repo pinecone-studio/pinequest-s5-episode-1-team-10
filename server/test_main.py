@@ -117,3 +117,15 @@ def test_verify_ocr_failure_is_unsure(monkeypatch):
 def test_verify_rejects_missing_fields():
     r = client.post("/verify", json={"stop_id": "000000529"})
     assert r.status_code == 422
+
+
+def test_verify_texts_from_the_phone(monkeypatch):
+    # The phone read "455 H 1000-E" off the LED (Ч drawn like 4): same decision as /verify.
+    monkeypatch.setattr(bus_api, "routes_at_stop", lambda stop_id: ["Ч:55", "Ч:52"])
+    monkeypatch.setattr(bus_api, "city_route_numbers", lambda: {"55", "52", "1"})
+    r = client.post("/verify/texts", json={"texts": [{"text": "455 H 1000-E", "confidence": 0.91}],
+                                          "stop_id": "000000282", "wanted_route": "Ч:55"})
+    assert r.json()["verdict"] == "yes"
+    r = client.post("/verify/texts", json={"texts": [{"text": "OPOX", "confidence": 0.97}],
+                                          "stop_id": "000000282", "wanted_route": "Ч:55"})
+    assert r.json()["verdict"] == "unsure"

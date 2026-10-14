@@ -11,7 +11,8 @@ export const MIN_BUS_WIDTH = 120; // px; smaller buses are too far to read
 const canvas = typeof document === "undefined" ? null : document.createElement("canvas");
 
 // others: other vehicles in the frame; their area is blacked out so their signs can't be read here.
-export function signCrop(video: HTMLVideoElement, box: Box, others: Box[]): string | null {
+// The crop as a canvas (read on the phone by lib/ocr.ts), or null if the bus is too small / far.
+export function signCanvas(video: HTMLVideoElement, box: Box, others: Box[]): HTMLCanvasElement | null {
   const x = Math.max(0, box.x);
   const y = Math.max(0, box.y);
   const w = Math.min(video.videoWidth - x, box.w);
@@ -28,5 +29,11 @@ export function signCrop(video: HTMLVideoElement, box: Box, others: Box[]): stri
   others.forEach(function (item) {
     ctx.fillRect((item.x - x) * scale, (item.y - y) * scale, item.w * scale, item.h * scale);
   });
-  return canvas.toDataURL("image/jpeg", 0.85).split(",")[1];
+  return canvas;
+}
+
+// The crop as base64 JPEG for the server's OCR (/verify).
+export function signCrop(video: HTMLVideoElement, box: Box, others: Box[]): string | null {
+  const c = signCanvas(video, box, others);
+  return c ? c.toDataURL("image/jpeg", 0.85).split(",")[1] : null;
 }

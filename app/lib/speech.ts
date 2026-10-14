@@ -107,16 +107,56 @@ export async function say(texts: string[]): Promise<void> {
   stopSpeaking();
   const mine = turn;
   const clips = texts.map(fetchClip);
-  for (const clip of clips) {
-    const url = await clip;
+  for (let i = 0; i < clips.length; i++) {
+    const url = await clips[i];
     if (mine !== turn) {
       return;
     }
     if (url) {
       await play(url);
       URL.revokeObjectURL(url);
+    } else if (texts[i].trim()) {
+      await speakWithPhone(texts[i]); // no clip (free hosting: not pre-made): never silent
     }
   }
+}
+
+// The phone's own voice for a sentence without a Mongolian clip: a Mongolian voice if the phone has
+// one, else Russian (reads Cyrillic), else the default. Never waits past the sentence's length.
+function speakWithPhone(text: string): Promise<void> {
+  return new Promise(function (resolve) {
+    const synth = typeof window === "undefined" ? null : window.speechSynthesis;
+    if (!synth) {
+      resolve();
+      return;
+    }
+    const u = new SpeechSynthesisUtterance(text);
+    const voices = synth.getVoices();
+    const voice =
+      voices.find(function (item) {
+        return item.lang.toLowerCase().startsWith("mn");
+      }) ??
+      voices.find(function (item) {
+        return item.lang.toLowerCase().startsWith("ru");
+      });
+    if (voice) {
+      u.voice = voice;
+      u.lang = voice.lang;
+    } else {
+      u.lang = "mn-MN";
+    }
+    const timer = setTimeout(resolve, 1500 + text.length * 120);
+    u.onend = u.onerror = function () {
+      clearTimeout(timer);
+      resolve();
+    };
+    finish = function () {
+      synth.cancel();
+      clearTimeout(timer);
+      resolve();
+    };
+    synth.speak(u);
+  });
 }
 
 export function sayPhrase(key: PhraseKey): Promise<void> {

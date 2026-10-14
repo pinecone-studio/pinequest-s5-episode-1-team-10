@@ -26,3 +26,8 @@ server/hamuga_cache/
 server/yoloe-*.pt
 server/yoloe-*.onnx
 server/mobileclip*
+
+# Free Vercel deploy package (deploy/vercel.sh)
+deploy/out/
+deploy/out.tmp/
+deploy/mp3cache/

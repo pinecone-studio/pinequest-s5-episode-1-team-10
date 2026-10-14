@@ -15,6 +15,7 @@ import { savedMode, saveMode, type Mode } from "../lib/mode";
 import { routeLabel } from "../lib/route";
 import { loadDetector } from "../lib/detector";
 import { loadDoorDetector } from "../lib/doorDetector";
+import { loadOcr } from "../lib/ocr";
 import type { DoorGuide } from "../lib/door";
 import { phrase, prefetch, say, stopSpeaking, unlockAudio, vibrate, type PhraseKey } from "../lib/speech";
 import BusCamera, { doorSpeech } from "./BusCamera";
@@ -70,6 +71,7 @@ function testPosition(): Position | null {
 export default function RiderFlow() {
   const [step, setStep] = useState<Step>("start");
   const [mode, setMode] = useState<Mode>("voice");
+  const [serverOcr, setServerOcr] = useState(true); // false on free hosting: the phone reads the signs
   const modeRef = useRef<Mode>("voice"); // for callbacks
   // "Swipe right / double tap" only make sense without a screen reader.
   function welcome(): PhraseKey {
@@ -115,7 +117,10 @@ export default function RiderFlow() {
     say(found.speech.concat(phrase("open_camera")));
     // Load + warm both models while the route is read out, so the camera detects from its first frame.
     loadDetector()
-      .then(function (provider) {
+      .then(async function (provider) {
+        if (!caps.current.ocr) {
+          await loadOcr(); // free hosting: the phone reads the signs (before the 40 MB door model downloads)
+        }
         // Without WebGPU the door model would queue in front of bus detection: it loads after the "yes".
         return provider === "webgpu" ? loadDoorDetector() : undefined;
       })
@@ -151,6 +156,7 @@ export default function RiderFlow() {
     primeBeacon(); // the lesson's ear check plays the door beacon
     serverCaps().then(function (c) {
       caps.current = c;
+      setServerOcr(c.ocr);
     });
     if (tutorialNeeded()) {
       setStep("learn");
@@ -678,6 +684,7 @@ export default function RiderFlow() {
           onFound={onFound}
           onError={onCameraError}
           guide={doorGuide}
+          phoneOcr={!serverOcr}
         />
       )}
       {step === "ride" && cur && (

@@ -5,10 +5,11 @@
 // Once it's the rider's bus, the camera keeps following that bus and guides them to its front door:
 // a beacon panned toward the door, clock direction + steps, "bus moving, step back".
 import { useEffect, useRef, type MutableRefObject } from "react";
-import type { Verdict } from "../../shared/contract";
-import { verifySign } from "../lib/api";
+import type { Verdict, VerifyResponse } from "../../shared/contract";
+import { verifySign, verifyTexts } from "../lib/api";
 import { aimBeacon, startBeacon, stopBeacon } from "../lib/beacon";
-import { MIN_BUS_WIDTH, signCrop } from "../lib/crop";
+import { MIN_BUS_WIDTH, signCanvas, signCrop } from "../lib/crop";
+import { loadOcr, readSign } from "../lib/ocr";
 import { detectBuses, loadDetector, type Box } from "../lib/detector";
 import { detectFrontDoor, loadDoorDetector } from "../lib/doorDetector";
 import { frontIsRight, guideToDoor, type DoorGuide } from "../lib/door";
@@ -22,6 +23,7 @@ interface Props {
   onFound: () => void;
   onError: () => void;
   guide: MutableRefObject<DoorGuide | null>; // latest door guidance, for the "where is the door?" option
+  phoneOcr: boolean; // the server has no OCR (free hosting): read the sign on the phone, send only the texts
 }
 
 const GUIDE_EVERY_MS = 4000; // repeat "door at 2 o'clock, 9 steps" this often
@@ -121,7 +123,7 @@ function draw(
   }
 }
 
-export default function BusCamera({ stopId, route, foundSpeech, onFound, onError, guide }: Props) {
+export default function BusCamera({ stopId, route, foundSpeech, onFound, onError, guide, phoneOcr }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
 
@@ -242,26 +244,35 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
 
       function ask(video: HTMLVideoElement, track: Track, now: number, others: Box[]): void {
         // Other tracked buses are masked too, not only the weak detections.
-        const crop = signCrop(
-          video,
-          track.box,
-          others.concat(
-            tracks
-              .filter(function (item) {
-                return item !== track && item.lastSeen === now;
-              })
-              .map(function (item) {
-                return item.box;
-              }),
-          ),
+        const masked = others.concat(
+          tracks
+            .filter(function (item) {
+              return item !== track && item.lastSeen === now;
+            })
+            .map(function (item) {
+              return item.box;
+            }),
         );
-        if (!crop) {
-          return;
+        let answer: Promise<VerifyResponse | null>;
+        if (phoneOcr) {
+          const canvas = signCanvas(video, track.box, masked);
+          if (!canvas) {
+            return;
+          }
+          answer = readSign(canvas).then(function (texts) {
+            return verifyTexts(texts, stopId, route);
+          });
+        } else {
+          const crop = signCrop(video, track.box, masked);
+          if (!crop) {
+            return;
+          }
+          answer = verifySign({ sign_crop: crop, stop_id: stopId, wanted_route: route });
         }
         track.pending = true;
         track.lastAsked = now;
         pending++;
-        verifySign({ sign_crop: crop, stop_id: stopId, wanted_route: route }).then(function (res) {
+        answer.then(function (res) {
           track.pending = false;
           pending--;
           if (stopped) {
@@ -375,6 +386,12 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         }
         sayPhrase("camera_on");
         const provider = await loadDetector();
+        if (phoneOcr) {
+          // Nothing read yet ("unsure"): wakes the free server and fetches this stop's routes, so the
+          // first real read isn't the one that waits for them.
+          verifyTexts([], stopId, route);
+          await loadOcr(); // reads the signs here; 15 MB, cached by the browser after the first time
+        }
         // Door model in the background, needed only once the bus is found. Without WebGPU both models
         // share one CPU queue, so it waits for the "yes" instead of slowing the sign reading.
         if (provider === "webgpu") {
@@ -395,7 +412,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         }
       };
     },
-    [stopId, route, foundSpeech, onFound, onError, guide],
+    [stopId, route, foundSpeech, onFound, onError, guide, phoneOcr],
   );
 
   return (

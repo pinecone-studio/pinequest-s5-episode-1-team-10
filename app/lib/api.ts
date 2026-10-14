@@ -120,6 +120,34 @@ export async function locateByText(text: string): Promise<VoiceLocateResponse | 
   }
 }
 
+// The phone read the sign itself (lib/ocr.ts, free hosting): the server only decides from the texts.
+// The texts are tiny, so a slow cold start of a free server function is allowed a little longer.
+export async function verifyTexts(texts: [string, number][], stopId: string, route: string): Promise<VerifyResponse | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(function () {
+    controller.abort();
+  }, VERIFY_TIMEOUT_MS * 3);
+  try {
+    const res = await fetch("/api/verify/texts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        texts: texts.map(function (item) {
+          return { text: item[0], confidence: Math.min(1, Math.max(0, item[1])) };
+        }),
+        stop_id: stopId,
+        wanted_route: route,
+      }),
+      signal: controller.signal,
+    });
+    return res.ok ? ((await res.json()) as VerifyResponse) : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Never throws and never waits longer than VERIFY_TIMEOUT_MS. null = no answer in time, which says
 // nothing about the sign, so it isn't a vote (the camera says "not sure" if answers stop coming).
 export async function verifySign(req: VerifyRequest): Promise<VerifyResponse | null> {
