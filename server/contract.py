@@ -72,7 +72,7 @@ class RideStop(BaseModel):
     name: str = Field(description="'' if Hamuga doesn't know the stop")
     lat: Optional[float] = Field(default=None, description="null if Hamuga has no coordinates; still counts as a stop")
     lon: Optional[float] = None
-    speech: str = Field(description='"Дараагийн зогсоол: ..." to say as this stop comes up ("" if unnamed)')
+    speech: list[str] = Field(description='["Дараагийн зогсоол:", "МУБИС.", "Зүүн тал."] to say as this stop comes up ([] if unnamed)')
 
 
 class RideResponse(BaseModel):

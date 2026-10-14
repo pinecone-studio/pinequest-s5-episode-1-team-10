@@ -22,6 +22,9 @@ REPO = "btsee/oron-tts"
 MAX_CHARS = 300
 STEPS = int(os.environ.get("TTS_STEPS", "32"))  # background clips: model card quality, ~16 s each
 LIVE_STEPS = int(os.environ.get("TTS_LIVE_STEPS", "16"))  # a rider is waiting: ~8 s each
+# TTS_LIVE=0 (CPU cloud hosts): only serve clips that were pre-made on a GPU; never synthesize,
+# so the 1.5 GB model is never loaded and a missing clip is shown as text instead of spoken.
+LIVE = os.environ.get("TTS_LIVE", "1") == "1"
 
 
 
@@ -78,6 +81,8 @@ def synthesize(text, live=True):
     path = _path(spoken)
     if path.exists():
         return path
+    if not LIVE:
+        raise ValueError("not pre-made on this server")
     import soundfile as sf
 
     with gpu.use(gpu.LIVE_TTS if live else gpu.BACKGROUND):

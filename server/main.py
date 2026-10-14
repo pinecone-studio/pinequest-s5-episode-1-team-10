@@ -73,7 +73,7 @@ def plan(req: PlanRequest):
         raise HTTPException(status_code=404, detail=str(e))
 
 
-NOT_HEARD = "Сонсогдсонгүй. Дэлгэцийг дахин дараад хэлнэ үү."
+NOT_HEARD = "Сонсогдсонгүй. Хоёр товшоод дахин хэлнэ үү."  # = phrases.json "not_heard" (pre-made)
 
 
 async def _hear(request):
@@ -109,7 +109,7 @@ def _locate(heard):
         raise HTTPException(status_code=503, detail="Bus data unavailable")
     print(f"locate: heard {heard!r} -> {stop['name'] if stop else None!r}")
     if not stop:
-        return VoiceLocateResponse(heard=heard, message=f"\"{heard}\" нэртэй зогсоол олдсонгүй. Ойролцоох зогсоолын нэрийг хэлнэ үү.")
+        return VoiceLocateResponse(heard=heard, message=planner.MSG_NOT_A_STOP)
     return VoiceLocateResponse(heard=heard, stop={k: stop[k] for k in ("stop_id", "name", "lat", "lon")})
 
 
@@ -138,9 +138,9 @@ def ride(route: str = Query(min_length=1, max_length=16), board: str = Query(min
     if not stops:
         raise HTTPException(status_code=404, detail="This route doesn't go from that stop to that stop")
     for s in stops:
-        s["speech"] = planner.next_stop_speech(s["name"]) if s["name"] else ""
+        s["speech"] = planner.next_stop_speech(s["name"]) if s["name"] else []
     # Stop names are said on the bus a minute or more from now: make them while the rider boards.
-    tts.prefetch_in_background([s["speech"] for s in stops[1:] if s["speech"]], live=True)
+    tts.prefetch_in_background([p for s in stops[1:] for p in s["speech"]], live=True)
     return {"route": route, "stops": stops}
 
 

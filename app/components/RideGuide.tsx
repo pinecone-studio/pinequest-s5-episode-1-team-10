@@ -9,7 +9,7 @@ import { phrase, say, vibrate, type PhraseKey } from "../lib/speech";
 
 export interface RideInfo {
   left: number; // stops still to ride
-  next: string; // "Дараагийн зогсоол: ..." or ""
+  next: string[]; // ["Дараагийн зогсоол:", "МУБИС.", "Зүүн тал."] or []
 }
 
 interface Props {
@@ -60,7 +60,7 @@ export default function RideGuide({ route, board, alight, simulate, info, onArri
       // The next stop that can be announced: Hamuga has no name/coordinates for a few (they still count).
       function nextNamed(): number {
         for (let j = at + 1; j < list.length; j++) {
-          if (list[j].speech && list[j].lat !== null && list[j].lon !== null) {
+          if (list[j].speech.length && list[j].lat !== null && list[j].lon !== null) {
             return j;
           }
         }
@@ -69,7 +69,7 @@ export default function RideGuide({ route, board, alight, simulate, info, onArri
 
       function update(): void {
         const last = list.length - 1;
-        info.current = { left: last - at, next: at < last ? list[nextNamed()].speech : "" };
+        info.current = { left: last - at, next: at < last ? list[nextNamed()].speech : [] };
         setReached(at);
       }
 
@@ -118,7 +118,7 @@ export default function RideGuide({ route, board, alight, simulate, info, onArri
           const s = list[next];
           if (metres(lat, lon, s.lat as number, s.lon as number) < ANNOUNCE_M) {
             announced = next;
-            say([s.speech, leftSpeech(last - next)].filter(Boolean));
+            say(s.speech.concat(leftSpeech(last - next)).filter(Boolean));
           }
         }
         update();
@@ -162,15 +162,24 @@ export default function RideGuide({ route, board, alight, simulate, info, onArri
             "/api/ride?route=" + encodeURIComponent(route) + "&board=" + encodeURIComponent(board) + "&alight=" + encodeURIComponent(alight),
           );
         } catch {
+          if (stopped) {
+            return;
+          }
           setError(phrase("server_down"));
           say([phrase("server_down")]);
           return;
         }
-        if (!res.ok || stopped) {
+        if (stopped) {
+          return; // unmounted while loading: not an error
+        }
+        if (!res.ok) {
           setError(phrase("ride_lost"));
           return;
         }
         list = ((await res.json()) as RideResponse).stops;
+        if (stopped) {
+          return;
+        }
         update();
         setStops(list);
         say([phrase("ride_start")]);

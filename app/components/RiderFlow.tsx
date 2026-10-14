@@ -5,7 +5,8 @@
 // to choose, all spoken in Mongolian, so a blind rider always knows what they can do.
 import { useCallback, useRef, useState, type FormEvent } from "react";
 import type { PlanResponse, VoiceLocateResponse } from "../../shared/contract";
-import { locateBySpeech, locateByText, nearestStop, requestPlan, requestVoicePlan } from "../lib/api";
+import { locateBySpeech, locateByText, nearestStop, requestPlan, requestVoicePlan, serverCaps, type ServerCaps } from "../lib/api";
+import { listenInBrowser } from "../lib/listen";
 import { GPS_OK_M, locate, type Position } from "../lib/location";
 import { beep, record, type Recording } from "../lib/record";
 import { primeBeacon } from "../lib/beacon";
@@ -53,6 +54,8 @@ export default function RiderFlow() {
   const position = useRef<Position | null>(null);
   const fromGps = useRef(false); // GPS positions are refreshed on each request; a said place is kept
   const recording = useRef<Recording | null>(null);
+  const caps = useRef<ServerCaps>({ stt: true, ocr: true });
+  const browserListening = useRef<{ stop: () => void } | null>(null);
   const [found, setFound] = useState(false); // the camera confirmed the rider's bus: now guiding to its door
   const doorGuide = useRef<DoorGuide | null>(null);
   const rideInfo = useRef<RideInfo | null>(null);
@@ -102,7 +105,23 @@ export default function RiderFlow() {
 
   function begin(): void {
     unlockAudio(); // inside the first touch, or iPhones stay silent
+    serverCaps().then(function (c) {
+      caps.current = c;
+    });
     findMe(["tutorial", "locating"]);
+  }
+
+  // Free hosting has no Whisper: the browser recognises the speech, and the text goes to the server.
+  async function hearInBrowser(listeningStep: Step): Promise<string> {
+    stopSpeaking();
+    setStep(listeningStep);
+    setMessage(phrase("menu_stop_listening"));
+    await beep();
+    const rec = listenInBrowser();
+    browserListening.current = rec;
+    const text = await rec.done;
+    browserListening.current = null;
+    return text;
   }
 
   // Beep, record until the rider stops talking (or double taps). null = nothing said; the caller
@@ -142,6 +161,17 @@ export default function RiderFlow() {
   }
 
   async function sayWhereIAm(): Promise<void> {
+    if (!caps.current.stt) {
+      const text = await hearInBrowser("whereListening");
+      if (!text) {
+        setStep("where");
+        announce(["not_heard"]);
+        return;
+      }
+      setStep("working");
+      applyPlace(await locateByText(text));
+      return;
+    }
     const wav = await hear("whereListening", "where").catch(function () {
       return undefined;
     });
@@ -192,6 +222,16 @@ export default function RiderFlow() {
   }
 
   async function sayDestination(): Promise<void> {
+    if (!caps.current.stt) {
+      const text = await hearInBrowser("listening");
+      if (!text) {
+        setStep("ask");
+        announce(["not_heard"]);
+        return;
+      }
+      planTrip(text);
+      return;
+    }
     const positionNow = currentPosition(); // GPS refresh runs while the rider talks
     const wav = await hear("listening", "ask").catch(function () {
       return undefined;
@@ -262,6 +302,9 @@ export default function RiderFlow() {
     if (recording.current) {
       recording.current.stop();
     }
+    if (browserListening.current) {
+      browserListening.current.stop();
+    }
   }
   function sayMyLocation(): void {
     announce(["your_location_is", { text: place }]);
@@ -286,7 +329,7 @@ export default function RiderFlow() {
   function stopsLeft(): void {
     const r = rideInfo.current;
     if (r) {
-      say([leftSpeech(r.left), r.next].filter(Boolean));
+      say([leftSpeech(r.left)].concat(r.next).filter(Boolean));
     }
   }
   function gotOff(): void {

@@ -141,9 +141,60 @@ def locate(text):
     return named[0] if named else None
 
 
+# Every spoken sentence is built from pieces that can all be pre-recorded (free hosting can't make
+# speech live): fixed phrases, numbers in fixed phrases, and one clip per stop name.
+SIDE_PIECES = {"урд": "Урд тал.", "хойд": "Хойд тал.", "зүүн": "Зүүн тал.", "баруун": "Баруун тал."}
+MAX_RIDE_STOPS = 60
+MSG_SAY_AGAIN = "Очих газрын нэрийг дахин хэлнэ үү."
+MSG_NOT_FOUND = "Ийм нэртэй зогсоол олдсонгүй. Өөр нэрээр хэлнэ үү."
+MSG_NO_STOP_NEAR = "Таны ойролцоо 800 метрт автобусны зогсоол алга."
+MSG_CLOSE = "Та очих газартаа ойрхон байна. Алхаж очоорой."
+MSG_NO_DIRECT = "Таны ойролцоох зогсоолоос тийшээ шууд автобус алга."
+MSG_NOT_A_STOP = "Ийм нэртэй зогсоол олдсонгүй. Ойролцоох зогсоолын нэрийг хэлнэ үү."
+
+
+def stop_name(name):
+    """'Сансар ШТС /Урд/' -> 'Сансар ШТС' (side markers and brackets removed)."""
+    return " ".join(re.sub(r"/[^/]*/|\([^)]*\)", " ", name).split())
+
+
+def stop_pieces(name):
+    """['Сансар ШТС.', 'Урд тал.'] -- one clip per stop name, one per side of the street."""
+    base, s = stop_name(name), side(name)
+    return ([base + "."] if base else []) + ([SIDE_PIECES[s]] if s else [])
+
+
+def walk_piece(metres):
+    return "Та зогсоол дээр байна." if metres < AT_STOP_M else f"Зогсоол руу {min(WALK_MAX_M, round(metres, -1))} метр алхана."
+
+
+def ride_piece(stops):
+    return f"{min(stops, MAX_RIDE_STOPS)} зогсоол явна."
+
+
 def next_stop_speech(name):
-    """Said on the bus when a stop is coming up."""
-    return f"Дараагийн зогсоол: {spoken_stop(name)}."
+    """Said on the bus when a stop is coming up: ['Дараагийн зогсоол:', 'МУБИС.', 'Зүүн тал.']."""
+    return ["Дараагийн зогсоол:"] + stop_pieces(name)
+
+
+def piece_phrases():
+    """Every fixed piece, for pre-recording."""
+    return (["Суух зогсоол:", "Буух зогсоол:", "Дараагийн зогсоол:", "Очих газар тань тэндээс ойрхон.",
+             MSG_SAY_AGAIN, MSG_NOT_FOUND, MSG_NO_STOP_NEAR, MSG_CLOSE, MSG_NO_DIRECT, MSG_NOT_A_STOP, walk_piece(0)]
+            + list(SIDE_PIECES.values())
+            + [walk_piece(m) for m in range(AT_STOP_M, WALK_MAX_M + 1, 10) if m >= AT_STOP_M]
+            + [ride_piece(n) for n in range(1, MAX_RIDE_STOPS + 1)])
+
+
+def name_phrases():
+    """One clip per stop name, busiest stops first (pre-recording takes ~8 s each)."""
+    order, seen = [], set()
+    for s in sorted(bus_api._stops(), key=lambda s: -len(s["routes"])):
+        base = stop_name(s["name"])
+        if base and base not in seen:
+            seen.add(base)
+            order.append(base + ".")
+    return order
 
 
 def side(name):
@@ -188,16 +239,15 @@ def route_phrases():
 def suggest(text, lat, lon):
     words = query_words(text)
     if not words:
-        raise PlanError("Очих газрын нэрийг дахин хэлнэ үү.")
+        raise PlanError(MSG_SAY_AGAIN)
     named, nearby = find_destination(words)
     if not named:
-        raise PlanError(f"\"{text}\" нэртэй зогсоол олдсонгүй. Өөр нэрээр хэлнэ үү.")
-    place = spoken_stop(named[0]["name"]).split(",")[0]  # side-less, e.g. "Улсын Их Дэлгүүр"
+        raise PlanError(MSG_NOT_FOUND)
     origins = bus_api.nearest_stops(lat, lon, WALK_MAX_M, ORIGIN_LIMIT)
     if not origins:
-        raise PlanError("Таны ойролцоо 800 метрт автобусны зогсоол алга.")
+        raise PlanError(MSG_NO_STOP_NEAR)
     if origins[0]["stop_id"] in {s["stop_id"] for s in named + nearby}:
-        raise PlanError("Та очих газартаа ойрхон байна.")
+        raise PlanError(MSG_CLOSE)
 
     dest_routes = {r for d in named + nearby for r in d["routes"]}
     bus_api.load_route_directions(rid for o in origins for r in set(o["routes"]) & dest_routes
@@ -208,9 +258,9 @@ def suggest(text, lat, lon):
         ride = _best_ride(origins, dests)
         if ride:
             o, route, d, n = ride
-            get_off = f"{n} зогсоол яваад {spoken_stop(d['name'])} зогсоол дээр бууна."
+            get_off = [ride_piece(n), "Буух зогсоол:"] + stop_pieces(d["name"])
             if not exact:
-                get_off += f" {place} тэндээс ойрхон."
+                get_off += ["Очих газар тань тэндээс ойрхон."]
             return {
                 "route": route,
                 "board_stop": {"stop_id": o["stop_id"], "name": o["name"], "distance_m": o["distance_m"],
@@ -219,11 +269,9 @@ def suggest(text, lat, lon):
                 "alight_stop": {"stop_id": d["stop_id"], "name": d["name"]},
                 "stops_to_ride": n,
                 "routes_at_stop": o["routes"],
-                # One clip per part: the first is pre-made per route, the rest are made while it plays.
-                "speech": [take_speech(route),
-                           f"{spoken_stop(o['name'])} зогсоол дээр байна." if o["distance_m"] < AT_STOP_M else
-                           f"{spoken_stop(o['name'])} зогсоол руу {round(o['distance_m'], -1)} метр алхана.",
-                           get_off],
+                # Pieces, all pre-recordable: "29 Б автобусанд суугаарай." "Суух зогсоол:" "Вокзал." "Хойд тал."
+                # "Зогсоол руу 460 метр алхана." "6 зогсоол явна." "Буух зогсоол:" "Сүхбаатарын талбай." ...
+                "speech": [take_speech(route), "Суух зогсоол:"] + stop_pieces(o["name"]) + [walk_piece(o["distance_m"])] + get_off,
                 "found_speech": found_speech(route),
             }
-    raise PlanError(f"{place} руу таны ойролцоох зогсоолоос шууд автобус алга.")
+    raise PlanError(MSG_NO_DIRECT)

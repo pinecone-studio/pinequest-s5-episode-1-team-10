@@ -288,7 +288,7 @@ body {
   font-weight: 800;
 }
 
-/* Pitch demo: a live preview in the bottom-right corner; a tap opens it full screen. */
+/* Pitch demo: a still preview in the bottom-right corner; a tap opens it full screen and starts it. */
 .demo-corner {
   position: fixed;
   right: 12px;
