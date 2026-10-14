@@ -32,7 +32,8 @@ QUESTIONS = [
     ("Хаалга хаана байна?", [], "door", TRIP),
     ("Хэдэн зогсоол үлдсэн бэ?", [], "stops_left", TRIP),
     ("Би автобусанд суулаа", [], "boarded", TRIP),
-    ("Би төөрчихлөө, тусламж хэрэгтэй", ["тусламж хүсээрэй", "Төв номын сан"], None, None),
+    ("Би төөрчихлөө, тусламж хэрэгтэй", ["тусламжийн мессеж", "Төв номын сан"], "sos", None),
+    ("Ээждээ залгаач", ["залгаж"], "call_family", None),
     ("Юу хийж чадах вэ?", ["Очих газраа хэлбэл"], None, None),
     ("Өнөөдөр цаг агаар ямар байна?", ["Мэдэхгүй байна"], None, None),  # not a bus question: must not guess
 ]
@@ -41,13 +42,12 @@ QUESTIONS = [
 # Does it tell question kinds apart however they're worded? (question, expected kind, with a trip?)
 def kind(r):
     a, s = r["action"], " ".join(r["speech"])
-    if a: return a
+    if a: return "emergency" if a == "sos" else a
     if s.startswith(("Энэ зогсоол дээр", "Төв номын сан зогсоол дээр")): return "buses_here"
     if "хооронд явдаг" in s: return "route_info"
     if s.startswith(("Тийм.", "Үгүй.")): return "goes_to"
     if s.startswith("Хамгийн ойрын"): return "nearest"
     if s.startswith("Автобус хэзээ"): return "eta"
-    if s.startswith("Ойролцоох хүнээс"): return "emergency"
     if s.startswith("Би автобусны талаар"): return "help"
     if s.startswith("Мэдэхгүй"): return "unknown"
     if "шулуунаар" in s: return "how_far"

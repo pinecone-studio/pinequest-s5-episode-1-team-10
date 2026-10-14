@@ -99,7 +99,8 @@ class AskResponse(BaseModel):
     answer: str = Field(description="The whole answer, for the screen")
     speech: list[str] = Field(description="Mongolian sentences to speak in order; fetch each from /tts")
     action: Optional[Literal["plan", "open_camera", "walk", "door", "stops_left", "boarded", "got_off", "repeat_route",
-                             "start_over", "tutorial"]] = Field(default=None, description="What the app should do")
+                             "start_over", "tutorial", "sos", "call_family"]] = Field(
+        default=None, description='What the app should do. "sos": text the family (speech[1:] = where the rider is)')
     plan: Optional["PlanResponse"] = Field(default=None, description='The trip, when action is "plan"')
 
 

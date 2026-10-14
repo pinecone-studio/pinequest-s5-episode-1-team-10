@@ -70,8 +70,10 @@ def test_arrival_time_help_thanks_and_emergency():
     assert ask("Автобус хэзээ ирэх вэ?")["speech"] == assistant.NO_ETA
     assert ask("Юу хийж чадах вэ?")["speech"] == assistant.HELP
     assert ask("Баярлалаа")["speech"] == assistant.THANKS
-    em = ask("Би төөрсөн, тусламж хэрэгтэй")["speech"]
-    assert em[0] == assistant.EMERGENCY_FIRST and "Home зогсоолоос" in em[1]
+    em = ask("Би төөрсөн, тусламж хэрэгтэй")
+    assert em["action"] == "sos" and em["speech"][0] == assistant.SOS_FIRST and "Home зогсоолоос" in em["speech"][1]
+    assert ask("Ээждээ залгаач")["action"] == "call_family"
+    assert ask("Гэр бүлдээ залга")["action"] == "call_family"
 
 
 def test_other_questions_are_not_guessed():

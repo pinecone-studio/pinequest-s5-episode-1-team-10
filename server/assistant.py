@@ -30,6 +30,8 @@ NO_STOP = ["Таны ойролцоо 800 метрт автобусны зогс
 NEED_PLAN = ["Эхлээд очих газраа хэлнэ үү."]
 THANKS = ["Зүгээр ээ. Аюулгүй аялаарай."]
 EMERGENCY_FIRST = "Ойролцоох хүнээс тусламж хүсээрэй."
+SOS_FIRST = "Гэр бүлдээ тусламжийн мессеж бэлдэж байна."
+CALL_FAMILY = "Гэр бүлдээ залгаж байна."
 
 # Speech recognition writes tens with a genitive-looking ending ("тавын тав" for 55).
 TENS_HEARD = {"хорын": "хорин", "гучын": "гучин", "дөчын": "дөчин", "тавын": "тавин", "жарын": "жаран",
@@ -201,10 +203,16 @@ def _nearest(lat, lon):
     return ["Хамгийн ойрын зогсоол:"] + planner.stop_pieces(st["name"]) + [planner.walk_piece(st["distance_m"])]
 
 
-def _emergency(lat, lon):
+def _where(lat, lon):
+    """['Та Төв номын сан зогсоолоос 20 метр зайд байна.'] -- also the SOS message's location line."""
     st = _nearest_stop(lat, lon)
-    where = [f"Та {planner.stop_name(st['name'])} зогсоолоос {_say_meters(st['distance_m'])} зайд байна."] if st else []
-    return [EMERGENCY_FIRST] + where
+    return [f"Та {planner.stop_name(st['name'])} зогсоолоос {_say_meters(st['distance_m'])} зайд байна."] if st else []
+
+
+def _emergency(lat, lon):
+    """SOS: the app texts the family (SMS app, prefilled) if a family number is saved; it speaks
+    EMERGENCY_FIRST + where instead when there's none. speech[1:] is the location line for the message."""
+    return [SOS_FIRST] + _where(lat, lon)
 
 
 def _waiting_for(context):
@@ -241,7 +249,9 @@ def reply(text, lat, lon, context=None):
         return say(UNKNOWN)
     # Emergencies and commands first: short, and the app acts on them.
     if _has(t, "тусламж хэр", "төөр", "төвөр", "замаа алд", "аюул", "яаралтай"):  # "төвөрчихлөө": as heard
-        return say(_emergency(lat, lon))
+        return say(_emergency(lat, lon), "sos")
+    if _has(t, "залга") and _has(t, "гэр бүл", "ээж", "аав", "ах", "эгч", "дүү", "нөхөр", "эхнэр", "хүүхэд", "гэрийнхэн"):
+        return say([CALL_FAMILY], "call_family")
     if _has(t, "баярлалаа", "баярлаа"):
         return say(THANKS)
     if _has(t, "заавар"):
@@ -328,7 +338,7 @@ def reply(text, lat, lon, context=None):
     if bus_number:
         return say(_route_info(bus_number, lat, lon))
     if _has(t, "туслаач", "туслаарай", "тусална уу"):
-        return say(_emergency(lat, lon))  # "help me" with nothing else asked
+        return say(_emergency(lat, lon), "sos")  # "help me" with nothing else asked
     if _has(t, "энэ зогсоол", "энэ буудал", "автобус", "чиглэл", "маршрут") or words & {"энд", "эндээс"}:
         st = _nearest_stop(lat, lon)
         return say(_buses_at(st, here=st["distance_m"] < planner.AT_STOP_M) if st else NO_STOP)
@@ -342,5 +352,5 @@ def answer(text, lat, lon, context=None):
 
 def fixed_phrases():
     """Sentences that never change, for pre-making voice clips at startup."""
-    return UNKNOWN + HELP + NO_ETA + NEED_PLAN + THANKS + [EMERGENCY_FIRST, "Заавар эхэллээ.", "Шинээр эхэллээ.",
+    return UNKNOWN + HELP + NO_ETA + NEED_PLAN + THANKS + [EMERGENCY_FIRST, SOS_FIRST, CALL_FAMILY, "Заавар эхэллээ.", "Шинээр эхэллээ.",
                                                            "Хамгийн тохиромжтой нь:"]

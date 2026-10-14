@@ -11,15 +11,17 @@ import { GPS_OK_M, locate, type Position } from "../lib/location";
 import { beep, record, type Recording } from "../lib/record";
 import { primeBeacon } from "../lib/beacon";
 import { requestCompassPermission } from "../lib/compass";
+import { familyNumber, openLink, smsUrl, sosMessage, telUrl } from "../lib/family";
 import { routeLabel } from "../lib/route";
 import { loadDetector } from "../lib/detector";
 import { loadDoorDetector } from "../lib/doorDetector";
 import type { DoorGuide } from "../lib/door";
-import { phrase, prefetch, say, stopSpeaking, unlockAudio, type PhraseKey } from "../lib/speech";
+import { phrase, prefetch, say, stopSpeaking, unlockAudio, vibrate, type PhraseKey } from "../lib/speech";
 import BusCamera, { doorSpeech } from "./BusCamera";
 import PlanCard from "./PlanCard";
 import RideGuide, { leftSpeech, type RideInfo } from "./RideGuide";
 import Tutorial, { tutorialNeeded } from "./Tutorial";
+import FamilyContact from "./FamilyContact";
 import WalkGuide from "./WalkGuide";
 import VoiceMenu, { type MenuItem } from "./VoiceMenu";
 
@@ -93,6 +95,8 @@ export default function RiderFlow() {
   const rideInfo = useRef<RideInfo | null>(null);
   const walkInfo = useRef<string[] | null>(null);
   const [atStop, setAtStop] = useState(true); // false: offer walking guidance to the boarding stop first
+  // SOS menu on top of whatever screen (camera, ride keep running): text or call the family.
+  const [sos, setSos] = useState<{ mode: "sms" | "call"; body: string } | null>(null);
   const [walkFrom, setWalkFrom] = useState<{ lat: number; lon: number } | null>(null); // rider's position when the walk starts
 
   // Show and speak: keys are pre-made clips (instant), plain strings are made live.
@@ -513,7 +517,7 @@ export default function RiderFlow() {
       announce(["server_down"]);
       return;
     }
-    setMessage((result.heard ? "“" + result.heard + "” — " : "") + result.answer);
+    setMessage(result.heard && result.answer ? "“" + result.heard + "” — " + result.answer : result.answer || "“" + result.heard + "”");
     doAction(result);
   }
 
@@ -536,11 +540,46 @@ export default function RiderFlow() {
       gotOff();
     } else if (a === "start_over") {
       startOver();
+    } else if (a === "sos" || a === "call_family") {
+      startSos(a === "sos" ? "sms" : "call", result);
     } else if (a === "tutorial") {
       replayTutorial();
     } else {
       say(result.speech);
     }
+  }
+
+  // The rider asked for help: ready the message (or call) and wait for a double tap, because phones
+  // only open the SMS app / dialer from a tap, and a misheard word must never send an SOS by itself.
+  function startSos(mode: "sms" | "call", result: AskResponse): void {
+    const where = result.speech.slice(1).join(" "); // "Та Төв номын сан зогсоолоос 20 метр зайд байна."
+    if (!familyNumber()) {
+      setMessage(phrase("sos_no_contact") + " " + where);
+      say([phrase("sos_no_contact")].concat(result.speech.slice(1)));
+      return;
+    }
+    const pos = position.current;
+    const body = pos ? sosMessage(pos.lat, pos.lon, where) : sosMessage(0, 0, where).split(" Байршил:")[0];
+    vibrate([500, 200, 500, 200, 500]);
+    setSos({ mode, body });
+    setMessage(body);
+    say([phrase(mode === "sms" ? "sos_confirm" : "sos_call_confirm")]);
+  }
+  function sosSend(): void {
+    if (sos) {
+      openLink(smsUrl(familyNumber(), sos.body));
+      setSos(null);
+      say([phrase("sos_opened")]);
+    }
+  }
+  function sosCall(): void {
+    setSos(null);
+    openLink(telUrl(familyNumber()));
+  }
+  function sosCancel(): void {
+    setSos(null);
+    setMessage("");
+    say([phrase("sos_cancelled")]);
   }
 
   const help: MenuItem = { ...label("help", "menu_help"), onActivate: sayHelp };
@@ -615,6 +654,15 @@ export default function RiderFlow() {
     items = [{ ...label("restart", "menu_start_over"), onActivate: startOver }, askItem, help];
   }
 
+  if (sos) {
+    primary = sos.mode === "sms" ? 0 : 1;
+    items = [
+      { ...label("sos-send", "menu_sos_send"), onActivate: sosSend },
+      { ...label("sos-call", "menu_sos_call"), onActivate: sosCall },
+      { ...label("sos-cancel", "menu_sos_cancel"), onActivate: sosCancel },
+    ];
+  }
+
   if (step === "start") {
     return (
       <main className="flow">
@@ -643,7 +691,7 @@ export default function RiderFlow() {
       </p>
       {place && (step === "ask" || step === "listening") && <p className="place">Таны байршил: {place}</p>}
 
-      <VoiceMenu key={step} items={items} primary={primary}>
+      <VoiceMenu key={step} items={items} primary={primary} menuId={sos ? "sos" : "main"}>
         {step === "planned" && plan && <PlanCard plan={plan} heard={heard} leg={leg} />}
         {step === "walk" && cur && walkStop && (
           <>
@@ -707,6 +755,7 @@ export default function RiderFlow() {
           <button type="submit">OK</button>
         </form>
       )}
+      {step === "ask" && <FamilyContact />}
     </main>
   );
 }

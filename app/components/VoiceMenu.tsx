@@ -19,13 +19,14 @@ export interface MenuItem {
 interface Props {
   items: MenuItem[];
   primary?: number; // option a double tap chooses before any is reached; none = just give the hint
+  menuId?: string; // a different value = a different menu on the same screen (SOS): start from its top again
   children?: ReactNode; // shown inside the touch surface (plan card, camera)
 }
 
 export const SWIPE_PX = 40;
 export const DOUBLE_TAP_MS = 350;
 
-export default function VoiceMenu({ items, primary, children }: Props) {
+export default function VoiceMenu({ items, primary, menuId, children }: Props) {
   const [index, setIndexState] = useState(-1); // -1: nothing reached yet
   // Fast swipes arrive before React re-renders, so the live position is kept in a ref too.
   const at = useRef(-1);
@@ -45,12 +46,23 @@ export default function VoiceMenu({ items, primary, children }: Props) {
     };
   }, []);
 
+  // A new menu on the same screen (the screen itself, e.g. the camera, keeps running): the next
+  // gesture starts from its top.
+  const menuSeen = useRef(menuId);
+  function syncMenu(): void {
+    if (menuSeen.current !== menuId) {
+      menuSeen.current = menuId;
+      setIndex(-1);
+    }
+  }
+
   function speak(i: number): void {
     const item = items[i];
     say(item.speech ?? [item.label]);
   }
 
   function move(step: number): void {
+    syncMenu();
     if (!items.length) {
       say([phrase("wait")]);
       return;
@@ -68,6 +80,7 @@ export default function VoiceMenu({ items, primary, children }: Props) {
   }
 
   function activate(): void {
+    syncMenu();
     const i = at.current >= 0 ? at.current : primary;
     if (i === undefined || !items[i]) {
       say([phrase(items.length ? "choose_hint" : "wait")]);
@@ -78,6 +91,7 @@ export default function VoiceMenu({ items, primary, children }: Props) {
   }
 
   function repeat(): void {
+    syncMenu();
     if (at.current >= 0 && items[at.current]) {
       speak(at.current);
     } else {
