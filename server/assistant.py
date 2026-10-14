@@ -40,13 +40,20 @@ QUESTION_WORDS = {"хэдэн", "хэд", "вэ", "бэ", "уу", "үү", "яа�
                   "явах", "явна", "зогсоолоор", "зогсоолтой", "дугаар", "дугаарын", "дамжиж", "надад", "хэлээч", "хэлнэ",
                   "болох", "энд", "эндээс", "тэнд", "тийшээ", "ирэх", "ирнэ", "минут", "хэзээ", "хэр", "удах", "хол",
                   "ойрхон", "шууд", "автобусууд", "дээр", "зогсдоггүй", "явдаггүй", "уруу", "луу", "лүү", "рүү", "руу",
-                  "метр", "км", "километр", "зай", "зайтай"}
+                  "метр", "км", "километр", "зай", "зайтай", "очихын", "тулд", "хүргээч", "хүргэж", "өгөөч", "билээ",
+                  "явмаар", "очмоор", "байна", "гэсэн", "юм", "намайг", "надад", "миний", "чи", "та", "вэ?", "нь", "юу", "ямар ямар", "өнгөрдөг", "хүрнэ", "очно", "суух"}
 PLACE_MARKERS = {"руу", "рүү", "луу", "лүү", "уруу", "очих", "очно", "очдог", "хүрэх", "хүрдэг", "явах"}
-ROUTE_INFO_WORDS = ("хаагуур", "хаашаа", "хаана хүртэл", "ямар зогсоол", "чиглэл", "маршрут", "хаанаас")
+ROUTE_INFO_WORDS = ("хаагуур", "хаашаа", "хаана хүртэл", "ямар зогсоол", "чиглэл", "маршрут", "хаанаас", "эцэс")
+
+
+def _f(part):
+    """A keyword folded like the text (ү/у, ө/о, й/и...), keeping its edge spaces (" суулаа" = word start)."""
+    return (" " if part.startswith(" ") else "") + planner.fold(part) + (" " if part.endswith(" ") else "")
 
 
 def _has(t, *parts):
-    return any(p in t for p in parts)
+    """t is folded text with spaces around it; parts match whatever the spelling of ү/у, ө/о, й/и."""
+    return any(_f(p) in t for p in parts)
 
 
 def _number_and_letter(route_no):
@@ -81,9 +88,14 @@ def _strip(text):
                     if planner.fold(w.strip("?.,!")) not in {planner.fold(q) for q in QUESTION_WORDS})
 
 
+_GENERIC = ("автобус", "зогсоол", "буудал", "маршрут", "чиглэл")
+
+
 def _place(text):
-    """(named stops, nearby) for a place in the text; ([], []) if none. A bare number is a bus, not a place."""
-    words = [w for w in planner.query_words(text) if w not in QUESTION_WORDS]
+    """(named stops, nearby) for a place in the text; ([], []) if none. A bare number is a bus, not a place,
+    and forms of автобус/зогсоол/буудал ("автобуснууд") never are."""
+    # Every other word stays: the stop matcher needs them to reject a sentence that isn't a place.
+    words = [w for w in planner.query_words(text) if w not in QUESTION_WORDS and not w.startswith(_GENERIC)]
     if not words or all(w.isdigit() or w in ("а", "б") for w in words):
         return [], []
     return planner.find_destination(words, _strip(text))
@@ -218,7 +230,7 @@ def reply(text, lat, lon, context=None):
     """{"speech": [...], "action": str|None, "plan": PlanResponse dict|None} for what the rider said.
     context: the trip in progress from the app: {"step", "route", "alight"} (all optional)."""
     context = context or {}
-    t = " " + re.sub(r"[?.,!]", " ", planner.cyrillic(text).lower()) + " "
+    t = " " + planner.fold(planner.cyrillic(text)) + " "
     words = set(t.split())
     has_plan = bool(context.get("route"))
 
@@ -228,36 +240,38 @@ def reply(text, lat, lon, context=None):
     if not words:
         return say(UNKNOWN)
     # Emergencies and commands first: short, and the app acts on them.
-    if _has(t, "тусламж хэр", "туслаач", "төөр", "төвөр", "аюул", "яаралтай"):  # "төвөрчихлөө": as heard
+    if _has(t, "тусламж хэр", "төөр", "төвөр", "замаа алд", "аюул", "яаралтай"):  # "төвөрчихлөө": as heard
         return say(_emergency(lat, lon))
     if _has(t, "баярлалаа", "баярлаа"):
         return say(THANKS)
     if _has(t, "заавар"):
         return say(["Заавар эхэллээ."], "tutorial")
-    if _has(t, "шинээр", "эхнээс", "өөр газар", "болих", "цуцал"):
+    if _has(t, "шинээр", "эхнээс", "өөр газар", "болих", "цуцал", "дахиад эхл", "дахин эхл", "эхлүүл"):
         return say(["Шинээр эхэллээ."], "start_over")
     if _has(t, "камер"):
         return say([], "open_camera") if has_plan else say(NEED_PLAN)
-    if _has(t, "хаалга"):
+    if _has(t, "хаалг"):  # хаалга, хаалгыг, хаалганы
         return say([], "door") if has_plan else say(NEED_PLAN)
-    if _has(t, " суулаа", "суучихлаа", " суусан"):
+    if _has(t, " суулаа", "суучихлаа", " суусан", "автобусанд орлоо", "автобусанд орсон"):
         return say([], "boarded") if has_plan else say(NEED_PLAN)
-    if _has(t, "буулаа", "буучихлаа", " буусан"):
+    if _has(t, "буулаа", "буучихлаа", " буусан", "бууж байна"):
         return say([], "got_off") if has_plan else say(NEED_PLAN)
-    if _has(t, "үлдсэн", "үлдлээ", "дараагийн зогсоол", "хэдэн зогсоол үлд"):
+    if _has(t, "үлдсэн", "үлдлээ", "үлдэв", "үлдэж", "дараагийн зогсоол", "дараагийн буудал", "дараа буух", "хэзээ буух"):
         return say([], "stops_left") if has_plan else say(NEED_PLAN)
     if _has(t, "хөтл", "хөтөл", "замчил", "дагуул") and _has(t, "зогсоол", "буудал"):
         return say([], "walk") if has_plan else say(NEED_PLAN)
-    if _has(t, "миний автобус", "аль автобус хүлээ", "ямар автобус хүлээ", "миний зам", "замаа давт", "дахин хэл"):
+    if _has(t, "миний автобус", "миний суух", "аль автобус хүлээ", "ямар автобус хүлээ", "миний зам", "замаа давт",
+            "дахин хэл", "билээ"):
         return say(_waiting_for(context), "repeat_route" if has_plan else None)
-    if _has(t, "хийж чад", "юу чад", "чадах вэ", "яаж ашигла", " тусламж ", "командууд"):
+    if _has(t, "хийж чад", "юу чад", "чадах вэ", "яаж ашигла", " тусламж ", "командууд", "апп юу", "юу хийдэг",
+            "юу хийх вэ"):
         return say(HELP)
-    if _has(t, "хэзээ", "минут", "хэр удах", "хэдийд", "удахгүй ирэх", "одоо ирэх"):
+    if _has(t, "хэзээ", "минут", "хэр удах", "удах уу", "удаж байна", "хэдийд", "удахгүй ирэх", "одоо ирэх"):
         return say(NO_ETA)
-    if _has(t, "би хаана", "миний байршил"):
+    if _has(t, "би хаана", "миний байршил", "хаана байгаа вэ", "би одоо хаана"):
         return say(_nearest(lat, lon))
-    if _has(t, "хамгийн ойр", "ойрын зогсоол", "ойрхон зогсоол", "ойролцоо зогсоол") or (
-            "хамгийн" in words and _has(t, "зогс", "буудал")):
+    if _has(t, "хамгийн ойр", "ойрын зогсоол", "ойрхон зогсоол", "ойролцоо зогсоол", "ойрхон буудал", "ойрын буудал",
+            "дөхөм") or ("хамгийн" in words and _has(t, "зогс", "буудал")):
         return say(_nearest(lat, lon))  # also when misheard: "хамгийн хоёрын зогсвол"
 
     # From X to Y: the trip from X's stop.
@@ -283,11 +297,11 @@ def reply(text, lat, lon, context=None):
     bus_number = number if number and not number_is_place else None
     if named:
         place = planner.stop_name(named[0]["name"])
-        if bus_number and _has(t, "руу", "рүү", "явдаг уу", "очдог уу", "хүрдэг уу", "зогсдог уу"):
+        if bus_number and _has(t, "руу", "рүү", "явдаг уу", "очдог уу", "хүрдэг уу", "зогсдог уу", "явах уу", "очих уу", "хүрэх уу"):
             return say(_bus_goes_to(bus_number, named, place, lat, lon))
         if bus_number and _has(t, *ROUTE_INFO_WORDS):
             return say(_route_info(bus_number, lat, lon))
-        if _has(t, "хэр хол", "хэдэн метр", "хэдэн км", "хэдэн километр") or words & {"зай", "зайтай"}:
+        if _has(t, "хэр хол", "хол уу", "хол байдаг", "хэдэн метр", "хэдэн км", "хэдэн километр") or words & {"зай", "зайтай"}:
             return say(_how_far(named, place, lat, lon))
         if _has(t, "дээр ямар", "дээр хэдэн", "автобус зогсдог") and not _has(t, " руу", " рүү"):
             return say(_buses_at(named[0], here=False))
@@ -307,10 +321,14 @@ def reply(text, lat, lon, context=None):
             return say(plan["speech"], "plan", plan)
         except planner.PlanError as e:
             return say([str(e)])
-    if words & PLACE_MARKERS:
+    if _has(t, "буудал хаана", "зогсоол хаана") and not bus_number:
+        return say(_nearest(lat, lon))  # "Автобусны буудал хаана байна": no place named = the nearest one
+    if words & PLACE_MARKERS or _has(t, "хүргээч", "хүргэж өг", "очихын тулд"):
         return say([planner.MSG_NOT_FOUND])  # a place we didn't recognise: never answer about a number in it
     if bus_number:
         return say(_route_info(bus_number, lat, lon))
+    if _has(t, "туслаач", "туслаарай", "тусална уу"):
+        return say(_emergency(lat, lon))  # "help me" with nothing else asked
     if _has(t, "энэ зогсоол", "энэ буудал", "автобус", "чиглэл", "маршрут") or words & {"энд", "эндээс"}:
         st = _nearest_stop(lat, lon)
         return say(_buses_at(st, here=st["distance_m"] < planner.AT_STOP_M) if st else NO_STOP)

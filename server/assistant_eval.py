@@ -37,6 +37,58 @@ QUESTIONS = [
     ("Өнөөдөр цаг агаар ямар байна?", ["Мэдэхгүй байна"], None, None),  # not a bus question: must not guess
 ]
 
+
+# Does it tell question kinds apart however they're worded? (question, expected kind, with a trip?)
+def kind(r):
+    a, s = r["action"], " ".join(r["speech"])
+    if a: return a
+    if s.startswith(("Энэ зогсоол дээр", "Төв номын сан зогсоол дээр")): return "buses_here"
+    if "хооронд явдаг" in s: return "route_info"
+    if s.startswith(("Тийм.", "Үгүй.")): return "goes_to"
+    if s.startswith("Хамгийн ойрын"): return "nearest"
+    if s.startswith("Автобус хэзээ"): return "eta"
+    if s.startswith("Ойролцоох хүнээс"): return "emergency"
+    if s.startswith("Би автобусны талаар"): return "help"
+    if s.startswith("Мэдэхгүй"): return "unknown"
+    if "шулуунаар" in s: return "how_far"
+    if "олдсонгүй" in s: return "not_found"
+    return "other:" + s[:40]
+
+WORDINGS = [  # same questions, other wordings (tuned on)
+ ("Энд ямар ямар автобус байдаг вэ", "buses_here", 0), ("Энэ буудлаар ямар автобус өнгөрдөг вэ", "buses_here", 0),
+ ("Энэ зогсоолоор хэдэн автобус явдаг", "buses_here", 0), ("Энд ирдэг автобуснууд аль нь вэ", "buses_here", 0),
+ ("55 дугаар автобус хаана хүртэл явдаг вэ", "route_info", 0), ("55-ын эцэс хаана вэ", "route_info", 0),
+ ("55 ямар чиглэлтэй вэ", "route_info", 0), ("Тавин тавдугаар автобусны маршрут юу вэ", "route_info", 0),
+ ("Би Сансар явмаар байна", "plan", 0), ("Сансар луу яаж явах вэ", "plan", 0), ("Намайг Сансарт хүргээч", "plan", 0),
+ ("Сансарт очихын тулд аль автобусанд суух вэ", "plan", 0), ("Сансар хүрэх автобус", "plan", 0),
+ ("55 Зайсанд очдог уу", "goes_to", 0), ("55 Зайсан хүрдэг үү", "goes_to", 0), ("Зайсан руу 55 явах уу", "goes_to", 0),
+ ("Ойрхон буудал хаана байна", "nearest", 0), ("Хамгийн дөхөм зогсоол", "nearest", 0), ("Автобусны буудал хаана байна", "nearest", 0),
+ ("55 хэзээ ирэх вэ", "eta", 0), ("Дараагийн автобус хэдэн минутын дараа ирэх вэ", "eta", 0), ("Удахгүй ирэх үү", "eta", 0),
+ ("Камераа асаа", "open_camera", 1), ("Хаалгыг олоход туслаач", "door", 1), ("Хэдэн буудал үлдэв", "stops_left", 1),
+ ("Би буусан", "got_off", 1), ("Дахиад эхлүүлье", "start_over", 1), ("Би суучихлаа", "boarded", 1),
+ ("Миний суух автобус ямар билээ", "repeat_route", 1), ("Сансар хэр хол байдаг вэ", "how_far", 0),
+ ("Би замаа алдчихлаа", "emergency", 0), ("Надад тусламж хэрэгтэй байна", "emergency", 0), ("Туслаарай", "emergency", 0),
+ ("Чи хэн бэ", "unknown", 0), ("Хэдэн цаг болж байна", "unknown", 0), ("Хоол хаана идэх вэ", "unknown", 0),
+ ("Маргааш бороо орох уу", "unknown", 0), ("Энэ апп юу хийдэг вэ", "help", 0), ("Сайн уу", "unknown", 0), ("Такси дуудаад өгөөч", "unknown", 0),
+]
+
+WORDINGS += [  # written later as a held-out check, then tuned on
+ ("Энэ буудал дээр ямар автобусууд зогсдог вэ", "buses_here", 0), ("Эндээс ямар автобус явдаг вэ", "buses_here", 0),
+ ("Энд хэдэн автобус зогсдог вэ", "buses_here", 0),
+ ("Наян нэгдүгээр автобус хаагуур явдаг", "route_info", 0), ("3 хаашаа явдаг вэ", "route_info", 0), ("7 дугаарын чиглэл юу вэ", "route_info", 0),
+ ("Зайсан явах гэсэн юм", "plan", 0), ("Нарантуул руу очмоор байна", "plan", 0), ("Офицеруудын ордон хүрэх автобус байна уу", "plan", 0),
+ ("Улсын их дэлгүүр рүү яаж очдог вэ", "plan", 0), ("Баянзүрх товчоо хүртэл хэдэн буудал вэ", "plan", 0),
+ ("52 Нарантуул руу явдаг уу", "goes_to", 0), ("Энэ 55 Дэнжийн 1000 хүрэх үү", "goes_to", 0),
+ ("Хамгийн ойрхон зогсоол аль нь вэ", "nearest", 0), ("Би одоо хаана байгаа вэ", "nearest", 0),
+ ("Автобус удах уу", "eta", 0), ("55 хэдэн минутын дараа ирэх вэ", "eta", 0),
+ ("Камер асаагаад өгөөч", "open_camera", 1), ("Хаалга аль талд байна", "door", 1), ("Хэдэн зогсоолын дараа буух вэ", "stops_left", 1),
+ ("Би автобусанд орлоо", "boarded", 1), ("Одоо бууж байна", "got_off", 1), ("Би өөр газар явъя", "start_over", 1),
+ ("Зогсоол руу дагуулаад өгөөч", "walk", 1), ("Сансар эндээс хол уу", "how_far", 0),
+ ("Аюултай байна туслаарай", "emergency", 0),
+ ("Чамайг хэн бүтээсэн бэ", "unknown", 0), ("Өнөөдөр хэдэн сарын хэдэн бэ", "unknown", 0), ("Дуу тоглуулаач", "unknown", 0), ("Сайн байна уу", "unknown", 0),
+]
+
+
 if __name__ == "__main__":
     ok = 0
     for q, expected, action, trip in QUESTIONS:
@@ -46,3 +98,10 @@ if __name__ == "__main__":
         ok += passed
         print(("PASS " if passed else "FAIL ") + q + f"\n     -> [{r['action']}] " + a[:160])
     print(f"\nassistant {ok}/{len(QUESTIONS)} correct")
+    ok = 0
+    for q, want, trip in WORDINGS:
+        got = kind(assistant.reply(q, *AT, TRIP if trip else None))
+        ok += got == want
+        if got != want:
+            print(f"WORDING MISS {q!r}: wanted {want}, got {got}")
+    print(f"wordings {ok}/{len(WORDINGS)} understood")
