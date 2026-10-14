@@ -6,7 +6,7 @@
 import { useCallback, useRef, useState } from "react";
 import type { AskResponse, BoardStop, PlanResponse, PlanStop, VoiceLocateResponse } from "../../shared/contract";
 import { askByText, askByVoice, locateBySpeech, locateByText, nearestStop, requestPlan, requestVoicePlan, serverCaps, type ServerCaps } from "../lib/api";
-import { listenInBrowser } from "../lib/listen";
+import { listenInBrowser, type Heard } from "../lib/listen";
 import { GPS_OK_M, locate, type Position } from "../lib/location";
 import { beep, record, type Recording } from "../lib/record";
 import { primeBeacon } from "../lib/beacon";
@@ -183,16 +183,23 @@ export default function RiderFlow() {
   }
 
   // Free hosting has no Whisper: the browser recognises the speech, and the text goes to the server.
-  async function hearInBrowser(listeningStep: Step): Promise<string> {
+  async function hearInBrowser(listeningStep: Step): Promise<Heard> {
     stopSpeaking();
     setStep(listeningStep);
     setMessage(phrase("menu_stop_listening"));
     await beep();
     const rec = listenInBrowser();
     browserListening.current = rec;
-    const text = await rec.done;
+    const heard = await rec.done;
     browserListening.current = null;
-    return text;
+    return heard;
+  }
+
+  // Nothing came back from the browser's recognition: say why, and show the browser's reason for a helper.
+  function notHeard(heard: Heard): void {
+    const key = heard.error === "no-mic" ? "mic_failed" : heard.error === "unsupported" ? "voice_unsupported" : heard.error === "network" ? "voice_network" : "not_heard";
+    say([phrase(key)]);
+    setMessage(phrase(key) + (heard.error === "not-heard" ? "" : " (" + heard.code + ")"));
   }
 
   // Beep, record until the rider stops talking (or double taps). null = nothing said; the caller
@@ -233,10 +240,11 @@ export default function RiderFlow() {
 
   async function sayWhereIAm(): Promise<void> {
     if (!caps.current.stt) {
-      const text = await hearInBrowser("whereListening");
+      const heard = await hearInBrowser("whereListening");
+      const text = heard.text;
       if (!text) {
         setStep("where");
-        announce(["not_heard"]);
+        notHeard(heard);
         return;
       }
       setStep("working");
@@ -294,10 +302,11 @@ export default function RiderFlow() {
 
   async function sayDestination(): Promise<void> {
     if (!caps.current.stt) {
-      const text = await hearInBrowser("listening");
+      const heard = await hearInBrowser("listening");
+      const text = heard.text;
       if (!text) {
         setStep("ask");
-        announce(["not_heard"]);
+        notHeard(heard);
         return;
       }
       planTrip(text);
@@ -446,10 +455,11 @@ export default function RiderFlow() {
         if (released) {
           rec.stop();
         }
-        const text = await rec.done;
+        const heard = await rec.done;
+        const text = heard.text;
         talk.current = null;
         if (!text) {
-          announce(["not_heard"]);
+          notHeard(heard);
           return;
         }
         say([phrase("wait")]);
