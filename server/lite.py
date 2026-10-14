@@ -16,7 +16,8 @@ from fastapi.responses import RedirectResponse
 import bus_api
 import planner
 import tts
-from contract import NearestStop, PlanRequest, PlanResponse, RideResponse, VerifyRequest, VerifyResponse, VoiceLocateResponse
+import assistant
+from contract import AskResponse, NearestStop, PlanRequest, PlanResponse, RideResponse, VerifyRequest, VerifyResponse, VoiceLocateResponse
 
 HERE = Path(__file__).parent
 bus_api.ROUTE_CACHE = HERE / "hamuga_cache"  # read-only on Vercel; new routes are fetched, not saved
@@ -58,6 +59,16 @@ def locate(text: str = Query(min_length=1, max_length=200)):
     if not stop:
         return VoiceLocateResponse(heard=text, message=planner.MSG_NOT_A_STOP)
     return VoiceLocateResponse(heard=text, stop={k: stop[k] for k in ("stop_id", "name", "lat", "lon")})
+
+
+@app.get("/api/ask", response_model=AskResponse)
+def ask(text: str = Query(min_length=1, max_length=200), lat: float = Query(ge=-90, le=90), lon: float = Query(ge=-180, le=180)):
+    """Voice assistant, text in (the browser recognises the speech here): answers from bus data only."""
+    try:
+        speech = assistant.answer(text, lat, lon)
+    except (httpx.HTTPError, RuntimeError):
+        raise HTTPException(status_code=503, detail=UNAVAILABLE)
+    return AskResponse(heard=text, answer=" ".join(speech), speech=speech)
 
 
 @app.get("/api/ride", response_model=RideResponse)

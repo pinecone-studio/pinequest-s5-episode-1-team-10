@@ -5,7 +5,7 @@
 // to choose, all spoken in Mongolian, so a blind rider always knows what they can do.
 import { useCallback, useMemo, useRef, useState, type FormEvent } from "react";
 import type { BoardStop, PlanResponse, PlanStop, VoiceLocateResponse } from "../../shared/contract";
-import { locateBySpeech, locateByText, nearestStop, requestPlan, requestVoicePlan, serverCaps, type ServerCaps } from "../lib/api";
+import { askByText, askByVoice, locateBySpeech, locateByText, nearestStop, requestPlan, requestVoicePlan, serverCaps, type ServerCaps } from "../lib/api";
 import { listenInBrowser } from "../lib/listen";
 import { GPS_OK_M, locate, type Position } from "../lib/location";
 import { beep, record, type Recording } from "../lib/record";
@@ -474,7 +474,49 @@ export default function RiderFlow() {
     announce(["welcome"]);
   }
 
+  // Voice assistant: ask a bus question, hear the answer (from our bus data only), stay on this screen.
+  async function askQuestion(): Promise<void> {
+    const back = step;
+    const pos = position.current;
+    if (!pos) {
+      announce(["ask_location"]);
+      return;
+    }
+    let result;
+    if (!caps.current.stt) {
+      const text = await hearInBrowser("listening");
+      setStep(back);
+      if (!text) {
+        announce(["not_heard"]);
+        return;
+      }
+      say([phrase("wait")]);
+      result = await askByText(text, pos.lat, pos.lon);
+    } else {
+      const wav = await hear("listening", back).catch(function () {
+        return undefined;
+      });
+      if (wav === undefined) {
+        return; // microphone blocked, already said
+      }
+      setStep(back);
+      if (!wav) {
+        announce(["not_heard"]);
+        return;
+      }
+      say([phrase("wait")]); // the answer's voice is made live (~8 s)
+      result = await askByVoice(wav, pos.lat, pos.lon);
+    }
+    if (!result) {
+      announce(["server_down"]);
+      return;
+    }
+    setMessage((result.heard ? "“" + result.heard + "” — " : "") + result.answer);
+    say(result.speech);
+  }
+
   const help: MenuItem = { ...label("help", "menu_help"), onActivate: sayHelp };
+  const askItem: MenuItem = { ...label("ask-question", "menu_ask"), onActivate: askQuestion };
   const tutorial: MenuItem = { ...label("tutorial", "menu_tutorial"), onActivate: replayTutorial };
   const changeLocation: MenuItem = { ...label("move", "menu_change_location"), onActivate: goWhere };
   const myLocation: MenuItem = {
@@ -494,7 +536,7 @@ export default function RiderFlow() {
       tutorial,
     ];
   } else if (step === "ask") {
-    items = [{ ...label("say-dest", "menu_say_destination"), onActivate: sayDestination }, myLocation, changeLocation, help, tutorial];
+    items = [{ ...label("say-dest", "menu_say_destination"), onActivate: sayDestination }, myLocation, changeLocation, askItem, help, tutorial];
   } else if (step === "listening" || step === "whereListening") {
     items = [{ ...label("stop", "menu_stop_listening"), onActivate: stopRecording }];
   } else if (step === "planned") {
@@ -503,7 +545,7 @@ export default function RiderFlow() {
     const repeat: MenuItem = { ...label("repeat", "menu_repeat_route"), onActivate: repeatRoute };
     const other: MenuItem = { ...label("other", "menu_other_destination"), onActivate: otherDestination };
     // Far from the stop: guiding there comes first; at the stop: the camera.
-    items = atStop ? [camera, walk, repeat, other, changeLocation, help] : [walk, camera, repeat, other, changeLocation, help];
+    items = atStop ? [camera, walk, repeat, other, changeLocation, askItem, help] : [walk, camera, repeat, other, changeLocation, askItem, help];
   } else if (step === "walk") {
     items = [
       { ...label("where-stop", "menu_where_stop"), onActivate: whereIsStop },

@@ -1,12 +1,5 @@
 // Calls to the FastAPI server, proxied under /api (next.config.ts).
-import type {
-  NearestStop,
-  PlanResponse,
-  VerifyRequest,
-  VerifyResponse,
-  VoiceLocateResponse,
-  VoicePlanResponse,
-} from "../../shared/contract";
+import type { AskResponse, NearestStop, PlanResponse, VerifyRequest, VerifyResponse, VoiceLocateResponse, VoicePlanResponse } from "../../shared/contract";
 import { VERIFY_TIMEOUT_MS } from "../../shared/contract";
 
 export type PlanResult = { ok: true; plan: PlanResponse } | { ok: false; message: string };
@@ -42,6 +35,29 @@ export async function requestVoicePlan(wav: Blob, lat: number, lon: number): Pro
       body: wav,
     });
     return res.ok ? ((await res.json()) as VoicePlanResponse) : null;
+  } catch {
+    return null;
+  }
+}
+
+// Voice assistant: a spoken (WAV) or typed bus question; null if the server can't be reached.
+export async function askByVoice(wav: Blob, lat: number, lon: number): Promise<AskResponse | null> {
+  try {
+    const res = await fetch("/api/ask?lat=" + lat + "&lon=" + lon, {
+      method: "POST",
+      headers: { "Content-Type": "audio/wav" },
+      body: wav,
+    });
+    return res.ok ? ((await res.json()) as AskResponse) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function askByText(text: string, lat: number, lon: number): Promise<AskResponse | null> {
+  try {
+    const res = await fetch("/api/ask?text=" + encodeURIComponent(text) + "&lat=" + lat + "&lon=" + lon);
+    return res.ok ? ((await res.json()) as AskResponse) : null;
   } catch {
     return null;
   }

@@ -17,7 +17,8 @@ import planner
 import stt
 import tts
 from bus_api import get_eta_seconds
-from contract import (NearestStop, PlanRequest, PlanResponse, RideResponse, VerifyRequest, VerifyResponse,
+import assistant
+from contract import (AskResponse, NearestStop, PlanRequest, PlanResponse, RideResponse, VerifyRequest, VerifyResponse,
                       VoiceLocateResponse, VoicePlanResponse)
 
 @asynccontextmanager
@@ -127,6 +128,31 @@ async def plan_voice(request: Request, lat: float = Query(ge=-90, le=90), lon: f
     print(f"voice: heard {heard!r} -> {result['route']} from {result['board_stop']['name']!r} "
           f"to {result['alight_stop']['name']!r} ({result['stops_to_ride']} stops), asked {result['destination']['name']!r}")
     return VoicePlanResponse(heard=heard, plan=result)
+
+
+def _ask(heard, lat, lon):
+    try:
+        speech = assistant.answer(heard, lat, lon)
+    except (httpx.HTTPError, RuntimeError):
+        raise HTTPException(status_code=503, detail="Bus data unavailable")
+    print(f"ask: heard {heard!r} -> {' '.join(speech)!r}")
+    return AskResponse(heard=heard, answer=" ".join(speech), speech=speech)
+
+
+@app.post("/ask", response_model=AskResponse)
+async def ask_voice(request: Request, lat: float = Query(ge=-90, le=90), lon: float = Query(ge=-180, le=180)):
+    """A spoken bus question (WAV body, like /plan/voice) -> answer from our bus data only."""
+    heard = await _hear(request)
+    if not heard:
+        return AskResponse(heard="", answer=NOT_HEARD, speech=[NOT_HEARD])
+    return await run_in_threadpool(_ask, heard, lat, lon)
+
+
+@app.get("/ask", response_model=AskResponse)
+def ask_text(text: str = Query(min_length=1, max_length=200), lat: float = Query(ge=-90, le=90),
+             lon: float = Query(ge=-180, le=180)):
+    """Typed (or browser-recognised) version of POST /ask."""
+    return _ask(text, lat, lon)
 
 
 @app.get("/ride", response_model=RideResponse)

@@ -92,6 +92,12 @@ class RideResponse(BaseModel):
     stops: list[RideStop] = Field(description="Boarding stop first, alighting stop last, in riding order")
 
 
+class AskResponse(BaseModel):
+    heard: str = Field(description="The question as heard (or typed); '' if nothing was heard")
+    answer: str = Field(description="The whole answer, for the screen")
+    speech: list[str] = Field(description="Mongolian sentences to speak in order; fetch each from /tts")
+
+
 class VoicePlanResponse(BaseModel):
     heard: str = Field(description="What speech recognition heard ('' if nothing)")
     plan: Optional[PlanResponse] = Field(default=None, description="The bus to take; null if none")
