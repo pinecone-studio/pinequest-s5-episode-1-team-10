@@ -3,13 +3,14 @@
 // Rider journey: start -> where am I (GPS, or say it) -> say destination -> one suggested bus ->
 // camera -> "this is your bus". Every screen is a VoiceMenu: swipe to hear the options, double tap
 // to choose, all spoken in Mongolian, so a blind rider always knows what they can do.
-import { useCallback, useRef, useState, type FormEvent } from "react";
+import { useCallback, useMemo, useRef, useState, type FormEvent } from "react";
 import type { PlanResponse, VoiceLocateResponse } from "../../shared/contract";
 import { locateBySpeech, locateByText, nearestStop, requestPlan, requestVoicePlan, serverCaps, type ServerCaps } from "../lib/api";
 import { listenInBrowser } from "../lib/listen";
 import { GPS_OK_M, locate, type Position } from "../lib/location";
 import { beep, record, type Recording } from "../lib/record";
 import { primeBeacon } from "../lib/beacon";
+import { requestCompassPermission } from "../lib/compass";
 import { loadDetector } from "../lib/detector";
 import { loadDoorDetector } from "../lib/doorDetector";
 import type { DoorGuide } from "../lib/door";
@@ -18,6 +19,7 @@ import BusCamera, { doorSpeech } from "./BusCamera";
 import PlanCard from "./PlanCard";
 import RideGuide, { leftSpeech, type RideInfo } from "./RideGuide";
 import Tutorial, { tutorialNeeded } from "./Tutorial";
+import WalkGuide from "./WalkGuide";
 import VoiceMenu, { type MenuItem } from "./VoiceMenu";
 
 type Step =
@@ -30,6 +32,7 @@ type Step =
   | "listening"
   | "working"
   | "planned"
+  | "walk" // walking to the boarding stop: compass direction + distance
   | "camera" // find the bus, then guide to its door
   | "ride" // on the bus, until the rider's stop
   | "arrived";
@@ -39,6 +42,13 @@ function simulatedRide(): boolean {
   const q = new URLSearchParams(window.location.search);
   return q.get("ride") === "sim" || q.has("image") || q.has("video");
 }
+
+// ?walk=sim: a simulated walk to the stop (pitch stage, desk testing), even when already close to it.
+function simulatedWalk(): boolean {
+  return new URLSearchParams(window.location.search).get("walk") === "sim";
+}
+
+const AT_STOP_M = 30; // closer than this to the boarding stop: no walking guidance needed
 
 // ?lat=47.91&lon=106.92 overrides GPS, for testing away from the stop.
 function testPosition(): Position | null {
@@ -63,6 +73,9 @@ export default function RiderFlow() {
   const [found, setFound] = useState(false); // the camera confirmed the rider's bus: now guiding to its door
   const doorGuide = useRef<DoorGuide | null>(null);
   const rideInfo = useRef<RideInfo | null>(null);
+  const walkInfo = useRef<string[] | null>(null);
+  const [atStop, setAtStop] = useState(true); // false: offer walking guidance to the boarding stop first
+  const [walkFrom, setWalkFrom] = useState<{ lat: number; lon: number } | null>(null); // rider's position when the walk starts
 
   // Show and speak: keys are pre-made clips (instant), plain strings are made live.
   function announce(parts: (PhraseKey | { text: string })[]): Promise<void> {
@@ -81,10 +94,12 @@ export default function RiderFlow() {
   function showPlan(found: PlanResponse, heardText: string): void {
     setHeard(heardText);
     setPlan(found);
+    const far = found.board_stop.distance_m >= AT_STOP_M || simulatedWalk();
+    setAtStop(!far);
     setStep("planned");
     setMessage(found.speech.join(" "));
     // The first sentence ("34-р автобусанд суугаарай.") is pre-made, so it plays at once.
-    say(found.speech.concat(phrase("open_camera")));
+    say(found.speech.concat(phrase(far ? "plan_walk" : "open_camera")));
     // Load + warm both models while the route is read out, so the camera detects from its first frame.
     loadDetector()
       .then(function () {
@@ -346,6 +361,30 @@ export default function RiderFlow() {
   function retryGps(): void {
     findMe(["locating"]);
   }
+  function startWalk(): void {
+    stopSpeaking();
+    primeBeacon(); // inside the double tap (iPhone)
+    requestCompassPermission(); // iPhone asks only inside a tap
+    const p = position.current;
+    setWalkFrom(p ? { lat: p.lat, lon: p.lon } : null);
+    setStep("walk");
+  }
+  function whereIsStop(): void {
+    say(walkInfo.current ?? [phrase("wait")]);
+  }
+  const onWalked = useCallback(function () {
+    setAtStop(true);
+    setStep("planned");
+    setMessage(phrase("walk_arrived"));
+  }, []);
+  // Stable props for WalkGuide (a new object each render would restart its GPS and compass).
+  const walkStop = useMemo(
+    function () {
+      return plan ? { lat: plan.board_stop.lat, lon: plan.board_stop.lon, name: plan.board_stop.name } : null;
+    },
+    [plan],
+  );
+
   function openCamera(): void {
     stopSpeaking();
     primeBeacon(); // inside the double tap, or iPhones won't play the door beacon
@@ -416,11 +455,18 @@ export default function RiderFlow() {
   } else if (step === "listening" || step === "whereListening") {
     items = [{ ...label("stop", "menu_stop_listening"), onActivate: stopRecording }];
   } else if (step === "planned") {
+    const camera: MenuItem = { ...label("camera", "menu_open_camera"), onActivate: openCamera };
+    const walk: MenuItem = { ...label("walk", "menu_walk"), onActivate: startWalk };
+    const repeat: MenuItem = { ...label("repeat", "menu_repeat_route"), onActivate: repeatRoute };
+    const other: MenuItem = { ...label("other", "menu_other_destination"), onActivate: otherDestination };
+    // Far from the stop: guiding there comes first; at the stop: the camera.
+    items = atStop ? [camera, walk, repeat, other, changeLocation, help] : [walk, camera, repeat, other, changeLocation, help];
+  } else if (step === "walk") {
     items = [
+      { ...label("where-stop", "menu_where_stop"), onActivate: whereIsStop },
       { ...label("camera", "menu_open_camera"), onActivate: openCamera },
       { ...label("repeat", "menu_repeat_route"), onActivate: repeatRoute },
-      { ...label("other", "menu_other_destination"), onActivate: otherDestination },
-      changeLocation,
+      { ...label("back", "menu_back"), onActivate: backToPlan },
       help,
     ];
   } else if (step === "camera" && !found) {
@@ -479,6 +525,12 @@ export default function RiderFlow() {
 
       <VoiceMenu key={step} items={items} primary={primary}>
         {step === "planned" && plan && <PlanCard plan={plan} heard={heard} />}
+        {step === "walk" && plan && walkStop && (
+          <>
+            <p className="route-banner">{plan.route}</p>
+            <WalkGuide stop={walkStop} start={walkFrom} simulate={simulatedWalk()} info={walkInfo} onArrived={onWalked} />
+          </>
+        )}
         {step === "camera" && plan && (
           <>
             {found ? (

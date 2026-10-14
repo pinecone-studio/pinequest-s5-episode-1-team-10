@@ -5,6 +5,7 @@
 // simulate: the bus drives the real stops at demo speed (pitch stage, desk testing).
 import { useEffect, useState, type MutableRefObject } from "react";
 import type { RideResponse, RideStop } from "../../shared/contract";
+import { metres } from "../lib/geo";
 import { phrase, say, vibrate, type PhraseKey } from "../lib/speech";
 
 export interface RideInfo {
@@ -27,13 +28,6 @@ const OFF_M = 150; // "get off now" when the bus is this close to the rider's st
 const LOST_MS = 60000; // no GPS fix this long -> tell the rider to ask the driver
 const SIM_SEGMENT_MS = 3500; // simulated drive between two stops
 const SIM_DWELL_MS = 1500; // simulated stop at each stop
-
-function metres(aLat: number, aLon: number, bLat: number, bLon: number): number {
-  const r = Math.PI / 180;
-  const x = (bLon - aLon) * r * Math.cos(((aLat + bLat) / 2) * r);
-  const y = (bLat - aLat) * r;
-  return Math.sqrt(x * x + y * y) * 6371000;
-}
 
 export function leftSpeech(left: number): string {
   return left >= 1 && left <= 20 ? phrase(("left_" + left) as PhraseKey) : "";

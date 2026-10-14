@@ -414,3 +414,40 @@ body {
   color: #ddd;
   font-size: 1rem;
 }
+
+/* Walking to the boarding stop (WalkGuide.tsx) */
+.walk {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  text-align: center;
+}
+
+.walk-stop {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.walk-dist {
+  margin: 0;
+  font-size: 3.2rem;
+  font-weight: 800;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.walk-dir {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 1.6rem;
+  font-weight: 700;
+}
+
+.walk-arrow {
+  display: inline-block;
+  font-size: 3rem;
+  transition: transform 0.3s;
+}
