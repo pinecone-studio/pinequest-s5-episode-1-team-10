@@ -64,6 +64,27 @@ export interface PlanResponse {
   transfer: Transfer | null; // two-bus trip: route/alight_stop/stops_to_ride above are the FIRST bus
 }
 
+// Voice assistant. POST /ask?lat=&lon= with a WAV body, or GET /ask?text=&lat=&lon=. Answers come only
+// from our bus data; anything else is "Мэдэхгүй байна".
+export interface AskResponse {
+  heard: string; // the question as heard ("" if nothing was heard)
+  answer: string; // whole answer, for the screen
+  speech: string[]; // Mongolian sentences to speak in order; fetch each from /tts
+  action: AskAction | null; // what the app should do (speak `speech` too)
+  plan: PlanResponse | null; // the trip, when action is "plan"
+}
+export type AskAction =
+  | "plan"
+  | "open_camera"
+  | "walk"
+  | "door"
+  | "stops_left"
+  | "boarded"
+  | "got_off"
+  | "repeat_route"
+  | "start_over"
+  | "tutorial";
+
 // POST /locate/voice with a WAV body (or GET /locate?text=): the rider says where they are,
 // when GPS is off or imprecise.
 export interface LocatedStop {
