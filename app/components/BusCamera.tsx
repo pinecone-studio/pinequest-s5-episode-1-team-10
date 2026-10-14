@@ -4,7 +4,7 @@
 // /verify (PaddleOCR + Hamuga on the server), and 5 of the last 7 answers must agree.
 // Once it's the rider's bus, the camera keeps following that bus and guides them to its front door:
 // a beacon panned toward the door, clock direction + steps, "bus moving, step back".
-import { useEffect, useRef, useState, type MutableRefObject } from "react";
+import { useEffect, useRef, type MutableRefObject } from "react";
 import type { Verdict } from "../../shared/contract";
 import { verifySign } from "../lib/api";
 import { aimBeacon, startBeacon, stopBeacon } from "../lib/beacon";
@@ -124,8 +124,6 @@ function draw(
 export default function BusCamera({ stopId, route, foundSpeech, onFound, onError, guide }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
-  const [status, setStatus] = useState("Камер асааж байна…");
-  const [fps, setFps] = useState(0);
 
   useEffect(
     function () {
@@ -135,8 +133,6 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
       let pending = 0;
       let lastSeenSpoken = 0;
       let lastNoSpoken = 0;
-      let frames = 0;
-      let fpsStart = performance.now();
       let target: Track | null = null; // the rider's bus, once confirmed
       let foundAt = 0;
       let talking = false;
@@ -331,13 +327,6 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
       }
 
       function requestNext(): void {
-        frames++;
-        const now = performance.now();
-        if (now - fpsStart >= 1000) {
-          setFps(Math.round((frames * 1000) / (now - fpsStart)));
-          frames = 0;
-          fpsStart = now;
-        }
         // Browsers pause animation frames in hidden tabs; keep going (slowly) for desktop testing.
         if (document.hidden) {
           setTimeout(tick, 100);
@@ -385,14 +374,12 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
           return;
         }
         sayPhrase("camera_on");
-        setStatus("Загвар ачаалж байна…");
         const provider = await loadDetector();
         // Door model in the background, needed only once the bus is found. Without WebGPU both models
         // share one CPU queue, so it waits for the "yes" instead of slowing the sign reading.
         if (provider === "webgpu") {
           loadDoorDetector();
         }
-        setStatus("Автобус хайж байна (" + provider + ")");
         tick();
       }
 
@@ -415,9 +402,6 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
     <div className="camera">
       <video ref={videoRef} playsInline muted className="camera-video" />
       <canvas ref={overlayRef} className="camera-overlay" aria-hidden="true" />
-      <p className="camera-status">
-        {status} · {fps} FPS
-      </p>
     </div>
   );
 }

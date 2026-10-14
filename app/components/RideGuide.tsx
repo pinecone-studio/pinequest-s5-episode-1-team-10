@@ -216,22 +216,7 @@ export default function RideGuide({ route, board, alight, simulate, info, onArri
     <div className="ride">
       {error && <p className="ride-error">{error}</p>}
       {stops.length > 0 && (
-        <>
-          <p className="ride-left">
-            {reached >= last ? "Буух зогсоол" : "Буух хүртэл " + (last - reached) + " зогсоол"}
-          </p>
-          <ol className="ride-stops">
-            {stops.map(function (item, i) {
-              const state = i < reached ? "passed" : i === reached ? "here" : i === last ? "off" : "";
-              return (
-                <li key={item.stop_id + i} className={state}>
-                  {item.name || "(нэргүй зогсоол)"}
-                  {i === last ? " · буух" : ""}
-                </li>
-              );
-            })}
-          </ol>
-        </>
+        <p className="ride-left">{reached >= last ? "Буух зогсоол" : "Буух хүртэл " + (last - reached) + " зогсоол"}</p>
       )}
     </div>
   );

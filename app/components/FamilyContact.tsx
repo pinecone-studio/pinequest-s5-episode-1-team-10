@@ -17,7 +17,7 @@ export default function FamilyContact() {
   }
 
   return (
-    <form className="typed family" onSubmit={save}>
+    <form className="field" onSubmit={save}>
       <label htmlFor="family">Гэр бүлийн утас (яаралтай үед){saved ? ": " + saved : ""}</label>
       <input
         id="family"
@@ -29,7 +29,9 @@ export default function FamilyContact() {
         }}
         placeholder="99112233"
       />
-      <button type="submit">Хадгалах</button>
+      <button type="submit" className="action">
+        Хадгалах
+      </button>
     </form>
   );
 }
