@@ -1,4 +1,8 @@
-"""Destination words + rider GPS -> the best bus trip: one direct bus, or two with a transfer (дамжин суух)."""
+"""What the rider said + GPS -> the bus to board.
+
+A place name ("Сансар руу") becomes one direct bus, or two with a transfer (дамжин суух).
+A bus number ("55", "Ч:55", "55-р автобус") becomes that route at the nearest stop it still leaves from.
+"""
 import difflib
 import re
 from functools import cache
@@ -292,6 +296,7 @@ MSG_NOT_FOUND = "Ийм нэртэй зогсоол олдсонгүй. Өөр �
 MSG_NO_STOP_NEAR = "Таны ойролцоо 800 метрт автобусны зогсоол алга."
 MSG_CLOSE = "Та очих газартаа ойрхон байна. Алхаж очоорой."
 MSG_NO_DIRECT = "Таны ойролцоох зогсоолоос тийшээ хүрэх автобус олдсонгүй."
+MSG_NO_BUS_NEAR = "Таны ойролцоо 800 метрт энэ дугаартай автобус зогсдоггүй."  # = phrases.json "no_bus_near"
 TRANSFER_STOP = "Дамжин суух зогсоол:"
 MSG_NOT_A_STOP = "Ийм нэртэй зогсоол олдсонгүй. Ойролцоох зогсоолын нэрийг хэлнэ үү."
 
@@ -323,7 +328,8 @@ def next_stop_speech(name):
 def piece_phrases():
     """Every fixed piece, for pre-recording."""
     return (["Суух зогсоол:", "Буух зогсоол:", "Дараагийн зогсоол:", "Очих газар тань тэндээс ойрхон.", TRANSFER_STOP,
-             MSG_SAY_AGAIN, MSG_NOT_FOUND, MSG_NO_STOP_NEAR, MSG_CLOSE, MSG_NO_DIRECT, MSG_NOT_A_STOP, walk_piece(0)]
+             MSG_SAY_AGAIN, MSG_NOT_FOUND, MSG_NO_STOP_NEAR, MSG_CLOSE, MSG_NO_DIRECT, MSG_NO_BUS_NEAR, MSG_NOT_A_STOP,
+             walk_piece(0)]
             + list(SIDE_PIECES.values())
             + [walk_piece(m) for m in range(AT_STOP_M, WALK_MAX_M + 1, 10) if m >= AT_STOP_M]
             + [ride_piece(n) for n in range(1, MAX_RIDE_STOPS + 1)])
@@ -353,15 +359,25 @@ def spoken_stop(name):
     return f"{base}, {s} тал" if s else base
 
 
-def spoken_route(route_no):
-    """'Ч:75' -> '75-р автобус', 'М:1А-Ма' -> '1 А автобус'.
+def spoken_key(route_no):
+    """('75', '') or ('1', 'А'): the number and optional А/Б on the sign.
 
-    Riders know buses by number (+ А/Б); Hamuga's variant tags (Ма, НА, Z, _copy, -КОП) aren't on the sign.
+    Riders know buses by number (+ А/Б). Hamuga's variant tags (Ма, НА, Z, _copy, -КОП) aren't on the sign,
+    so 'Ч:55', 'Ч:55_copy' and 'Ч:55-Ма' are all ('55', ''), while 'Ч:55Б' is ('55', 'Б').
     """
     m = re.match(r"\D*(\d+)\s*([АБаб])?", route_no.rsplit(":", 1)[-1])
     if not m:
+        return None
+    return m.group(1), (m.group(2).upper() if m.group(2) else "")
+
+
+def spoken_route(route_no):
+    """'Ч:75' -> '75-р автобус', 'М:1А-Ма' -> '1 А автобус'."""
+    key = spoken_key(route_no)
+    if not key:
         return f"{route_no.strip()} автобус"
-    return f"{m.group(1)} {m.group(2).upper()} автобус" if m.group(2) else f"{m.group(1)}-р автобус"
+    num, letter = key
+    return f"{num} {letter} автобус" if letter else f"{num}-р автобус"
 
 
 def transfer_speech(route_no):
@@ -430,7 +446,143 @@ def _plan(o, route, n, d, named, exact, transfer=None):
     return plan
 
 
+# Words around a bus number that aren't part of the number ("55-р автобусанд суумаар байна").
+_BUS_EXTRA = {"р", "дугаар", "дүгээр", "дугаартай", "дугаарын", "суух", "сууя", "суумаар", "сууна", "суугаарай",
+              "авья", "авна", "авмаар", "номер"}
+
+
+def bus_request(text):
+    """(number, letter, prefix) when the rider named a bus, else None.
+
+    '55' / '55-р автобус' / 'тавин тавдугаар автобус' -> ('55', '', '').
+    'Ч:55' -> ('55', '', 'ч'). '55Б' / '55 б' -> ('55', 'Б', '').
+    A place that merely contains a number ('Дэнжийн 1000', '19-р сургууль') is not a bus number.
+    letter is '' or 'А'/'Б'. prefix is '' or the part before the colon ('ч', 'х', 'нү').
+    """
+    words = numwords.to_digits(re.findall(r"[^\W\d_]+|\d+", cyrillic(text).lower()))
+    # "ч" is a filler particle in place names, but it is also the city-bus prefix ("Ч:55").
+    kept = [w for w in words if w not in (STOPWORDS - {"ч"}) and w not in _BUS_EXTRA and not w.startswith("автобус")]
+    # "ч" after the number is the particle ("55-р автобус ч"), not the Ч: prefix, which comes first.
+    if len(kept) > 1 and kept[-1] == "ч":
+        kept = kept[:-1]
+    if not kept:
+        return None
+
+    def is_num(item):
+        return item.isdigit() and 1 <= len(item) <= 3 and int(item) != 0
+
+    def is_letter(item):
+        return item in ("а", "б")
+
+    def is_prefix(item):
+        return item.isalpha() and 1 <= len(item) <= 2
+
+    prefix, num, letter = "", None, ""
+    if len(kept) == 1 and is_num(kept[0]):
+        num = kept[0]
+    elif len(kept) == 2 and is_num(kept[0]) and is_letter(kept[1]):
+        num, letter = kept[0], kept[1].upper()
+    elif len(kept) == 2 and is_prefix(kept[0]) and is_num(kept[1]):
+        prefix, num = kept[0], kept[1]
+    elif len(kept) == 3 and is_prefix(kept[0]) and is_num(kept[1]) and is_letter(kept[2]):
+        prefix, num, letter = kept[0], kept[1], kept[2].upper()
+    else:
+        return None
+    return str(int(num)), letter, prefix
+
+
+def _route_prefix(route_no):
+    return fold(route_no.split(":")[0].strip())
+
+
+def _matches_bus(route_no, num, letter, prefix):
+    if spoken_key(route_no) != (num, letter):
+        return False
+    return not prefix or _route_prefix(route_no) == fold(prefix)
+
+
+def _route_rank(route_no):
+    """Prefer the number printed on the sign: 'Ч:55' over 'Ч:55_copy' / 'Ч:55-Ма', and a city bus (Ч)."""
+    from fusion import route_number
+
+    num = route_number(route_no)
+    clean = 0 if re.fullmatch(r"\d{1,3}[аб]?", num) else 1
+    copy = 1 if "_copy" in route_no.lower() or "коп" in route_no.lower() else 0
+    city = 0 if _route_prefix(route_no) == "ч" else 1
+    return (clean, copy, city, len(route_no), route_no)
+
+
+def _within(lat, lon, max_m):
+    """Every stop within max_m, closest first. Not capped at ORIGIN_LIMIT: the wanted bus may be
+    the 9th-closest stop and still inside the walk we offer a blind rider."""
+    found = []
+    for stop in bus_api._stops():
+        metres = bus_api._distance_m(lat, lon, stop["lat"], stop["lon"])
+        if metres <= max_m:
+            found.append({**stop, "distance_m": round(metres)})
+    found.sort(key=lambda item: item["distance_m"])
+    return found
+
+
+def _stop_record(stop_id):
+    """A stop dict for speech and the plan, from the route list or (name only) the station list."""
+    st = _stops_by_id().get(stop_id)
+    if st:
+        return st
+    station = bus_api._stations().get(stop_id)
+    if not station or not station.get("name"):
+        return None
+    return {"stop_id": stop_id, "name": station["name"], "lat": station["lat"], "lon": station["lon"]}
+
+
+def _ride_to_end(stop, route):
+    """(alight_stop, stops_to_ride) for the direction that still has the most stops after `stop`.
+
+    A stop the route only terminates at is not a place to board. None if every direction ends here
+    or the stops ahead have no name.
+    """
+    best = None
+    for rid in stop["route_ids"].get(route, []):
+        for order in bus_api.route_directions(rid):
+            if stop["stop_id"] not in order:
+                continue
+            i = order.index(stop["stop_id"])
+            for j in range(len(order) - 1, i, -1):
+                alight = _stop_record(order[j])
+                if not alight:
+                    continue
+                n = j - i
+                if n >= 1 and (best is None or n > best[1]):
+                    best = (alight, n)
+                break
+    return best
+
+
+def _suggest_bus(num, letter, prefix, lat, lon):
+    """PlanResponse for 'I want bus N': board at the nearest stop (≤800 m) that bus still leaves
+    from. No destination was named, so the get-off stop is the last stop of that riding direction
+    and the speech is an ordinary plan — the walk, camera and door steps don't change."""
+    near = _within(lat, lon, WALK_MAX_M)
+    if not near:
+        raise PlanError(MSG_NO_STOP_NEAR)
+    for stop in near:
+        routes = [item for item in stop["routes"] if _matches_bus(item, num, letter, prefix)]
+        if not routes:
+            continue
+        bus_api.load_route_directions(rid for item in routes for rid in stop["route_ids"].get(item, []))
+        for route in sorted(routes, key=_route_rank):
+            trip = _ride_to_end(stop, route)
+            if not trip:
+                continue
+            alight, n = trip
+            return _plan(stop, route, n, alight, [alight], True)
+    raise PlanError(MSG_NO_BUS_NEAR)
+
+
 def suggest(text, lat, lon):
+    bus = bus_request(text)
+    if bus:
+        return _suggest_bus(*bus, lat, lon)
     words = query_words(text)
     named, nearby = find_destination(words, text)
     if not named and not words:

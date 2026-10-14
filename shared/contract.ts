@@ -26,7 +26,7 @@ export const VERIFY_TIMEOUT_MS = 1000;
 
 // POST /plan. Errors: 404 { detail } = no suggestion (detail is Mongolian, speak it); 503 = bus data down.
 export interface PlanRequest {
-  text: string; // what the rider said, e.g. "Сансар руу явна"
+  text: string; // a place ("Сансар руу явна") or a bus number ("55", "Ч:55", "55-р автобус")
   lat: number;
   lon: number;
 }
@@ -55,8 +55,8 @@ export interface Transfer {
 export interface PlanResponse {
   route: string; // Hamuga busRouteNo to take, e.g. "Ч:75"; send as wanted_route to /verify
   board_stop: BoardStop; // send its stop_id to /verify
-  destination: PlanStop; // the stop the rider named (as matched from what was heard)
-  alight_stop: PlanStop; // where to get off: the named stop, or a neighbour within 500 m if no direct bus goes there
+  destination: PlanStop; // the stop the rider named; for a bus number, the last stop of the riding direction
+  alight_stop: PlanStop; // where to get off: the named stop, a neighbour within 500 m, or (bus number) the last stop of the riding direction
   stops_to_ride: number;
   routes_at_stop: string[]; // every busRouteNo serving board_stop
   speech: string[]; // Mongolian pieces to speak in order (all pre-recordable); fetch each from /tts

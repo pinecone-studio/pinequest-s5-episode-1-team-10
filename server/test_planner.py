@@ -131,7 +131,107 @@ def test_spoken_route_and_stop():
     assert planner.spoken_route("М:3Ма") == "3-р автобус"
     assert planner.spoken_route("М:1А-Ма") == "1 А автобус"
     assert planner.spoken_route("Ч:30_copy") == "30-р автобус"
+    assert planner.spoken_key("Ч:55") == ("55", "")
+    assert planner.spoken_key("Ч:55_copy") == ("55", "")
+    assert planner.spoken_key("Ч:55Б") == ("55", "Б")
+    assert planner.spoken_key("Ч:55-Ма") == ("55", "")
     assert planner.spoken_stop("Сансар /Тунель/ /Хойд/") == "Сансар, хойд тал"
+
+
+def test_bus_request_is_only_a_bare_number():
+    assert planner.bus_request("55") == ("55", "", "")
+    assert planner.bus_request("Ч:55") == ("55", "", "ч")
+    assert planner.bus_request("ch:55") == ("55", "", "ч")  # Latin typing
+    assert planner.bus_request("55-р автобус") == ("55", "", "")
+    assert planner.bus_request("55б") == ("55", "Б", "")
+    assert planner.bus_request("55 Б автобус") == ("55", "Б", "")
+    assert planner.bus_request("тавин тавдугаар автобус") == ("55", "", "")  # Whisper writes the number as words
+    assert planner.bus_request("55-р автобус ч") == ("55", "", "")  # particle, not the Ч: prefix
+    assert planner.bus_request("Сансар руу явмаар байна") is None
+    assert planner.bus_request("19-р сургууль") is None
+    assert planner.bus_request("Дэнжийн мянган") is None
+    assert planner.bus_request("руу явна") is None
+
+
+def test_plan_by_bus_number_boards_the_nearest_stop_that_bus_leaves():
+    body = plan("75").json()
+    assert body["route"] == "Ч:75"
+    assert body["board_stop"]["stop_id"] == "1"
+    assert body["alight_stop"]["stop_id"] == "3"  # last stop of the direction that leaves Home
+    assert body["destination"]["stop_id"] == "3"
+    assert body["stops_to_ride"] == 2
+    assert body["transfer"] is None
+    assert body["found_speech"] == "75-р автобус ирлээ. Энэ таны автобус."
+    assert body["speech"] == ["75-р автобусанд суугаарай.", "Суух зогсоол:", "Home.", "Хойд тал.",
+                              "Зогсоол руу 30 метр алхана.", "2 зогсоол явна.", "Буух зогсоол:", "Сансар ШТС.", "Урд тал."]
+    assert plan("75-р автобус").json()["route"] == "Ч:75"
+    assert plan("Ч:75").json()["route"] == "Ч:75"
+    assert plan("далан тавдугаар автобус").json()["board_stop"]["stop_id"] == "1"
+
+
+def test_plan_by_bus_number_skips_a_closer_stop_without_that_bus():
+    GROUP_INFO.append({"busStopId": "6", "busStopName": "Near", "routeList": [{"busRouteId": "9", "busRouteNo": "Х:9"}]})
+    STATIONS.append({"busStopId": "6", "gpxY": "47.90005", "gpxX": "106.9000"})  # closer to Home than stop 1
+    try:
+        bus_api._stops.cache_clear(); bus_api._stations.cache_clear(); planner._stops_by_id.cache_clear()
+        assert plan("75").json()["board_stop"]["stop_id"] == "1"
+    finally:
+        GROUP_INFO.pop(); STATIONS.pop()
+
+
+def test_plan_by_bus_number_ignores_a_terminus_and_the_wrong_letter(monkeypatch):
+    # Ч:30 only arrives at Home; boarding it there isn't a ride. Ч:75Б is a different bus.
+    routes = GROUP_INFO[0]["routeList"] + [{"busRouteId": "75b", "busRouteNo": "Ч:75Б"}]
+    monkeypatch.setitem(GROUP_INFO[0], "routeList", routes)
+    monkeypatch.setitem(DIRECTIONS, "75b", DIRECTIONS["75"])
+    bus_api._stops.cache_clear(); planner._stops_by_id.cache_clear()
+    assert plan("30").json()["detail"] == planner.MSG_NO_BUS_NEAR
+    assert plan("75а").json()["detail"] == planner.MSG_NO_BUS_NEAR
+    assert plan("Х:75").json()["detail"] == planner.MSG_NO_BUS_NEAR
+    assert plan("75б").json()["route"] == "Ч:75Б"
+    assert plan("75б").json()["found_speech"] == "75 Б автобус ирлээ. Энэ таны автобус."
+    assert plan("55").status_code == 404
+
+
+def test_plan_by_bus_number_prefers_the_sign_number(monkeypatch):
+    routes = [
+        {"busRouteId": "75c", "busRouteNo": "Ч:75_copy"},
+        {"busRouteId": "75", "busRouteNo": "Ч:75"},
+        {"busRouteId": "75m", "busRouteNo": "Ч:75-Ма"},
+        {"busRouteId": "30", "busRouteNo": "Ч:30"},
+    ]
+    monkeypatch.setitem(GROUP_INFO[0], "routeList", routes)
+    monkeypatch.setitem(DIRECTIONS, "75c", DIRECTIONS["75"])
+    monkeypatch.setitem(DIRECTIONS, "75m", DIRECTIONS["75"])
+    bus_api._stops.cache_clear(); planner._stops_by_id.cache_clear()
+    assert plan("75").json()["route"] == "Ч:75"
+
+
+def test_plan_by_bus_number_uses_the_copy_when_it_is_the_only_variant(monkeypatch):
+    monkeypatch.setitem(GROUP_INFO[0], "routeList", [
+        {"busRouteId": "75c", "busRouteNo": "Ч:75_copy"}, {"busRouteId": "30", "busRouteNo": "Ч:30"}])
+    monkeypatch.setitem(DIRECTIONS, "75c", DIRECTIONS["75"])
+    bus_api._stops.cache_clear(); planner._stops_by_id.cache_clear()
+    assert plan("75").json()["route"] == "Ч:75_copy"
+
+
+def test_plan_by_bus_number_rides_the_longer_direction(monkeypatch):
+    monkeypatch.setitem(DIRECTIONS, "75", {
+        "rotStopList": [{"busStopId": "1", "busStopSeq": "0"}, {"busStopId": "2", "busStopSeq": "1"},
+                        {"busStopId": "3", "busStopSeq": "2"}],
+        "reverseRotStopList": [
+            {"busStopId": "1", "busStopSeq": "0"}, {"busStopId": "2", "busStopSeq": "1"},
+            {"busStopId": "4", "busStopSeq": "2"}, {"busStopId": "3", "busStopSeq": "3"}],
+    })
+    bus_api.route_directions.cache_clear()
+    body = plan("75").json()
+    assert body["stops_to_ride"] == 3
+    assert body["alight_stop"]["stop_id"] == "3"
+    assert body["destination"]["name"] == "Сансар ШТС /Урд/"
+
+
+def test_plan_by_bus_number_far_from_any_stop_is_the_same_404():
+    assert plan("75", lat=48.5, lon=106.9).json()["detail"] == planner.MSG_NO_STOP_NEAR
 
 
 def test_tts_caches_by_text(monkeypatch, tmp_path):
@@ -390,11 +490,18 @@ def test_ride_lists_stops_in_riding_order_with_speech():
 
 
 def test_every_spoken_piece_can_be_prerecorded():
+    import json
+    from pathlib import Path
+
     pieces = set(planner.piece_phrases()) | set(planner.name_phrases())
     body = plan("Сансар руу").json()
     assert set(body["speech"][1:]) <= pieces  # [0] is the per-route sentence, pre-made separately
-    for msg in (planner.MSG_NO_DIRECT, planner.MSG_NOT_FOUND, planner.MSG_CLOSE):
+    bus = plan("75").json()
+    assert set(bus["speech"][1:]) <= pieces
+    for msg in (planner.MSG_NO_DIRECT, planner.MSG_NOT_FOUND, planner.MSG_CLOSE, planner.MSG_NO_BUS_NEAR):
         assert msg in pieces
+    phrases = json.loads((Path(__file__).resolve().parent.parent / "shared" / "phrases.json").read_text())
+    assert phrases["no_bus_near"] == planner.MSG_NO_BUS_NEAR
 
 
 def test_ride_wrong_direction_is_404():

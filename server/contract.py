@@ -26,7 +26,7 @@ class NearestStop(BaseModel):
 
 
 class PlanRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=200, description='What the rider said, e.g. "Сансар руу явна"')
+    text: str = Field(min_length=1, max_length=200, description='What the rider said: a place ("Сансар руу явна") or a bus number ("55", "Ч:55", "55-р автобус")')
     lat: float = Field(ge=-90, le=90)
     lon: float = Field(ge=-180, le=180)
 
@@ -55,9 +55,11 @@ class Transfer(BaseModel):
 class PlanResponse(BaseModel):
     route: str = Field(description='Hamuga busRouteNo to take, e.g. "Ч:75"; send as wanted_route to /verify')
     board_stop: BoardStop = Field(description="Send its stop_id to /verify")
-    destination: PlanStop = Field(description="The stop the rider named (as matched from what was heard)")
-    alight_stop: PlanStop = Field(description="Where to get off: the named stop, or a neighbour within 500 m "
-                                              "when no direct bus goes to the named one")
+    destination: PlanStop = Field(description="The stop the rider named. A bus number has no destination: this is the "
+                                              "last stop of the riding direction")
+    alight_stop: PlanStop = Field(description="Where to get off: the named stop, a neighbour within 500 m when no bus "
+                                              "reaches the named one, or — for a bus number — the last stop of the "
+                                              "riding direction")
     stops_to_ride: int = Field(ge=1)
     routes_at_stop: list[str] = Field(description="Every busRouteNo serving board_stop")
     speech: list[str] = Field(description="Mongolian sentences to speak in order; fetch each from /tts")
