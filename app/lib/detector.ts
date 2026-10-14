@@ -53,6 +53,12 @@ export function loadDetector(): Promise<string> {
   return loading;
 }
 
+// The loaded onnxruntime module and its execution providers, for the door model (lib/doorDetector.ts).
+export async function runtime(): Promise<{ ort: OrtModule; providers: string[] }> {
+  const provider = await loadDetector();
+  return { ort: ort as OrtModule, providers: provider === "webgpu" ? ["webgpu", "wasm"] : ["wasm"] };
+}
+
 export function iou(a: Box, b: Box): number {
   const x1 = Math.max(a.x, b.x);
   const y1 = Math.max(a.y, b.y);

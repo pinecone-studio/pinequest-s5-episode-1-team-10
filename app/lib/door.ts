@@ -1,5 +1,6 @@
 // Where the bus's front door is, as a blind rider needs it: clock direction, steps, "straight ahead".
-// ponytail: geometry from the bus box until the fine-tuned model has a "door" class.
+// The door's place along the bus comes from the door model (lib/doorDetector.ts) when it sees the
+// front door, else from geometry (front door ~90% along the bus from its rear).
 import type { Box } from "./detector";
 
 const HFOV_DEG = 65; // typical phone main camera, horizontal field of view
@@ -25,8 +26,16 @@ export function frontIsRight(vx: number, box: Box): boolean {
   return Math.abs(vx) > box.w * 0.0002 ? vx > 0 : true; // vx in px/ms; moving buses tell us their front
 }
 
-export function guideToDoor(box: Box, frameW: number, frontRight: boolean): DoorGuide {
-  const x = frontRight ? box.x + DOOR_AT * box.w : box.x + (1 - DOOR_AT) * box.w;
+// fromFront: door centre's distance from the bus's front edge as a share of its length (door model),
+// or null to use geometry.
+export function guideToDoor(box: Box, frameW: number, frontRight: boolean, fromFront: number | null): DoorGuide {
+  const at = fromFront === null ? 1 - DOOR_AT : fromFront;
+  let x = frontRight ? box.x + (1 - at) * box.w : box.x + at * box.w;
+  // Bus front cut off by the frame edge and no door seen: the door is past that edge, turn toward it.
+  const frontCut = frontRight ? box.x + box.w >= frameW - 4 : box.x <= 4;
+  if (fromFront === null && frontCut) {
+    x = frontRight ? frameW : 0;
+  }
   const half = (HFOV_DEG / 2) * (Math.PI / 180);
   const angle = (Math.atan(((x - frameW / 2) / (frameW / 2)) * Math.tan(half)) * 180) / Math.PI;
   const focal = frameW / 2 / Math.tan(half);

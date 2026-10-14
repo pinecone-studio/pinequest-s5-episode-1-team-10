@@ -53,17 +53,25 @@ function play(url: string): Promise<void> {
       resolve();
       return;
     }
-    finish = resolve;
-    audio.onended = function () {
+    const player = audio;
+    // A stalled clip (hidden tab, audio focus taken by a call) must never freeze the flow: give up
+    // a little after the clip's own length.
+    let timer = setTimeout(done, 5000);
+    function done(): void {
+      clearTimeout(timer);
       resolve();
+    }
+    finish = done;
+    player.onloadedmetadata = function () {
+      if (Number.isFinite(player.duration)) {
+        clearTimeout(timer);
+        timer = setTimeout(done, player.duration * 1000 + 1500);
+      }
     };
-    audio.onerror = function () {
-      resolve();
-    };
-    audio.src = url;
-    audio.play().catch(function () {
-      resolve();
-    });
+    player.onended = done;
+    player.onerror = done;
+    player.src = url;
+    player.play().catch(done);
   });
 }
 
