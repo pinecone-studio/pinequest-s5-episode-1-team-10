@@ -3,14 +3,13 @@
 // Rider journey: start -> where am I (GPS, or say it) -> say destination -> one suggested bus ->
 // camera -> "this is your bus". Every screen is a VoiceMenu: swipe to hear the options, double tap
 // to choose, all spoken in Mongolian, so a blind rider always knows what they can do.
-import { useCallback, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useRef, useState, type FormEvent } from "react";
 import type { AskResponse, BoardStop, PlanResponse, PlanStop, VoiceLocateResponse } from "../../shared/contract";
 import { askByText, askByVoice, locateBySpeech, locateByText, nearestStop, requestPlan, requestVoicePlan, serverCaps, type ServerCaps } from "../lib/api";
 import { listenInBrowser } from "../lib/listen";
 import { GPS_OK_M, locate, type Position } from "../lib/location";
 import { beep, record, type Recording } from "../lib/record";
 import { primeBeacon } from "../lib/beacon";
-import { requestCompassPermission } from "../lib/compass";
 import { familyNumber, openLink, smsUrl, sosMessage, telUrl } from "../lib/family";
 import { routeLabel } from "../lib/route";
 import { loadDetector } from "../lib/detector";
@@ -22,7 +21,6 @@ import PlanCard from "./PlanCard";
 import RideGuide, { leftSpeech, type RideInfo } from "./RideGuide";
 import Tutorial, { tutorialNeeded } from "./Tutorial";
 import FamilyContact from "./FamilyContact";
-import WalkGuide from "./WalkGuide";
 import VoiceMenu, { type MenuItem } from "./VoiceMenu";
 
 type Step =
@@ -35,7 +33,6 @@ type Step =
   | "listening"
   | "working"
   | "planned"
-  | "walk" // walking to the boarding stop: compass direction + distance
   | "camera" // find the bus, then guide to its door
   | "ride" // on the bus, until the rider's stop
   | "arrived";
@@ -45,13 +42,6 @@ function simulatedRide(): boolean {
   const q = new URLSearchParams(window.location.search);
   return q.get("ride") === "sim" || q.has("image") || q.has("video");
 }
-
-// ?walk=sim: a simulated walk to the stop (pitch stage, desk testing), even when already close to it.
-function simulatedWalk(): boolean {
-  return new URLSearchParams(window.location.search).get("walk") === "sim";
-}
-
-const AT_STOP_M = 30;
 
 // One bus of the trip: the first, or the second after a transfer (дамжин суух).
 interface Leg {
@@ -65,7 +55,7 @@ function legOf(plan: PlanResponse, leg: number): Leg {
   return leg === 1 && t
     ? { route: t.route, board: t.board_stop, alight: t.alight_stop, foundSpeech: t.found_speech }
     : { route: plan.route, board: plan.board_stop, alight: plan.alight_stop, foundSpeech: plan.found_speech };
-} // closer than this to the boarding stop: no walking guidance needed
+}
 
 // ?lat=47.91&lon=106.92 overrides GPS, for testing away from the stop.
 function testPosition(): Position | null {
@@ -93,11 +83,8 @@ export default function RiderFlow() {
   const [found, setFound] = useState(false); // the camera confirmed the rider's bus: now guiding to its door
   const doorGuide = useRef<DoorGuide | null>(null);
   const rideInfo = useRef<RideInfo | null>(null);
-  const walkInfo = useRef<string[] | null>(null);
-  const [atStop, setAtStop] = useState(true); // false: offer walking guidance to the boarding stop first
   // SOS menu on top of whatever screen (camera, ride keep running): text or call the family.
   const [sos, setSos] = useState<{ mode: "sms" | "call"; body: string } | null>(null);
-  const [walkFrom, setWalkFrom] = useState<{ lat: number; lon: number } | null>(null); // rider's position when the walk starts
 
   // Show and speak: keys are pre-made clips (instant), plain strings are made live.
   function announce(parts: (PhraseKey | { text: string })[]): Promise<void> {
@@ -119,12 +106,10 @@ export default function RiderFlow() {
     planRef.current = found;
     legRef.current = 0;
     setLeg(0);
-    const far = found.board_stop.distance_m >= AT_STOP_M || simulatedWalk();
-    setAtStop(!far);
     setStep("planned");
     setMessage(found.speech.join(" "));
     // The first sentence ("34-р автобусанд суугаарай.") is pre-made, so it plays at once.
-    say(found.speech.concat(phrase(far ? "plan_walk" : "open_camera")));
+    say(found.speech.concat(phrase("open_camera")));
     // Load + warm both models while the route is read out, so the camera detects from its first frame.
     loadDetector()
       .then(function (provider) {
@@ -361,14 +346,12 @@ export default function RiderFlow() {
   const onArrived = useCallback(function () {
     const p = planRef.current;
     if (p && p.transfer && legRef.current === 0) {
-      // Off bus 1 at the transfer stop: now the second bus (walk there first if it's across the street).
+      // Off bus 1 at the transfer stop: now the second bus (its speech says how far to walk, if at all).
       legRef.current = 1;
       setLeg(1);
-      const far = p.transfer.board_stop.distance_m >= AT_STOP_M;
-      setAtStop(!far);
       setFound(false);
       setStep("planned");
-      const texts = [phrase("transfer_arrived")].concat(p.transfer.speech, phrase(far ? "plan_walk" : "open_camera"));
+      const texts = [phrase("transfer_arrived")].concat(p.transfer.speech, phrase("open_camera"));
       setMessage(texts.join(" "));
       say(texts);
       return;
@@ -401,34 +384,6 @@ export default function RiderFlow() {
   function retryGps(): void {
     findMe(["locating"]);
   }
-  function startWalk(): void {
-    stopSpeaking();
-    primeBeacon(); // inside the double tap (iPhone)
-    requestCompassPermission(); // iPhone asks only inside a tap
-    const p = position.current;
-    setWalkFrom(p ? { lat: p.lat, lon: p.lon } : null);
-    setStep("walk");
-  }
-  function whereIsStop(): void {
-    say(walkInfo.current ?? [phrase("wait")]);
-  }
-  const onWalked = useCallback(function () {
-    setAtStop(true);
-    setStep("planned");
-    setMessage(phrase("walk_arrived"));
-  }, []);
-  // Stable props for WalkGuide (a new object each render would restart its GPS and compass).
-  const walkStop = useMemo(
-    function () {
-      if (!plan) {
-        return null;
-      }
-      const b = legOf(plan, leg).board;
-      return { lat: b.lat, lon: b.lon, name: b.name };
-    },
-    [plan, leg],
-  );
-
   function openCamera(): void {
     stopSpeaking();
     primeBeacon(); // inside the double tap, or iPhones won't play the door beacon
@@ -478,58 +433,85 @@ export default function RiderFlow() {
     announce(["welcome"]);
   }
 
-  // Voice assistant: the rider says anything (a question or a command) on any screen. It records in
-  // place, so the camera, walk or ride keeps running; the server answers from our bus data only and may
-  // name an action ("plan", "open_camera", "door"...), which is done here like the menu option would.
-  async function askQuestion(): Promise<void> {
+  // Voice assistant: press and hold anywhere, on any screen, and talk; release when done. It records in
+  // place, so the camera or ride keeps running; the server answers from our bus data only and may name
+  // an action ("plan", "open_camera", "door"...), done here like the menu option would.
+  const talk = useRef<{ stop: () => void } | null>(null);
+  function startTalk(): void {
+    if (talk.current) {
+      return;
+    }
+    stopSpeaking();
     const pos = position.current;
     if (!pos) {
       announce(["ask_location"]);
       return;
     }
-    const leg = plan ? legOf(plan, legRef.current) : null;
-    const context = { step, route: leg ? leg.route : "", alight: leg ? leg.alight.name : "" };
-    stopSpeaking();
+    const legNow = plan ? legOf(plan, legRef.current) : null;
+    const context = { step, route: legNow ? legNow.route : "", alight: legNow ? legNow.alight.name : "" };
     setMessage(phrase("listening"));
-    await beep();
-    let result: AskResponse | null;
-    if (!caps.current.stt) {
-      const text = await listenInBrowser().done;
-      if (!text) {
-        announce(["not_heard"]);
+    let released = false; // the finger may lift before the microphone is on
+    const session = {
+      stop: function () {
+        released = true;
+      },
+    };
+    talk.current = session;
+    (async function () {
+      await beep();
+      let result: AskResponse | null;
+      if (!caps.current.stt) {
+        const rec = listenInBrowser();
+        session.stop = rec.stop;
+        if (released) {
+          rec.stop();
+        }
+        const text = await rec.done;
+        talk.current = null;
+        if (!text) {
+          announce(["not_heard"]);
+          return;
+        }
+        say([phrase("wait")]);
+        result = await askByText(text, pos.lat, pos.lon, context);
+      } else {
+        const rec = record();
+        recording.current = rec;
+        session.stop = rec.stop;
+        if (released) {
+          rec.stop();
+        }
+        const wav = await rec.done;
+        recording.current = null;
+        talk.current = null;
+        if (!wav) {
+          announce([rec.noMic() ? "mic_failed" : "not_heard"]);
+          return;
+        }
+        say([phrase("wait")]); // a new sentence's voice is made live (~8 s); fixed ones play at once
+        result = await askByVoice(wav, pos.lat, pos.lon, context);
+      }
+      if (!result) {
+        announce(["server_down"]);
         return;
       }
-      say([phrase("wait")]);
-      result = await askByText(text, pos.lat, pos.lon, context);
-    } else {
-      const rec = record();
-      recording.current = rec;
-      const wav = await rec.done;
-      recording.current = null;
-      if (!wav) {
-        announce([rec.noMic() ? "mic_failed" : "not_heard"]);
-        return;
-      }
-      say([phrase("wait")]); // a new sentence's voice is made live (~8 s); fixed ones play at once
-      result = await askByVoice(wav, pos.lat, pos.lon, context);
+      setMessage(result.heard && result.answer ? "“" + result.heard + "” — " + result.answer : result.answer || "“" + result.heard + "”");
+      doAction(result);
+    })();
+  }
+  function endTalk(): void {
+    if (talk.current) {
+      talk.current.stop();
     }
-    if (!result) {
-      announce(["server_down"]);
-      return;
-    }
-    setMessage(result.heard && result.answer ? "“" + result.heard + "” — " + result.answer : result.answer || "“" + result.heard + "”");
-    doAction(result);
   }
 
   function doAction(result: AskResponse): void {
     const a = result.action;
     if (a === "plan" && result.plan) {
       showPlan(result.plan, result.heard);
-      say(result.speech.concat(phrase(result.plan.board_stop.distance_m >= AT_STOP_M ? "plan_walk" : "open_camera")));
+      say(result.speech.concat(phrase("open_camera")));
     } else if (a === "open_camera") {
       openCamera();
-    } else if (a === "walk") {
-      startWalk();
     } else if (a === "door") {
       whereIsDoor();
     } else if (a === "stops_left") {
@@ -583,7 +565,6 @@ export default function RiderFlow() {
   }
 
   const help: MenuItem = { ...label("help", "menu_help"), onActivate: sayHelp };
-  const askItem: MenuItem = { ...label("ask-question", "menu_ask"), onActivate: askQuestion };
   const tutorial: MenuItem = { ...label("tutorial", "menu_tutorial"), onActivate: replayTutorial };
   const changeLocation: MenuItem = { ...label("move", "menu_change_location"), onActivate: goWhere };
   const myLocation: MenuItem = {
@@ -599,36 +580,23 @@ export default function RiderFlow() {
     items = [
       { ...label("say-where", "menu_say_where"), onActivate: sayWhereIAm },
       { ...label("gps", "menu_retry_gps"), onActivate: retryGps },
-      askItem,
       help,
       tutorial,
     ];
   } else if (step === "ask") {
-    items = [{ ...label("say-dest", "menu_say_destination"), onActivate: sayDestination }, myLocation, changeLocation, askItem, help, tutorial];
+    items = [{ ...label("say-dest", "menu_say_destination"), onActivate: sayDestination }, myLocation, changeLocation, help, tutorial];
   } else if (step === "listening" || step === "whereListening") {
     items = [{ ...label("stop", "menu_stop_listening"), onActivate: stopRecording }];
   } else if (step === "planned") {
     const camera: MenuItem = { ...label("camera", "menu_open_camera"), onActivate: openCamera };
-    const walk: MenuItem = { ...label("walk", "menu_walk"), onActivate: startWalk };
     const repeat: MenuItem = { ...label("repeat", "menu_repeat_route"), onActivate: repeatRoute };
     const other: MenuItem = { ...label("other", "menu_other_destination"), onActivate: otherDestination };
-    // Far from the stop: guiding there comes first; at the stop: the camera.
-    items = atStop ? [camera, walk, repeat, other, changeLocation, askItem, help] : [walk, camera, repeat, other, changeLocation, askItem, help];
-  } else if (step === "walk") {
-    items = [
-      { ...label("where-stop", "menu_where_stop"), onActivate: whereIsStop },
-      { ...label("camera", "menu_open_camera"), onActivate: openCamera },
-      { ...label("repeat", "menu_repeat_route"), onActivate: repeatRoute },
-      { ...label("back", "menu_back"), onActivate: backToPlan },
-      askItem,
-      help,
-    ];
+    items = [camera, repeat, other, changeLocation, help];
   } else if (step === "camera" && !found) {
     primary = undefined; // an accidental double tap mustn't close the camera
     items = [
       { ...label("repeat", "menu_repeat_route"), onActivate: repeatRoute },
       { ...label("back", "menu_back"), onActivate: backToPlan },
-      askItem,
       help,
     ];
   } else if (step === "camera") {
@@ -639,19 +607,17 @@ export default function RiderFlow() {
       { ...label("boarded", "menu_boarded"), onActivate: boarded },
       { ...label("repeat", "menu_repeat_route"), onActivate: repeatRoute },
       { ...label("back", "menu_back"), onActivate: backToPlan },
-      askItem,
       help,
     ];
   } else if (step === "ride") {
     items = [
       { ...label("left", "menu_stops_left"), onActivate: stopsLeft },
       { ...label("off", "menu_got_off"), onActivate: gotOff },
-      askItem,
       help,
     ];
   } else if (step === "arrived") {
     primary = undefined;
-    items = [{ ...label("restart", "menu_start_over"), onActivate: startOver }, askItem, help];
+    items = [{ ...label("restart", "menu_start_over"), onActivate: startOver }, help];
   }
 
   if (sos) {
@@ -691,14 +657,15 @@ export default function RiderFlow() {
       </p>
       {place && (step === "ask" || step === "listening") && <p className="place">Таны байршил: {place}</p>}
 
-      <VoiceMenu key={step} items={items} primary={primary} menuId={sos ? "sos" : "main"}>
+      <VoiceMenu
+        key={step}
+        items={items}
+        primary={primary}
+        menuId={sos ? "sos" : "main"}
+        onHoldStart={startTalk}
+        onHoldEnd={endTalk}
+      >
         {step === "planned" && plan && <PlanCard plan={plan} heard={heard} leg={leg} />}
-        {step === "walk" && cur && walkStop && (
-          <>
-            <p className="route-banner">{routeLabel(cur.route)}</p>
-            <WalkGuide stop={walkStop} start={walkFrom} simulate={simulatedWalk()} info={walkInfo} onArrived={onWalked} />
-          </>
-        )}
         {step === "camera" && cur && (
           <>
             {found ? (
@@ -756,6 +723,9 @@ export default function RiderFlow() {
         </form>
       )}
       {step === "ask" && <FamilyContact />}
+      <button className="sr-only" onClick={startTalk}>
+        Асуулт асуух, дуугаар
+      </button>
     </main>
   );
 }

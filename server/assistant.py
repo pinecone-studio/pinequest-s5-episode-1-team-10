@@ -9,7 +9,7 @@ Two kinds of reply:
 - an answer to speak (buses here / at a stop, where bus N goes, does bus N go to X, which buses go
   to X, how far X is, from X to Y, nearest stop, where am I, arrival time (honest: unknown), help);
 - an action for the app to do, with what to say: "plan" (a trip, so the camera is one tap away),
-  "open_camera", "walk", "door", "stops_left", "boarded", "got_off", "repeat_route", "start_over",
+  "open_camera", "door", "stops_left", "boarded", "got_off", "repeat_route", "start_over",
   "tutorial".
 """
 import re
@@ -24,7 +24,8 @@ UNKNOWN = ["Мэдэхгүй байна.",
 HELP = ["Би автобусны талаар хариулна.",
         "Очих газраа хэлбэл ямар автобусанд суухыг хэлнэ.",
         "Автобусны дугаар хэлбэл хаагуур явдгийг хэлнэ.",
-        "Камер нээ, хаалга хаана байна, хэдэн зогсоол үлдсэн гэж хэлж болно."]
+        "Камер нээ, хаалга хаана байна, хэдэн зогсоол үлдсэн гэж хэлж болно.",
+        "Асуухдаа дэлгэцийг дараад барьж байгаад ярина."]
 NO_ETA = ["Автобус хэзээ ирэхийг одоохондоо мэдэхгүй байна.", "Камер нээвэл автобус ирэхэд хэлнэ."]
 NO_STOP = ["Таны ойролцоо 800 метрт автобусны зогсоол алга."]
 NEED_PLAN = ["Эхлээд очих газраа хэлнэ үү."]
@@ -268,8 +269,6 @@ def reply(text, lat, lon, context=None):
         return say([], "got_off") if has_plan else say(NEED_PLAN)
     if _has(t, "үлдсэн", "үлдлээ", "үлдэв", "үлдэж", "дараагийн зогсоол", "дараагийн буудал", "дараа буух", "хэзээ буух"):
         return say([], "stops_left") if has_plan else say(NEED_PLAN)
-    if _has(t, "хөтл", "хөтөл", "замчил", "дагуул") and _has(t, "зогсоол", "буудал"):
-        return say([], "walk") if has_plan else say(NEED_PLAN)
     if _has(t, "миний автобус", "миний суух", "аль автобус хүлээ", "ямар автобус хүлээ", "миний зам", "замаа давт",
             "дахин хэл", "билээ"):
         return say(_waiting_for(context), "repeat_route" if has_plan else None)

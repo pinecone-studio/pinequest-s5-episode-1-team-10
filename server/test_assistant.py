@@ -60,7 +60,6 @@ def test_commands_need_a_trip_and_then_act():
     assert ask("Хэдэн зогсоол үлдсэн бэ?", **trip)["action"] == "stops_left"
     assert ask("Би автобусанд суулаа", **trip)["action"] == "boarded"
     assert ask("Би буулаа", **trip)["action"] == "got_off"
-    assert ask("Зогсоол руу хөтлөөч", **trip)["action"] == "walk"
     mine = ask("Миний автобус аль нь вэ?", **trip)
     assert mine["action"] == "repeat_route" and mine["speech"] == ["Та 75-р автобус хүлээж байна.", "Буух зогсоол: Сансар ШТС."]
     assert ask("Шинээр эхлэх")["action"] == "start_over" and ask("Заавар сонсох")["action"] == "tutorial"

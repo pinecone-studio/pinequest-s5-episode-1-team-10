@@ -76,7 +76,6 @@ export interface AskResponse {
 export type AskAction =
   | "plan"
   | "open_camera"
-  | "walk"
   | "door"
   | "stops_left"
   | "boarded"

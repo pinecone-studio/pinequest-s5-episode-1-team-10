@@ -1,15 +1,16 @@
 "use client";
 
 // First-use lesson, all spoken: the best headphones, how to wear the phone, then practice the two
-// gestures every screen uses (swipe right, double tap) and check left/right ears with the door beacon.
+// gestures every screen uses (swipe right, double tap, press-and-hold to talk) and check left/right
+// ears with the door beacon.
 // One tap repeats the current step; a double tap skips a step that isn't waiting for practice.
 // Plays once per phone (localStorage); Help -> "Заавар дахин сонсох" replays it. ?tutorial forces it.
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { aimBeacon, startBeacon, stopBeacon } from "../lib/beacon";
 import { phrase, say, stopSpeaking, unlockAudio, vibrate, type PhraseKey } from "../lib/speech";
-import { DOUBLE_TAP_MS, SWIPE_PX } from "./VoiceMenu";
+import { DOUBLE_TAP_MS, HOLD_MS, SWIPE_PX } from "./VoiceMenu";
 
-type Gesture = "right" | "left" | "tap" | "double";
+type Gesture = "right" | "left" | "tap" | "double" | "hold";
 
 interface Lesson {
   key: PhraseKey;
@@ -24,6 +25,7 @@ const LESSONS: Lesson[] = [
   { key: "learn_wear", title: "Утсаа цээжиндээ зүүнэ, камер урагшаа" },
   { key: "learn_swipe", title: "Баруун тийш шудраарай →", wait: "right" },
   { key: "learn_double", title: "Хоёр товшоорой ● ●", wait: "double" },
+  { key: "learn_hold", title: "Дараад барьж ярина = асуух", wait: "hold" },
   { key: "learn_sound_right", title: "Баруун чих ▶", beacon: 40 },
   { key: "learn_sound_left", title: "◀ Зүүн чих", beacon: -40 },
   { key: "learn_beacon", title: "Хоёр чихэнд адилхан = хаалга урд тань", beacon: 0 },
@@ -69,6 +71,8 @@ export default function Tutorial({ onDone }: Props) {
   const tapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const beaconTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const finished = useRef(false);
+  const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const held = useRef(false);
 
   function finish(): void {
     if (finished.current) {
@@ -162,6 +166,9 @@ export default function Tutorial({ onDone }: Props) {
       if (tapTimer.current) {
         clearTimeout(tapTimer.current);
       }
+      if (holdTimer.current) {
+        clearTimeout(holdTimer.current);
+      }
       if (beaconTimer.current) {
         clearTimeout(beaconTimer.current);
       }
@@ -173,9 +180,36 @@ export default function Tutorial({ onDone }: Props) {
   function onPointerDown(e: PointerEvent): void {
     unlockAudio();
     down.current = { x: e.clientX, y: e.clientY };
+    held.current = false;
+    if (holdTimer.current) {
+      clearTimeout(holdTimer.current);
+    }
+    holdTimer.current = setTimeout(function () {
+      holdTimer.current = null;
+      held.current = true;
+      vibrate([30]);
+    }, HOLD_MS);
+  }
+
+  function onPointerMove(e: PointerEvent): void {
+    const start = down.current;
+    if (start && holdTimer.current && Math.hypot(e.clientX - start.x, e.clientY - start.y) > SWIPE_PX / 2) {
+      clearTimeout(holdTimer.current);
+      holdTimer.current = null;
+    }
   }
 
   function onPointerUp(e: PointerEvent): void {
+    if (holdTimer.current) {
+      clearTimeout(holdTimer.current);
+      holdTimer.current = null;
+    }
+    if (held.current) {
+      held.current = false;
+      down.current = null;
+      gesture("hold");
+      return;
+    }
     const start = down.current;
     down.current = null;
     if (!start) {
@@ -207,7 +241,7 @@ export default function Tutorial({ onDone }: Props) {
 
   // Desktop testing / Bluetooth keyboards, same keys as VoiceMenu.
   function onKeyDown(e: KeyboardEvent): void {
-    const keys: Record<string, Gesture> = { ArrowRight: "right", ArrowLeft: "left", Enter: "double", " ": "double", r: "tap", R: "tap" };
+    const keys: Record<string, Gesture> = { ArrowRight: "right", ArrowLeft: "left", Enter: "double", " ": "double", r: "tap", R: "tap", v: "hold", V: "hold" };
     const g = keys[e.key];
     if (g) {
       e.preventDefault();
@@ -222,6 +256,7 @@ export default function Tutorial({ onDone }: Props) {
       className="voice-menu tutorial"
       tabIndex={0}
       onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onKeyDown={onKeyDown}
       aria-label="Заавар: шудрах, товших талбай"
