@@ -1,6 +1,7 @@
-"""Destination words + rider GPS -> one direct bus to take."""
+"""Destination words + rider GPS -> the best bus trip: one direct bus, or two with a transfer (дамжин суух)."""
 import difflib
 import re
+from functools import cache
 
 import bus_api
 import numwords
@@ -19,6 +20,87 @@ STOPWORDS = {"энэ", "тэр", "уу", "үү", "нь", "бол", "ч", "би",
              "хүрмээр", "байна", "би", "минь", "вэ", "хүртэл", "зогсоол", "буудал", "автобус", "автобусаар"}
 
 
+# Trip cost, in "stops of riding": the cheapest trip wins. A direct bus beats a transfer unless the transfer
+# saves more than TRANSFER_PENALTY stops (getting off, finding and waiting for the second bus, blind).
+WALK_COST_M = 150  # walking this far to the first stop costs as much as riding one stop
+TRANSFER_PENALTY = 6
+TRANSFER_WALK_M = 200  # the second bus may leave from another stop this close (other side of the street)
+TRANSFER_WALK_COST_M = 60
+CLOSE_WALK_M = 250  # the rider is this close to the place they named: walking beats any bus
+SHORT_WORD = 6  # words shorter than this ("муис", "марал") are only fixed by a near-perfect spelling match
+SHORT_WORD_CUTOFF = 0.92
+# Filler around a place name, but some stops are named with these words ("65-ын зогсоол", "Автобус 2").
+NAME_WORDS = {"зогсоол", "буудал", "автобус", "автобусаар"}
+
+# Riders also type Mongolian in Latin letters ("sukhbaatar talbai", "xaan"): longest spellings first.
+LATIN = [("shch", "щ"), ("kh", "х"), ("ch", "ч"), ("sh", "ш"), ("ts", "ц"), ("ya", "я"), ("yo", "ё"), ("yu", "ю"),
+         ("ye", "е"), ("a", "а"), ("b", "б"), ("c", "ц"), ("d", "д"), ("e", "э"), ("f", "ф"), ("g", "г"), ("h", "х"),
+         ("i", "и"), ("j", "ж"), ("k", "к"), ("l", "л"), ("m", "м"), ("n", "н"), ("o", "о"), ("p", "п"), ("q", "к"),
+         ("r", "р"), ("s", "с"), ("t", "т"), ("u", "у"), ("v", "в"), ("w", "в"), ("x", "х"), ("y", "ы"), ("z", "з"),
+         ("ö", "ө"), ("ü", "ү")]
+# Spelling that doesn't change which place it is: ү/у, ө/о, й/и... ("Сухбаатарын", "Сүхбаатарийн").
+_FOLD = str.maketrans({"ү": "у", "ө": "о", "ё": "е", "э": "е", "й": "и", "ы": "и", "ь": "", "ъ": ""})
+
+
+def cyrillic(text):
+    """Latin-typed Mongolian to Cyrillic; Cyrillic text is returned as is."""
+    out, t = [], text.lower()
+    i = 0
+    while i < len(t):
+        for lat, cyr in LATIN:
+            if t.startswith(lat, i):
+                out.append(cyr)
+                i += len(lat)
+                break
+        else:
+            out.append(t[i])
+            i += 1
+    return "".join(out)
+
+
+def fold(text):
+    """Lowercase, punctuation to spaces, look-alike letters merged: for comparing whole names."""
+    return " ".join(re.sub(r"[-–—,.:;!?\"'«»()/]", " ", text.lower()).translate(_FOLD).split())
+
+
+@cache
+def _names_by_fold():
+    by = {}
+    for st in bus_api._stops():
+        # Through cyrillic() like the query, so Latin-named stops ("Amar hotel") match either spelling.
+        by.setdefault(fold(cyrillic(bus_api.base_name(st["name"]))), []).append(st)
+    return by
+
+
+_FILLER = None
+
+
+def _filler():
+    global _FILLER
+    if _FILLER is None:
+        _FILLER = {fold(w) for w in STOPWORDS - NAME_WORDS}
+    return _FILLER
+
+
+def exact_name(text):
+    """Stops whose whole name the rider said, filler around it ignored ("Сүхбаатарын талбай руу
+    явмаар байна"). Covers every stop name, including ones the word search can't: names made of
+    filler or number words ("65-ын зогсоол", "Далан") and names that differ by one number."""
+    words = fold(cyrillic(text)).split()
+    by = _names_by_fold()
+    while words:
+        key = " ".join(words)
+        if key in by:
+            return by[key]
+        if words[-1] in _filler():
+            words = words[:-1]
+        elif words[0] in _filler():
+            words = words[1:]
+        else:
+            return []
+    return []
+
+
 class PlanError(Exception):
     """No suggestion possible; the message is Mongolian and safe to speak to the rider."""
 
@@ -26,7 +108,7 @@ class PlanError(Exception):
 def query_words(text):
     """Place words and numbers: 'Дэнжийн 1000 руу' -> ['дэнжийн', '1000']. Numbers matter: many stops
     differ only by one ('Дэнжийн 1-р зогсоол' vs 'Дэнжийн 1000-ын эцэс')."""
-    words = numwords.to_digits(re.findall(r"[^\W\d_]+|\d+", text.lower()))
+    words = numwords.to_digits(re.findall(r"[^\W\d_]+|\d+", cyrillic(text)))
     return [w for w in words if w.isdigit() or (w not in STOPWORDS and len(w) >= 2)]
 
 
@@ -48,6 +130,8 @@ def _clear_phrase_match(words):
         by_name.setdefault(_squash(bus_api.base_name(s["name"])), []).append(s)
     scored = sorted(((difflib.SequenceMatcher(None, phrase, n).ratio(), n) for n in by_name), reverse=True)
     (best, name), (second, _) = scored[0], scored[1]
+    if len(phrase) < SHORT_WORD and best < 1:
+        return []  # "муис" is 0.89 like "мубис": a different university, not a mishearing
     return by_name[name] if best >= PHRASE_FIRST_MIN and best - second >= PHRASE_FIRST_MARGIN else []
 
 
@@ -85,7 +169,9 @@ def _candidates(words):
     if found:
         return found
     vocab = {w for s in bus_api._stops() for w in bus_api.base_name(s["name"]).split() if len(w) >= 4}
-    fixed = [(difflib.get_close_matches(w, vocab, n=1, cutoff=0.75) or [w])[0] if len(w) >= 4 else w for w in words]
+    # A short word must be spelt almost exactly ("марал" is not "маршал").
+    fixed = [(difflib.get_close_matches(w, vocab, n=1, cutoff=0.75 if len(w) >= SHORT_WORD else SHORT_WORD_CUTOFF) or [w])[0]
+             if len(w) >= 4 else w for w in words]
     found = _covering(fixed, bus_api.search_stops(fixed)) if fixed != words else []
     if found:
         return found
@@ -93,10 +179,12 @@ def _candidates(words):
     for s in bus_api._stops():
         by_name.setdefault(bus_api.base_name(s["name"]), []).append(s)
     score, name = max((difflib.SequenceMatcher(None, " ".join(words), n).ratio(), n) for n in by_name)
+    if len(" ".join(words)) < SHORT_WORD and score < 1:
+        return []
     return by_name[name] if score >= PHRASE_MATCH_MIN else []
 
 
-def find_destination(words):
+def find_destination(words, text=None):
     """(named, nearby) for the one place the rider named; ([], []) if nothing matches well enough.
 
     named: the stop whose whole name sounds most like the words, with its other sides of the street.
@@ -104,11 +192,12 @@ def find_destination(words):
     Never a second place across town that shares one word ('улсын' is in both 'Улсын их дэлгүүр'
     and the airport's name).
     """
-    found = _candidates(words)
+    exact = exact_name(text) if text else []
+    found = exact or (_candidates(words) if words else [])
     if not found:
         return [], []
     phrase = " ".join(words)
-    best = max(found, key=lambda s: _similarity(phrase, s))
+    best = found[0] if exact else max(found, key=lambda s: _similarity(phrase, s))
     name = bus_api.base_name(best["name"])
 
     def dist(s):
@@ -119,25 +208,78 @@ def find_destination(words):
     return named, nearby
 
 
-def _best_ride(origins, dests):
-    """(origin, route, dest, stops) from the closest boarding stop that has a direct bus to any of
-    dests, taking the route with the fewest stops there; None if there is none."""
+def _orders(stop, route):
+    """Riding orders (stop ids) of every variant/direction of route that passes stop."""
+    return [order for rid in stop["route_ids"].get(route, []) for order in bus_api.route_directions(rid)
+            if stop["stop_id"] in order]
+
+
+@cache
+def _stops_by_id():
+    return {s["stop_id"]: s for s in bus_api._stops()}
+
+
+@cache
+def _neighbours(stop_id):
+    """[(stop, metres)] within TRANSFER_WALK_M, the stop itself first."""
+    me = _stops_by_id()[stop_id]
+    near = [(s, bus_api._distance_m(me["lat"], me["lon"], s["lat"], s["lon"])) for s in bus_api._stops()]
+    return sorted([(s, m) for s, m in near if m <= TRANSFER_WALK_M], key=lambda item: item[1])
+
+
+def _best_direct(origins, dests):
+    """(cost, origin, route, dest, stops) of the cheapest one-bus trip, or None."""
+    best = None
     for o in origins:
-        best = None
         for d in dests:
-            for route in sorted(set(o["routes"]) & set(d["routes"])):
+            for route in set(o["routes"]) & set(d["routes"]):
                 n = bus_api.stops_between(o["route_ids"][route], o["stop_id"], d["stop_id"])
-                if n is not None and (best is None or n < best[3]):
-                    best = (o, route, d, n)
-        if best:
-            return best
-    return None
+                if n is not None:
+                    cost = n + o["distance_m"] / WALK_COST_M
+                    if best is None or cost < best[0]:
+                        best = (cost, o, route, d, n)
+    return best
+
+
+def _best_transfer(origins, dests):
+    """The cheapest two-bus trip: bus 1 from an origin to a transfer stop, bus 2 from that stop (or one
+    within TRANSFER_WALK_M) to a dest. (cost, o, r1, n1, t1, t2, r2, n2, d, walk_m) or None.
+    Searches every stop every origin route reaches against every stop every dest route comes from."""
+    reach = {}  # stop_id -> (cost, origin, route, stops) riding the first bus there
+    for o in origins:
+        for r1 in o["routes"]:
+            for order in _orders(o, r1):
+                i = order.index(o["stop_id"])
+                for j in range(i + 1, len(order)):
+                    cost = (j - i) + o["distance_m"] / WALK_COST_M
+                    if order[j] not in reach or cost < reach[order[j]][0]:
+                        reach[order[j]] = (cost, o, r1, j - i)
+    best = None
+    by_id = _stops_by_id()
+    for d in dests:
+        for r2 in d["routes"]:
+            for order in _orders(d, r2):
+                k = order.index(d["stop_id"])
+                for j in range(k):
+                    t2 = by_id.get(order[j])
+                    if not t2:
+                        continue
+                    for t1, walk in _neighbours(t2["stop_id"]):
+                        if t1["stop_id"] not in reach:
+                            continue
+                        c1, o, r1, n1 = reach[t1["stop_id"]]
+                        if spoken_route(r1) == spoken_route(r2):
+                            continue  # same number on the sign (Ч:29Б / Ч:29Б-Z variants): not a real transfer
+                        cost = c1 + (k - j) + TRANSFER_PENALTY + walk / TRANSFER_WALK_COST_M
+                        if best is None or cost < best[0]:
+                            best = (cost, o, r1, n1, t1, t2, r2, k - j, d, round(walk))
+    return best
 
 
 def locate(text):
     """The stop the rider says they're at ('Би Төв номын сангийн буудал дээр байна'), or None."""
     words = query_words(text)
-    named, _ = find_destination(words) if words else ([], [])
+    named, _ = find_destination(words, text)
     return named[0] if named else None
 
 
@@ -149,7 +291,8 @@ MSG_SAY_AGAIN = "Очих газрын нэрийг дахин хэлнэ үү."
 MSG_NOT_FOUND = "Ийм нэртэй зогсоол олдсонгүй. Өөр нэрээр хэлнэ үү."
 MSG_NO_STOP_NEAR = "Таны ойролцоо 800 метрт автобусны зогсоол алга."
 MSG_CLOSE = "Та очих газартаа ойрхон байна. Алхаж очоорой."
-MSG_NO_DIRECT = "Таны ойролцоох зогсоолоос тийшээ шууд автобус алга."
+MSG_NO_DIRECT = "Таны ойролцоох зогсоолоос тийшээ хүрэх автобус олдсонгүй."
+TRANSFER_STOP = "Дамжин суух зогсоол:"
 MSG_NOT_A_STOP = "Ийм нэртэй зогсоол олдсонгүй. Ойролцоох зогсоолын нэрийг хэлнэ үү."
 
 
@@ -179,7 +322,7 @@ def next_stop_speech(name):
 
 def piece_phrases():
     """Every fixed piece, for pre-recording."""
-    return (["Суух зогсоол:", "Буух зогсоол:", "Дараагийн зогсоол:", "Очих газар тань тэндээс ойрхон.",
+    return (["Суух зогсоол:", "Буух зогсоол:", "Дараагийн зогсоол:", "Очих газар тань тэндээс ойрхон.", TRANSFER_STOP,
              MSG_SAY_AGAIN, MSG_NOT_FOUND, MSG_NO_STOP_NEAR, MSG_CLOSE, MSG_NO_DIRECT, MSG_NOT_A_STOP, walk_piece(0)]
             + list(SIDE_PIECES.values())
             + [walk_piece(m) for m in range(AT_STOP_M, WALK_MAX_M + 1, 10) if m >= AT_STOP_M]
@@ -221,6 +364,11 @@ def spoken_route(route_no):
     return f"{m.group(1)} {m.group(2).upper()} автобус" if m.group(2) else f"{m.group(1)}-р автобус"
 
 
+def transfer_speech(route_no):
+    """'29-р автобусанд дамжин суугаарай.' -- per route, pre-recordable like take_speech."""
+    return f"{spoken_route(route_no)}анд дамжин суугаарай."
+
+
 def take_speech(route_no):
     """Same text for every rider of this route, so its clip is made once (make_speech.py)."""
     return f"{spoken_route(route_no)}анд суугаарай."
@@ -230,48 +378,86 @@ def found_speech(route_no):
     return f"{spoken_route(route_no)} ирлээ. Энэ таны автобус."
 
 
-def route_phrases():
-    """Every take/found sentence for every route, for pre-making TTS clips."""
+def route_phrases(transfers=False):
+    """Every take/found sentence for every route, for pre-making TTS clips. The server warms these at
+    startup; transfer sentences (one more per route, ~1 h of TTS) only for make_speech.py, since the
+    server makes a trip's own transfer clip right after planning, while the route is read out."""
     routes = {r for s in bus_api._stops() for r in s["routes"]}
-    return sorted({f(r) for r in routes for f in (take_speech, found_speech)})
+    kinds = (take_speech, found_speech) + ((transfer_speech,) if transfers else ())
+    return sorted({f(r) for r in routes for f in kinds})
+
+
+def _stop_out(st, **extra):
+    return {"stop_id": st["stop_id"], "name": st["name"], **extra}
+
+
+def _plan(o, route, n, d, named, exact, transfer=None):
+    """PlanResponse dict. With a transfer, route/alight_stop/stops_to_ride are the FIRST bus, and
+    "transfer" holds the second: get off at transfer.alight_stop... (see contract.Transfer)."""
+    near_note = [] if exact else ["Очих газар тань тэндээс ойрхон."]
+    if transfer:
+        t1, t2, r2, n2, walk = transfer
+        leg1_off = t1
+    else:
+        leg1_off = d
+    # Pieces, all pre-recordable: "29 Б автобусанд суугаарай." "Суух зогсоол:" "Вокзал." "Хойд тал."
+    # "Зогсоол руу 460 метр алхана." "6 зогсоол явна." then either "Буух зогсоол:" ... or
+    # "Дамжин суух зогсоол:" "МУИС." ["Зогсоол руу 120 метр алхана."] "3-р автобусанд дамжин суугаарай." "4 зогсоол явна." "Буух зогсоол:" ...
+    speech = [take_speech(route), "Суух зогсоол:"] + stop_pieces(o["name"]) + [walk_piece(o["distance_m"]), ride_piece(n)]
+    plan = {
+        "route": route,
+        "board_stop": _stop_out(o, distance_m=o["distance_m"], lat=o["lat"], lon=o["lon"]),
+        "destination": _stop_out(named[0]),
+        "alight_stop": _stop_out(leg1_off),
+        "stops_to_ride": n,
+        "routes_at_stop": o["routes"],
+        "found_speech": found_speech(route),
+        "transfer": None,
+    }
+    if transfer:
+        second = ([walk_piece(walk)] if walk >= AT_STOP_M else []) + [transfer_speech(r2), ride_piece(n2)]
+        speech += [TRANSFER_STOP] + stop_pieces(t1["name"]) + second
+        plan["transfer"] = {
+            "route": r2,
+            "board_stop": _stop_out(t2, distance_m=walk, lat=t2["lat"], lon=t2["lon"]),
+            "alight_stop": _stop_out(d),
+            "stops_to_ride": n2,
+            "found_speech": found_speech(r2),
+            # Said at the transfer stop: ["Зогсоол руу 40 метр алхана."] "29-р автобусанд дамжин суугаарай." "4 зогсоол явна." "Буух зогсоол:" ...
+            "speech": second + ["Буух зогсоол:"] + stop_pieces(d["name"]) + near_note,
+        }
+    plan["speech"] = speech + ["Буух зогсоол:"] + stop_pieces(d["name"]) + near_note
+    return plan
 
 
 def suggest(text, lat, lon):
     words = query_words(text)
-    if not words:
+    named, nearby = find_destination(words, text)
+    if not named and not words:
         raise PlanError(MSG_SAY_AGAIN)
-    named, nearby = find_destination(words)
     if not named:
         raise PlanError(MSG_NOT_FOUND)
     origins = bus_api.nearest_stops(lat, lon, WALK_MAX_M, ORIGIN_LIMIT)
     if not origins:
         raise PlanError(MSG_NO_STOP_NEAR)
-    if origins[0]["stop_id"] in {s["stop_id"] for s in named + nearby}:
+    # Truly there (a few hundred metres): walk. Farther, even if "nearby", a bus is offered.
+    if min(bus_api._distance_m(lat, lon, s["lat"], s["lon"]) for s in named) <= CLOSE_WALK_M:
         raise PlanError(MSG_CLOSE)
 
-    dest_routes = {r for d in named + nearby for r in d["routes"]}
-    bus_api.load_route_directions(rid for o in origins for r in set(o["routes"]) & dest_routes
-                                  for rid in o["route_ids"][r])
+    # Every route through the origins and the destination: the transfer search needs their stop orders
+    # (one Hamuga call per route variant the first time, then kept on disk).
+    bus_api.load_route_directions(rid for st in origins + named + nearby for rids in st["route_ids"].values() for rid in rids)
 
-    # Get off at the stop the rider named; a neighbouring stop only if no direct bus goes there.
+    # Get off at the stop the rider named (direct or with one transfer); a neighbouring stop only if
+    # nothing reaches the named one. Cheapest trip wins: a transfer costs TRANSFER_PENALTY stops.
     for dests, exact in ((named, True), (nearby, False)):
-        ride = _best_ride(origins, dests)
-        if ride:
-            o, route, d, n = ride
-            get_off = [ride_piece(n), "Буух зогсоол:"] + stop_pieces(d["name"])
-            if not exact:
-                get_off += ["Очих газар тань тэндээс ойрхон."]
-            return {
-                "route": route,
-                "board_stop": {"stop_id": o["stop_id"], "name": o["name"], "distance_m": o["distance_m"],
-                               "lat": o["lat"], "lon": o["lon"]},
-                "destination": {"stop_id": named[0]["stop_id"], "name": named[0]["name"]},
-                "alight_stop": {"stop_id": d["stop_id"], "name": d["name"]},
-                "stops_to_ride": n,
-                "routes_at_stop": o["routes"],
-                # Pieces, all pre-recordable: "29 Б автобусанд суугаарай." "Суух зогсоол:" "Вокзал." "Хойд тал."
-                # "Зогсоол руу 460 метр алхана." "6 зогсоол явна." "Буух зогсоол:" "Сүхбаатарын талбай." ...
-                "speech": [take_speech(route), "Суух зогсоол:"] + stop_pieces(o["name"]) + [walk_piece(o["distance_m"])] + get_off,
-                "found_speech": found_speech(route),
-            }
+        trips = [t for t in (_best_direct(origins, dests), _best_transfer(origins, dests)) if t]
+        if not trips:
+            continue
+        trip = min(trips, key=lambda t: t[0])
+        if len(trip) == 5:
+            _, o, route, d, n = trip
+            return _plan(o, route, n, d, named, exact)
+        _, o, r1, n1, t1, t2, r2, n2, d, walk = trip
+        return _plan(o, r1, n1, d, named, exact, transfer=(t1, t2, r2, n2, walk))
     raise PlanError(MSG_NO_DIRECT)

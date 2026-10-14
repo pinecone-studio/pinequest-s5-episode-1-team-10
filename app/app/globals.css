@@ -451,3 +451,8 @@ body {
   font-size: 3rem;
   transition: transform 0.3s;
 }
+
+/* Two-bus trip on the plan card: "Ч:58 → Ч:49" */
+.route-then {
+  color: var(--accent);
+}

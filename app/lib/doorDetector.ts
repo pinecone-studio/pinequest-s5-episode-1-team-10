@@ -3,7 +3,7 @@
 // confirmed bus, so the middle door is never in its view.
 // Checked on tov_nomyn_san_{1,2}.png: front door 0.28 / 0.20, middle door <= 0.10, rear end none.
 import type * as Ort from "onnxruntime-web";
-import { runtime, type Box } from "./detector";
+import { exclusive, runtime, type Box } from "./detector";
 
 const MODEL_URL = "/models/door.onnx";
 const SIZE = 320; // model input is SIZE x SIZE (the crop is small, 320 keeps it fast)
@@ -20,12 +20,16 @@ export function loadDoorDetector(): Promise<void> {
   if (!loading) {
     loading = runtime()
       .then(function (rt) {
-        return rt.ort.InferenceSession.create(MODEL_URL, { executionProviders: rt.providers });
+        return exclusive(function () {
+          return rt.ort.InferenceSession.create(MODEL_URL, { executionProviders: rt.providers });
+        });
       })
       .then(async function (s) {
         const { ort } = await runtime();
         // Compile the GPU shaders now, so the first door frame isn't slow.
-        await s.run({ [s.inputNames[0]]: new ort.Tensor("float32", new Float32Array(3 * SIZE * SIZE), [1, 3, SIZE, SIZE]) });
+        await exclusive(function () {
+          return s.run({ [s.inputNames[0]]: new ort.Tensor("float32", new Float32Array(3 * SIZE * SIZE), [1, 3, SIZE, SIZE]) });
+        });
         session = s;
       })
       .catch(function (e) {
@@ -69,7 +73,10 @@ export async function detectFrontDoor(video: HTMLVideoElement, bus: Box, frontRi
     data[area + i] = pixels[i * 4 + 1] / 255;
     data[2 * area + i] = pixels[i * 4 + 2] / 255;
   }
-  const output = await session.run({ [session.inputNames[0]]: new ort.Tensor("float32", data, [1, 3, SIZE, SIZE]) });
+  const s = session;
+  const output = await exclusive(function () {
+    return s.run({ [s.inputNames[0]]: new ort.Tensor("float32", data, [1, 3, SIZE, SIZE]) });
+  });
   // output0 [1, 4 + 2 classes + 32 mask coefficients, N]; the mask output is ignored.
   const out = output[session.outputNames[0]];
   const values = out.data as Float32Array;

@@ -15,7 +15,7 @@ import tts
 
 
 def main():
-    texts = tts.fixed_phrases() + ([] if "--fixed" in sys.argv else planner.route_phrases())
+    texts = tts.fixed_phrases() + ([] if "--fixed" in sys.argv else planner.route_phrases(transfers=True))
     todo = [t for t in texts if not tts.is_cached(t)]
     print(f"{len(texts)} clips, {len(todo)} to make")
     start = time.time()

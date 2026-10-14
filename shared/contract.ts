@@ -42,6 +42,16 @@ export interface BoardStop extends PlanStop {
   lon: number;
 }
 
+// The second bus of a two-bus trip (дамжин суух).
+export interface Transfer {
+  route: string; // send as wanted_route to /verify at board_stop
+  board_stop: BoardStop; // distance_m = walk from where bus 1 drops you (0 = same stop)
+  alight_stop: PlanStop; // the destination
+  stops_to_ride: number;
+  found_speech: string;
+  speech: string[]; // said at the transfer stop: walk (if any), which bus, stops, where to get off
+}
+
 export interface PlanResponse {
   route: string; // Hamuga busRouteNo to take, e.g. "Ч:75"; send as wanted_route to /verify
   board_stop: BoardStop; // send its stop_id to /verify
@@ -51,6 +61,7 @@ export interface PlanResponse {
   routes_at_stop: string[]; // every busRouteNo serving board_stop
   speech: string[]; // Mongolian pieces to speak in order (all pre-recordable); fetch each from /tts
   found_speech: string; // Mongolian "this is your bus" sentence for when /verify says yes
+  transfer: Transfer | null; // two-bus trip: route/alight_stop/stops_to_ride above are the FIRST bus
 }
 
 // POST /locate/voice with a WAV body (or GET /locate?text=): the rider says where they are,

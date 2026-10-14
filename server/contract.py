@@ -42,6 +42,16 @@ class BoardStop(PlanStop):
     lon: float
 
 
+class Transfer(BaseModel):
+    """The second bus of a two-bus trip (дамжин суух)."""
+    route: str = Field(description='Second busRouteNo, e.g. "Ч:29"; send as wanted_route to /verify at board_stop')
+    board_stop: BoardStop = Field(description="Where to catch it; distance_m = walk from where bus 1 drops you (0 = same stop)")
+    alight_stop: PlanStop = Field(description="Where to get off: the destination")
+    stops_to_ride: int = Field(ge=1)
+    found_speech: str
+    speech: list[str] = Field(description="Said at the transfer stop: walk (if any), which bus, stops, where to get off")
+
+
 class PlanResponse(BaseModel):
     route: str = Field(description='Hamuga busRouteNo to take, e.g. "Ч:75"; send as wanted_route to /verify')
     board_stop: BoardStop = Field(description="Send its stop_id to /verify")
@@ -52,6 +62,8 @@ class PlanResponse(BaseModel):
     routes_at_stop: list[str] = Field(description="Every busRouteNo serving board_stop")
     speech: list[str] = Field(description="Mongolian sentences to speak in order; fetch each from /tts")
     found_speech: str = Field(description='Mongolian "this is your bus" sentence for when /verify says yes')
+    transfer: Optional[Transfer] = Field(default=None, description="Two-bus trip: route/alight_stop/stops_to_ride above "
+                                                                   "are the FIRST bus; null for a direct bus")
 
 
 class LocatedStop(BaseModel):

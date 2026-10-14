@@ -227,6 +227,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
             return;
           }
           target = track; // keep following this bus to its door
+          loadDoorDetector(); // already loaded with WebGPU; on CPU it starts now (geometry until it's ready)
           foundAt = now;
           console.info("[bus] yes after " + Math.round(now - openedAt) + " ms from camera open, " + track.votes.length + " reads");
           lastGuideSpoken = now; // the intro below already guides; first clock direction comes after it
@@ -386,7 +387,11 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         sayPhrase("camera_on");
         setStatus("Загвар ачаалж байна…");
         const provider = await loadDetector();
-        loadDoorDetector(); // in the background: needed only once the bus is found
+        // Door model in the background, needed only once the bus is found. Without WebGPU both models
+        // share one CPU queue, so it waits for the "yes" instead of slowing the sign reading.
+        if (provider === "webgpu") {
+          loadDoorDetector();
+        }
         setStatus("Автобус хайж байна (" + provider + ")");
         tick();
       }

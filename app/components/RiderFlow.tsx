@@ -4,13 +4,14 @@
 // camera -> "this is your bus". Every screen is a VoiceMenu: swipe to hear the options, double tap
 // to choose, all spoken in Mongolian, so a blind rider always knows what they can do.
 import { useCallback, useMemo, useRef, useState, type FormEvent } from "react";
-import type { PlanResponse, VoiceLocateResponse } from "../../shared/contract";
+import type { BoardStop, PlanResponse, PlanStop, VoiceLocateResponse } from "../../shared/contract";
 import { locateBySpeech, locateByText, nearestStop, requestPlan, requestVoicePlan, serverCaps, type ServerCaps } from "../lib/api";
 import { listenInBrowser } from "../lib/listen";
 import { GPS_OK_M, locate, type Position } from "../lib/location";
 import { beep, record, type Recording } from "../lib/record";
 import { primeBeacon } from "../lib/beacon";
 import { requestCompassPermission } from "../lib/compass";
+import { routeLabel } from "../lib/route";
 import { loadDetector } from "../lib/detector";
 import { loadDoorDetector } from "../lib/doorDetector";
 import type { DoorGuide } from "../lib/door";
@@ -48,7 +49,21 @@ function simulatedWalk(): boolean {
   return new URLSearchParams(window.location.search).get("walk") === "sim";
 }
 
-const AT_STOP_M = 30; // closer than this to the boarding stop: no walking guidance needed
+const AT_STOP_M = 30;
+
+// One bus of the trip: the first, or the second after a transfer (дамжин суух).
+interface Leg {
+  route: string;
+  board: BoardStop;
+  alight: PlanStop;
+  foundSpeech: string;
+}
+function legOf(plan: PlanResponse, leg: number): Leg {
+  const t = plan.transfer;
+  return leg === 1 && t
+    ? { route: t.route, board: t.board_stop, alight: t.alight_stop, foundSpeech: t.found_speech }
+    : { route: plan.route, board: plan.board_stop, alight: plan.alight_stop, foundSpeech: plan.found_speech };
+} // closer than this to the boarding stop: no walking guidance needed
 
 // ?lat=47.91&lon=106.92 overrides GPS, for testing away from the stop.
 function testPosition(): Position | null {
@@ -63,6 +78,9 @@ export default function RiderFlow() {
   const [message, setMessage] = useState("");
   const [typed, setTyped] = useState("");
   const [plan, setPlan] = useState<PlanResponse | null>(null);
+  const [leg, setLeg] = useState(0); // 0: first bus, 1: second bus after the transfer
+  const planRef = useRef<PlanResponse | null>(null); // for callbacks
+  const legRef = useRef(0);
   const [heard, setHeard] = useState("");
   const [place, setPlace] = useState(""); // where the app thinks the rider is
   const position = useRef<Position | null>(null);
@@ -94,6 +112,9 @@ export default function RiderFlow() {
   function showPlan(found: PlanResponse, heardText: string): void {
     setHeard(heardText);
     setPlan(found);
+    planRef.current = found;
+    legRef.current = 0;
+    setLeg(0);
     const far = found.board_stop.distance_m >= AT_STOP_M || simulatedWalk();
     setAtStop(!far);
     setStep("planned");
@@ -102,8 +123,9 @@ export default function RiderFlow() {
     say(found.speech.concat(phrase(far ? "plan_walk" : "open_camera")));
     // Load + warm both models while the route is read out, so the camera detects from its first frame.
     loadDetector()
-      .then(function () {
-        return loadDoorDetector();
+      .then(function (provider) {
+        // Without WebGPU the door model would queue in front of bus detection: it loads after the "yes".
+        return provider === "webgpu" ? loadDoorDetector() : undefined;
       })
       .catch(function () {
         // the camera step loads (and reports) it again
@@ -333,6 +355,20 @@ export default function RiderFlow() {
     setFound(true);
   }, []);
   const onArrived = useCallback(function () {
+    const p = planRef.current;
+    if (p && p.transfer && legRef.current === 0) {
+      // Off bus 1 at the transfer stop: now the second bus (walk there first if it's across the street).
+      legRef.current = 1;
+      setLeg(1);
+      const far = p.transfer.board_stop.distance_m >= AT_STOP_M;
+      setAtStop(!far);
+      setFound(false);
+      setStep("planned");
+      const texts = [phrase("transfer_arrived")].concat(p.transfer.speech, phrase(far ? "plan_walk" : "open_camera"));
+      setMessage(texts.join(" "));
+      say(texts);
+      return;
+    }
     setStep("arrived");
     setMessage(phrase("arrived"));
     say([phrase("arrived")]);
@@ -380,9 +416,13 @@ export default function RiderFlow() {
   // Stable props for WalkGuide (a new object each render would restart its GPS and compass).
   const walkStop = useMemo(
     function () {
-      return plan ? { lat: plan.board_stop.lat, lon: plan.board_stop.lon, name: plan.board_stop.name } : null;
+      if (!plan) {
+        return null;
+      }
+      const b = legOf(plan, leg).board;
+      return { lat: b.lat, lon: b.lon, name: b.name };
     },
-    [plan],
+    [plan, leg],
   );
 
   function openCamera(): void {
@@ -427,6 +467,9 @@ export default function RiderFlow() {
   }
   function startOver(): void {
     setPlan(null);
+    planRef.current = null;
+    legRef.current = 0;
+    setLeg(0);
     setStep("ask");
     announce(["welcome"]);
   }
@@ -508,6 +551,8 @@ export default function RiderFlow() {
     );
   }
 
+  const cur = plan ? legOf(plan, leg) : null; // the bus the rider is taking now
+
   if (step === "learn") {
     return (
       <main className="flow">
@@ -524,39 +569,40 @@ export default function RiderFlow() {
       {place && (step === "ask" || step === "listening") && <p className="place">Таны байршил: {place}</p>}
 
       <VoiceMenu key={step} items={items} primary={primary}>
-        {step === "planned" && plan && <PlanCard plan={plan} heard={heard} />}
-        {step === "walk" && plan && walkStop && (
+        {step === "planned" && plan && <PlanCard plan={plan} heard={heard} leg={leg} />}
+        {step === "walk" && cur && walkStop && (
           <>
-            <p className="route-banner">{plan.route}</p>
+            <p className="route-banner">{routeLabel(cur.route)}</p>
             <WalkGuide stop={walkStop} start={walkFrom} simulate={simulatedWalk()} info={walkInfo} onArrived={onWalked} />
           </>
         )}
-        {step === "camera" && plan && (
+        {step === "camera" && cur && (
           <>
             {found ? (
               <p className="found" role="alert">
-                {plan.route} ТАНЫ АВТОБУС · хаалга руу
+                {routeLabel(cur.route)} ТАНЫ АВТОБУС · хаалга руу
               </p>
             ) : (
-              <p className="route-banner">{plan.route}</p>
+              <p className="route-banner">{routeLabel(cur.route)}</p>
             )}
             <BusCamera
-              stopId={plan.board_stop.stop_id}
-              route={plan.route}
-              foundSpeech={plan.found_speech}
+              stopId={cur.board.stop_id}
+              route={cur.route}
+              foundSpeech={cur.foundSpeech}
               onFound={onFound}
               onError={onCameraError}
               guide={doorGuide}
             />
           </>
         )}
-        {step === "ride" && plan && (
+        {step === "ride" && cur && (
           <>
-            <p className="route-banner">{plan.route}</p>
+            <p className="route-banner">{routeLabel(cur.route)}</p>
             <RideGuide
-              route={plan.route}
-              board={plan.board_stop.stop_id}
-              alight={plan.alight_stop.stop_id}
+              key={leg} // a fresh ride for the second bus
+              route={cur.route}
+              board={cur.board.stop_id}
+              alight={cur.alight.stop_id}
               simulate={simulatedRide()}
               info={rideInfo}
               onArrived={onArrived}
@@ -565,7 +611,7 @@ export default function RiderFlow() {
         )}
         {step === "arrived" && plan && (
           <p className="found" role="alert">
-            {plan.alight_stop.name}
+            {(plan.transfer ? plan.transfer.alight_stop : plan.alight_stop).name}
             <br />
             ИРЛЭЭ
           </p>

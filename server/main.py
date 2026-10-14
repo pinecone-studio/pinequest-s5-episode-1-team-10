@@ -61,7 +61,8 @@ def _suggest(text, lat, lon):
     except (httpx.HTTPError, RuntimeError):
         raise HTTPException(status_code=503, detail="Bus data unavailable")
     tts.prefetch_in_background(result["speech"][1:], live=True)  # made while the first part plays
-    tts.prefetch_in_background([result["found_speech"]])  # needed only once the bus comes
+    later = [result["found_speech"]] + ([result["transfer"]["found_speech"]] if result["transfer"] else [])
+    tts.prefetch_in_background(later)  # needed only once the bus comes
     return result
 
 
