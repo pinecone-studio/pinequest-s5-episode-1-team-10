@@ -174,7 +174,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         if (!recent) {
           doorBox = null;
         }
-        const g = guideToDoor(bus.box, video.videoWidth, frontIsRight(bus.vx, bus.box), recent ? doorFromFront : null);
+        const g = guideToDoor(bus.box, video.videoWidth, video.videoHeight, frontIsRight(bus.vx, bus.box), recent ? doorFromFront : null);
         guide.current = g;
         aimBeacon(g.angle);
         // Safety first: a moving bus overrides everything else.
