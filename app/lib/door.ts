@@ -58,7 +58,8 @@ export function guideToDoor(box: Box, frameW: number, frameH: number, frontRight
   // (720x1280) gets a narrower horizontal view than one held sideways.
   const focal = Math.max(frameW, frameH) / 2 / Math.tan(((FOV_DEG / 2) * Math.PI) / 180);
   const angle = (Math.atan((x - frameW / 2) / focal) * 180) / Math.PI;
-  const distanceM = busDistance(box, frameH, focal);
+  // busDistance is straight out to the bus's side; the door is off to one side, so the walk is the diagonal.
+  const distanceM = busDistance(box, frameH, focal) / Math.cos((Math.min(60, Math.abs(angle)) * Math.PI) / 180);
   const hours = Math.max(-3, Math.min(3, Math.round(angle / 30)));
   return {
     angle,

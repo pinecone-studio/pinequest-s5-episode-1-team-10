@@ -25,6 +25,7 @@ interface Props {
 const REACH_M = 60; // within this of a stop = the bus is at it
 const ANNOUNCE_M = 300; // say the next stop when this close
 const OFF_M = 150; // "get off now" when the bus is this close to the rider's stop
+const MAX_FIX_M = 100;
 const LOST_MS = 60000; // no GPS fix this long -> tell the rider to ask the driver
 const SIM_SEGMENT_MS = 3500; // simulated drive between two stops
 const SIM_DWELL_MS = 1500; // simulated stop at each stop
@@ -182,7 +183,10 @@ export default function RideGuide({ route, board, alight, simulate, info, onArri
         } else if ("geolocation" in navigator) {
           watchId = navigator.geolocation.watchPosition(
             function (pos) {
-              onPosition(pos.coords.latitude, pos.coords.longitude);
+              // A fix this vague could put the bus a stop early or late: wait for a better one.
+              if (pos.coords.accuracy <= MAX_FIX_M) {
+                onPosition(pos.coords.latitude, pos.coords.longitude);
+              }
             },
             function () {},
             { enableHighAccuracy: true, maximumAge: 2000 },

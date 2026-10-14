@@ -2,14 +2,16 @@
 
 // Walking to the boarding stop: GPS + the phone's compass give the stop's direction from where the
 // camera faces. The door beacon is panned toward the stop (faster as the rider faces it) and every
-// few seconds: "Зогсоол 2 цагийн зүгт. 120 метр." Within ~20 m: "you're at the stop" -> camera.
+// few seconds: "Зогсоол 2 цагийн зүгт. 120 метр." Within ~8-15 m on two GPS fixes: "you are at the stop".
 // Straight-line direction only (not street by street): the rider keeps to the sidewalk, the cane
-// handles obstacles. No compass (laptop, refused): distance + "getting closer / farther" only.
+// handles obstacles. GPS is smoothed and the compass corrected from the walking direction
+// (lib/walkFilter.ts); no compass: the GPS walking direction, else distance + closer/farther.
 // simulate (?walk=sim): a demo walk from 160 m away at running speed, for the pitch stage.
 import { useEffect, useState, type MutableRefObject } from "react";
 import { aimBeacon, startBeacon, stopBeacon } from "../lib/beacon";
 import { requestCompassPermission, watchCompass } from "../lib/compass";
 import { bearing, metres, offset, relative } from "../lib/geo";
+import { CompassCorrection, courseHeading, PositionFilter, type Fix } from "../lib/walkFilter";
 import { phrase, say, vibrate, type PhraseKey } from "../lib/speech";
 
 interface Props {
@@ -20,7 +22,8 @@ interface Props {
   onArrived: () => void;
 }
 
-const ARRIVE_M = 20;
+const ARRIVE_M = 8; // + half the GPS uncertainty; simulated ±12 m GPS: "arrived" ~8 m from the stop, worst ~12 m
+const COURSE_FRESH_MS = 3000;
 const SPEAK_EVERY_MS = 7000;
 const NO_COMPASS_MS = 3000; // no compass reading this long after start -> distance-only guidance
 const NO_GPS_MS = 20000;
@@ -45,9 +48,15 @@ export default function WalkGuide({ stop, start, simulate, info, onArrived }: Pr
   useEffect(
     function () {
       let stopped = false;
-      let pos: { lat: number; lon: number } | null = null;
-      let heading: number | null = null;
-      let headingAt = 0;
+      const filter = new PositionFilter(stop.lat, stop.lon);
+      const correction = new CompassCorrection();
+      let compassRaw: number | null = null; // smoothed, before correction
+      let compassAt = 0;
+      let course: number | null = null; // GPS walking direction
+      let courseAt = 0;
+      let fixes = 0; // GPS fixes used so far
+      let nearFixes = 0; // consecutive fixes within arrival distance
+      let lastNearFix = -1;
       let lastSpoken = 0;
       let spokenDist: number | null = null;
       let talking = false;
@@ -72,21 +81,44 @@ export default function WalkGuide({ stop, start, simulate, info, onArrived }: Pr
         });
       }
 
+      function onFix(f: Fix): void {
+        if (filter.update(f)) {
+          fixes++;
+        }
+        const c = courseHeading(f);
+        if (c !== null) {
+          course = c;
+          courseAt = f.t;
+          if (compassRaw !== null && f.t - compassAt < NO_COMPASS_MS) {
+            correction.learn(compassRaw, f); // walking straight: the compass's error shows
+          }
+        }
+      }
+
       function update(): void {
         if (stopped || arrived) {
           return;
         }
         const now = performance.now();
-        if (!pos) {
+        if (!filter.ready()) {
           if (!gpsWarned && now - startedAt > NO_GPS_MS) {
             gpsWarned = true;
             speak([phrase("walk_no_gps")], resume);
           }
           return;
         }
-        const d = metres(pos.lat, pos.lon, stop.lat, stop.lon);
+        const d = filter.distance();
         setDist(d);
-        if (d < ARRIVE_M) {
+        // Arrived: within reach on two separate GPS fixes (one lucky fix isn't enough).
+        if (d < ARRIVE_M + 0.5 * Math.min(30, filter.sigma())) {
+          if (fixes !== lastNearFix) {
+            nearFixes++;
+            lastNearFix = fixes;
+          }
+        } else {
+          nearFixes = 0;
+        }
+        if (nearFixes >= 2) {
           arrived = true;
           stopBeacon();
           vibrate([400, 100, 400]);
@@ -94,17 +126,19 @@ export default function WalkGuide({ stop, start, simulate, info, onArrived }: Pr
           onArrived();
           return;
         }
-        const compass = heading !== null && now - headingAt < NO_COMPASS_MS;
+        // Corrected compass; without one, the GPS walking direction while the rider walks.
+        const compass = compassRaw !== null && now - compassAt < NO_COMPASS_MS ? correction.apply(compassRaw) : null;
+        const heading = compass ?? (course !== null && now - courseAt < COURSE_FRESH_MS ? course : null);
         let parts: string[];
-        if (compass) {
-          const r = relative(bearing(pos.lat, pos.lon, stop.lat, stop.lon), heading as number);
+        if (heading !== null) {
+          const r = relative(filter.bearingToOrigin(), heading);
           setRel(r);
           aimBeacon(Math.max(-90, Math.min(90, r)));
           parts = [phrase(("walk_clock_" + walkClock(r)) as PhraseKey), walkMetres(d)];
         } else {
           setRel(null);
           stopBeacon();
-          if (!compassWarned && now - startedAt > NO_COMPASS_MS) {
+          if (!compassWarned && compass === null && now - startedAt > NO_COMPASS_MS) {
             compassWarned = true;
             speak([phrase("walk_no_compass")], resume);
             return;
@@ -138,23 +172,37 @@ export default function WalkGuide({ stop, start, simulate, info, onArrived }: Pr
         const from = start && metres(start.lat, start.lon, stop.lat, stop.lon) > 40 ? start : offset(stop.lat, stop.lon, 225, SIM_FROM_M);
         const total = metres(from.lat, from.lon, stop.lat, stop.lon);
         const t0 = performance.now();
+        const at = function (t: number): { lat: number; lon: number } {
+          const f = Math.min(total, Math.max(0, t - 4) * SIM_SPEED) / total; // stands still while turning
+          return { lat: from.lat + (stop.lat - from.lat) * f, lon: from.lon + (stop.lon - from.lon) * f };
+        };
         timers.push(
           setInterval(function () {
+            // compass, 4 Hz
             const t = (performance.now() - t0) / 1000;
-            const walked = Math.min(total, Math.max(0, t - 4) * SIM_SPEED); // stands still while turning
-            const f = walked / total;
-            pos = { lat: from.lat + (stop.lat - from.lat) * f, lon: from.lon + (stop.lon - from.lon) * f };
-            const toStop = bearing(pos.lat, pos.lon, stop.lat, stop.lon);
-            heading = toStop + 70 * Math.max(0, 1 - t / 4) + 4 * Math.sin(t * 2);
-            headingAt = performance.now();
+            const p = at(t);
+            compassRaw = bearing(p.lat, p.lon, stop.lat, stop.lon) + 70 * Math.max(0, 1 - t / 4) + 4 * Math.sin(t * 2);
+            compassAt = performance.now();
           }, 250),
+          setInterval(function () {
+            // GPS, 1 Hz, like a phone
+            const now = performance.now();
+            const t = (now - t0) / 1000;
+            const p = at(t);
+            const walking = t > 4 && metres(p.lat, p.lon, stop.lat, stop.lon) > 0.5;
+            onFix({ lat: p.lat, lon: p.lon, accuracy: 5, heading: walking ? bearing(p.lat, p.lon, stop.lat, stop.lon) : null, speed: walking ? SIM_SPEED : 0, t: now });
+          }, 1000),
         );
       } else {
-        pos = start;
+        if (start) {
+          // Where the rider was a moment ago, loosely, until the GPS speaks.
+          onFix({ lat: start.lat, lon: start.lon, accuracy: 40, heading: null, speed: null, t: performance.now() });
+        }
         if ("geolocation" in navigator) {
           watchId = navigator.geolocation.watchPosition(
             function (p) {
-              pos = { lat: p.coords.latitude, lon: p.coords.longitude };
+              const c = p.coords;
+              onFix({ lat: c.latitude, lon: c.longitude, accuracy: c.accuracy, heading: c.heading, speed: c.speed, t: performance.now() });
             },
             function () {},
             { enableHighAccuracy: true, maximumAge: 2000 },
@@ -171,8 +219,8 @@ export default function WalkGuide({ stop, start, simulate, info, onArrived }: Pr
             const r = (h * Math.PI) / 180;
             sx = 0.8 * sx + 0.2 * Math.sin(r);
             sy = 0.8 * sy + 0.2 * Math.cos(r);
-            heading = ((Math.atan2(sx, sy) * 180) / Math.PI + 360) % 360;
-            headingAt = performance.now();
+            compassRaw = ((Math.atan2(sx, sy) * 180) / Math.PI + 360) % 360;
+            compassAt = performance.now();
           });
       timers.push(setInterval(update, 500));
 

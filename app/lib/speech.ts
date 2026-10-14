@@ -27,9 +27,24 @@ export function unlockAudio(): void {
   });
 }
 
+// One retry: the dev proxy can hit a keep-alive socket the server just closed (ECONNRESET -> 500),
+// and a skipped line ("50 метр.") is worse than a 150 ms delay.
 function fetchClip(text: string): Promise<string | null> {
   return fetch("/api/tts?text=" + encodeURIComponent(text))
     .then(function (res) {
+      if (!res.ok && res.status >= 500) {
+        return new Promise<Blob | null>(function (resolve) {
+          setTimeout(function () {
+            fetch("/api/tts?text=" + encodeURIComponent(text))
+              .then(function (again) {
+                resolve(again.ok ? again.blob() : null);
+              })
+              .catch(function () {
+                resolve(null);
+              });
+          }, 150);
+        });
+      }
       return res.ok ? res.blob() : null;
     })
     .then(function (blob) {
