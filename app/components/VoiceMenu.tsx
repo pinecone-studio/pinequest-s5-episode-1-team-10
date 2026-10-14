@@ -22,8 +22,8 @@ interface Props {
   children?: ReactNode; // shown inside the touch surface (plan card, camera)
 }
 
-const SWIPE_PX = 40;
-const DOUBLE_TAP_MS = 350;
+export const SWIPE_PX = 40;
+export const DOUBLE_TAP_MS = 350;
 
 export default function VoiceMenu({ items, primary, children }: Props) {
   const [index, setIndexState] = useState(-1); // -1: nothing reached yet

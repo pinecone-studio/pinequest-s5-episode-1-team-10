@@ -288,7 +288,7 @@ body {
   font-weight: 800;
 }
 
-/* Pitch demo: a live preview in the bottom-right corner; a tap opens it full screen. */
+/* Pitch demo: a still preview in the bottom-right corner; a tap opens it full screen and starts it. */
 .demo-corner {
   position: fixed;
   right: 12px;
@@ -370,4 +370,89 @@ body {
   .demo-corner {
     transition: none;
   }
+}
+
+/* First-use lesson (Tutorial.tsx): big current instruction, the spoken text under it. */
+.tutorial {
+  justify-content: center;
+  text-align: center;
+}
+
+.tutorial-step {
+  margin: 0;
+  font-size: 1rem;
+  color: #aaa;
+}
+
+.tutorial-title {
+  margin: 0;
+  font-size: 2.2rem;
+  font-weight: 800;
+  line-height: 1.2;
+  color: var(--accent);
+}
+
+.tutorial-text {
+  margin: 0 auto;
+  max-width: 32ch;
+  font-size: 1.15rem;
+  line-height: 1.5;
+}
+
+.tutorial {
+  position: relative;
+}
+
+.tutorial-skip {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  padding: 10px 22px;
+  border: 2px solid #555;
+  border-radius: 999px;
+  background: transparent;
+  color: #ddd;
+  font-size: 1rem;
+}
+
+/* Walking to the boarding stop (WalkGuide.tsx) */
+.walk {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  text-align: center;
+}
+
+.walk-stop {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.walk-dist {
+  margin: 0;
+  font-size: 3.2rem;
+  font-weight: 800;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.walk-dir {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 1.6rem;
+  font-weight: 700;
+}
+
+.walk-arrow {
+  display: inline-block;
+  font-size: 3rem;
+  transition: transform 0.3s;
+}
+
+/* Two-bus trip on the plan card: "Ч:58 → Ч:49" */
+.route-then {
+  color: var(--accent);
 }

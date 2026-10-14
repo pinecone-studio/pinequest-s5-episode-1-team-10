@@ -10,6 +10,7 @@ import { verifySign } from "../lib/api";
 import { aimBeacon, startBeacon, stopBeacon } from "../lib/beacon";
 import { MIN_BUS_WIDTH, signCrop } from "../lib/crop";
 import { detectBuses, loadDetector, type Box } from "../lib/detector";
+import { detectFrontDoor, loadDoorDetector } from "../lib/doorDetector";
 import { frontIsRight, guideToDoor, type DoorGuide } from "../lib/door";
 import { phrase, say, sayPhrase, vibrate, type PhraseKey } from "../lib/speech";
 import { addVote, updateTracks, VOTE_WINDOW, type Track } from "../lib/tracker";
@@ -26,6 +27,8 @@ interface Props {
 const GUIDE_EVERY_MS = 4000; // repeat "door at 2 o'clock, 9 steps" this often
 const LOST_AFTER_MS = 2000;
 const MOVING = 0.00015; // bus box moving faster than 15% of its length per second = bus is moving
+const DOOR_EVERY_MS = 150; // door model runs at most this often (it's 4x the bus model's size)
+const DOOR_KEEP_MS = 2000; // a door seen this recently still counts (it moves with the bus box)
 
 // "Хаалга 2 цагийн зүгт. 9 алхам." from pre-made clips.
 export function doorSpeech(g: DoorGuide): string[] {
@@ -79,6 +82,7 @@ function draw(
   tracks: Track[],
   target: Track | null,
   door: DoorGuide | null,
+  doorBox: Box | null,
 ): void {
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
@@ -98,10 +102,18 @@ function draw(
     const b = target.box;
     ctx.strokeStyle = "#00e676";
     ctx.lineWidth = 10;
-    ctx.beginPath();
-    ctx.moveTo(door.x, b.y + b.h * 0.25);
-    ctx.lineTo(door.x, b.y + b.h);
-    ctx.stroke();
+    if (doorBox) {
+      // The front door the model found.
+      ctx.strokeRect(doorBox.x, doorBox.y, doorBox.w, doorBox.h);
+    } else {
+      // Geometry guess: a line where the front door should be.
+      ctx.setLineDash([24, 16]);
+      ctx.beginPath();
+      ctx.moveTo(door.x, b.y + b.h * 0.25);
+      ctx.lineTo(door.x, b.y + b.h);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
     ctx.fillStyle = "#00e676";
     ctx.font = "bold 40px sans-serif";
     const label = door.ahead ? "ХААЛГА ↑" : "ХААЛГА " + door.clock + " цаг";
@@ -133,6 +145,11 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
       let lastLostSpoken = 0;
       let lastAheadBuzz = 0;
       let closeSaid = false;
+      const openedAt = performance.now(); // for the "[bus] yes after N ms" log (speed checks)
+      let doorFromFront: number | null = null; // smoothed door-model position, share of the bus length
+      let doorSeenAt = 0;
+      let doorBox: Box | null = null;
+      let lastDoorRun = 0;
 
       function speak(texts: string[]): void {
         talking = true;
@@ -153,7 +170,11 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
           }
           return null;
         }
-        const g = guideToDoor(bus.box, video.videoWidth, frontIsRight(bus.vx, bus.box));
+        const recent = now - doorSeenAt < DOOR_KEEP_MS;
+        if (!recent) {
+          doorBox = null;
+        }
+        const g = guideToDoor(bus.box, video.videoWidth, video.videoHeight, frontIsRight(bus.vx, bus.box), recent ? doorFromFront : null);
         guide.current = g;
         aimBeacon(g.angle);
         // Safety first: a moving bus overrides everything else.
@@ -180,6 +201,21 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         return g;
       }
 
+      // Door model on the front end of the confirmed bus; its position is kept relative to the bus
+      // box (smoothed), so the beacon follows the door as the bus or the phone moves.
+      async function findDoor(video: HTMLVideoElement, bus: Track, now: number): Promise<void> {
+        const frontRight = frontIsRight(bus.vx, bus.box);
+        const box = await detectFrontDoor(video, bus.box, frontRight);
+        if (!box) {
+          return;
+        }
+        const centre = box.x + box.w / 2;
+        const rel = Math.abs((frontRight ? bus.box.x + bus.box.w : bus.box.x) - centre) / bus.box.w;
+        doorFromFront = doorFromFront === null || now - doorSeenAt > DOOR_KEEP_MS ? rel : 0.6 * doorFromFront + 0.4 * rel;
+        doorSeenAt = now;
+        doorBox = box;
+      }
+
       function announce(track: Track): void {
         const now = performance.now();
         if (track.decision === track.announced) {
@@ -191,7 +227,9 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
             return;
           }
           target = track; // keep following this bus to its door
+          loadDoorDetector(); // already loaded with WebGPU; on CPU it starts now (geometry until it's ready)
           foundAt = now;
+          console.info("[bus] yes after " + Math.round(now - openedAt) + " ms from camera open, " + track.votes.length + " reads");
           lastGuideSpoken = now; // the intro below already guides; first clock direction comes after it
           vibrate([400, 100, 400]);
           speak([foundSpeech, phrase("door_intro")]);
@@ -242,7 +280,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
             return;
           }
           track.lastAnswer = performance.now();
-          addVote(track, res.verdict as Verdict);
+          addVote(track, res.verdict as Verdict, res.confidence);
           announce(track);
         });
       }
@@ -261,7 +299,14 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         tracks = updateTracks(tracks, found.buses, now);
         if (target) {
           // The bus is confirmed: only the door matters now (no more sign reading).
-          draw(overlay, video, tracks, target, guideDoor(video, now));
+          if (target.lastSeen === now && now - lastDoorRun >= DOOR_EVERY_MS) {
+            lastDoorRun = now;
+            await findDoor(video, target, now);
+            if (stopped) {
+              return;
+            }
+          }
+          draw(overlay, video, tracks, target, guideDoor(video, now), doorBox);
           requestNext();
           return;
         }
@@ -281,7 +326,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
               ask(video, item, now, found.others);
             }
           });
-        draw(overlay, video, tracks, null, null);
+        draw(overlay, video, tracks, null, null, null);
         requestNext();
       }
 
@@ -342,6 +387,11 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         sayPhrase("camera_on");
         setStatus("Загвар ачаалж байна…");
         const provider = await loadDetector();
+        // Door model in the background, needed only once the bus is found. Without WebGPU both models
+        // share one CPU queue, so it waits for the "yes" instead of slowing the sign reading.
+        if (provider === "webgpu") {
+          loadDoorDetector();
+        }
         setStatus("Автобус хайж байна (" + provider + ")");
         tick();
       }

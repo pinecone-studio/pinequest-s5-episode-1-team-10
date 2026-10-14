@@ -5,11 +5,12 @@
 // simulate: the bus drives the real stops at demo speed (pitch stage, desk testing).
 import { useEffect, useState, type MutableRefObject } from "react";
 import type { RideResponse, RideStop } from "../../shared/contract";
+import { metres } from "../lib/geo";
 import { phrase, say, vibrate, type PhraseKey } from "../lib/speech";
 
 export interface RideInfo {
   left: number; // stops still to ride
-  next: string; // "Дараагийн зогсоол: ..." or ""
+  next: string[]; // ["Дараагийн зогсоол:", "МУБИС.", "Зүүн тал."] or []
 }
 
 interface Props {
@@ -24,16 +25,10 @@ interface Props {
 const REACH_M = 60; // within this of a stop = the bus is at it
 const ANNOUNCE_M = 300; // say the next stop when this close
 const OFF_M = 150; // "get off now" when the bus is this close to the rider's stop
+const MAX_FIX_M = 100;
 const LOST_MS = 60000; // no GPS fix this long -> tell the rider to ask the driver
 const SIM_SEGMENT_MS = 3500; // simulated drive between two stops
 const SIM_DWELL_MS = 1500; // simulated stop at each stop
-
-function metres(aLat: number, aLon: number, bLat: number, bLon: number): number {
-  const r = Math.PI / 180;
-  const x = (bLon - aLon) * r * Math.cos(((aLat + bLat) / 2) * r);
-  const y = (bLat - aLat) * r;
-  return Math.sqrt(x * x + y * y) * 6371000;
-}
 
 export function leftSpeech(left: number): string {
   return left >= 1 && left <= 20 ? phrase(("left_" + left) as PhraseKey) : "";
@@ -60,7 +55,7 @@ export default function RideGuide({ route, board, alight, simulate, info, onArri
       // The next stop that can be announced: Hamuga has no name/coordinates for a few (they still count).
       function nextNamed(): number {
         for (let j = at + 1; j < list.length; j++) {
-          if (list[j].speech && list[j].lat !== null && list[j].lon !== null) {
+          if (list[j].speech.length && list[j].lat !== null && list[j].lon !== null) {
             return j;
           }
         }
@@ -69,7 +64,7 @@ export default function RideGuide({ route, board, alight, simulate, info, onArri
 
       function update(): void {
         const last = list.length - 1;
-        info.current = { left: last - at, next: at < last ? list[nextNamed()].speech : "" };
+        info.current = { left: last - at, next: at < last ? list[nextNamed()].speech : [] };
         setReached(at);
       }
 
@@ -118,7 +113,7 @@ export default function RideGuide({ route, board, alight, simulate, info, onArri
           const s = list[next];
           if (metres(lat, lon, s.lat as number, s.lon as number) < ANNOUNCE_M) {
             announced = next;
-            say([s.speech, leftSpeech(last - next)].filter(Boolean));
+            say(s.speech.concat(leftSpeech(last - next)).filter(Boolean));
           }
         }
         update();
@@ -162,15 +157,24 @@ export default function RideGuide({ route, board, alight, simulate, info, onArri
             "/api/ride?route=" + encodeURIComponent(route) + "&board=" + encodeURIComponent(board) + "&alight=" + encodeURIComponent(alight),
           );
         } catch {
+          if (stopped) {
+            return;
+          }
           setError(phrase("server_down"));
           say([phrase("server_down")]);
           return;
         }
-        if (!res.ok || stopped) {
+        if (stopped) {
+          return; // unmounted while loading: not an error
+        }
+        if (!res.ok) {
           setError(phrase("ride_lost"));
           return;
         }
         list = ((await res.json()) as RideResponse).stops;
+        if (stopped) {
+          return;
+        }
         update();
         setStops(list);
         say([phrase("ride_start")]);
@@ -179,7 +183,10 @@ export default function RideGuide({ route, board, alight, simulate, info, onArri
         } else if ("geolocation" in navigator) {
           watchId = navigator.geolocation.watchPosition(
             function (pos) {
-              onPosition(pos.coords.latitude, pos.coords.longitude);
+              // A fix this vague could put the bus a stop early or late: wait for a better one.
+              if (pos.coords.accuracy <= MAX_FIX_M) {
+                onPosition(pos.coords.latitude, pos.coords.longitude);
+              }
             },
             function () {},
             { enableHighAccuracy: true, maximumAge: 2000 },

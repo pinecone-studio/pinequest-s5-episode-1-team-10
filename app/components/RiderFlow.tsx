@@ -3,21 +3,29 @@
 // Rider journey: start -> where am I (GPS, or say it) -> say destination -> one suggested bus ->
 // camera -> "this is your bus". Every screen is a VoiceMenu: swipe to hear the options, double tap
 // to choose, all spoken in Mongolian, so a blind rider always knows what they can do.
-import { useCallback, useRef, useState, type FormEvent } from "react";
-import type { PlanResponse, VoiceLocateResponse } from "../../shared/contract";
-import { locateBySpeech, locateByText, nearestStop, requestPlan, requestVoicePlan } from "../lib/api";
+import { useCallback, useMemo, useRef, useState, type FormEvent } from "react";
+import type { BoardStop, PlanResponse, PlanStop, VoiceLocateResponse } from "../../shared/contract";
+import { locateBySpeech, locateByText, nearestStop, requestPlan, requestVoicePlan, serverCaps, type ServerCaps } from "../lib/api";
+import { listenInBrowser } from "../lib/listen";
 import { GPS_OK_M, locate, type Position } from "../lib/location";
 import { beep, record, type Recording } from "../lib/record";
 import { primeBeacon } from "../lib/beacon";
+import { requestCompassPermission } from "../lib/compass";
+import { routeLabel } from "../lib/route";
+import { loadDetector } from "../lib/detector";
+import { loadDoorDetector } from "../lib/doorDetector";
 import type { DoorGuide } from "../lib/door";
 import { phrase, prefetch, say, stopSpeaking, unlockAudio, type PhraseKey } from "../lib/speech";
 import BusCamera, { doorSpeech } from "./BusCamera";
 import PlanCard from "./PlanCard";
 import RideGuide, { leftSpeech, type RideInfo } from "./RideGuide";
+import Tutorial, { tutorialNeeded } from "./Tutorial";
+import WalkGuide from "./WalkGuide";
 import VoiceMenu, { type MenuItem } from "./VoiceMenu";
 
 type Step =
   | "start"
+  | "learn" // first-use lesson: headphones, wearing the phone, gestures, ear check
   | "locating"
   | "where"
   | "whereListening"
@@ -25,6 +33,7 @@ type Step =
   | "listening"
   | "working"
   | "planned"
+  | "walk" // walking to the boarding stop: compass direction + distance
   | "camera" // find the bus, then guide to its door
   | "ride" // on the bus, until the rider's stop
   | "arrived";
@@ -34,6 +43,27 @@ function simulatedRide(): boolean {
   const q = new URLSearchParams(window.location.search);
   return q.get("ride") === "sim" || q.has("image") || q.has("video");
 }
+
+// ?walk=sim: a simulated walk to the stop (pitch stage, desk testing), even when already close to it.
+function simulatedWalk(): boolean {
+  return new URLSearchParams(window.location.search).get("walk") === "sim";
+}
+
+const AT_STOP_M = 30;
+
+// One bus of the trip: the first, or the second after a transfer (дамжин суух).
+interface Leg {
+  route: string;
+  board: BoardStop;
+  alight: PlanStop;
+  foundSpeech: string;
+}
+function legOf(plan: PlanResponse, leg: number): Leg {
+  const t = plan.transfer;
+  return leg === 1 && t
+    ? { route: t.route, board: t.board_stop, alight: t.alight_stop, foundSpeech: t.found_speech }
+    : { route: plan.route, board: plan.board_stop, alight: plan.alight_stop, foundSpeech: plan.found_speech };
+} // closer than this to the boarding stop: no walking guidance needed
 
 // ?lat=47.91&lon=106.92 overrides GPS, for testing away from the stop.
 function testPosition(): Position | null {
@@ -48,14 +78,22 @@ export default function RiderFlow() {
   const [message, setMessage] = useState("");
   const [typed, setTyped] = useState("");
   const [plan, setPlan] = useState<PlanResponse | null>(null);
+  const [leg, setLeg] = useState(0); // 0: first bus, 1: second bus after the transfer
+  const planRef = useRef<PlanResponse | null>(null); // for callbacks
+  const legRef = useRef(0);
   const [heard, setHeard] = useState("");
   const [place, setPlace] = useState(""); // where the app thinks the rider is
   const position = useRef<Position | null>(null);
   const fromGps = useRef(false); // GPS positions are refreshed on each request; a said place is kept
   const recording = useRef<Recording | null>(null);
+  const caps = useRef<ServerCaps>({ stt: true, ocr: true });
+  const browserListening = useRef<{ stop: () => void } | null>(null);
   const [found, setFound] = useState(false); // the camera confirmed the rider's bus: now guiding to its door
   const doorGuide = useRef<DoorGuide | null>(null);
   const rideInfo = useRef<RideInfo | null>(null);
+  const walkInfo = useRef<string[] | null>(null);
+  const [atStop, setAtStop] = useState(true); // false: offer walking guidance to the boarding stop first
+  const [walkFrom, setWalkFrom] = useState<{ lat: number; lon: number } | null>(null); // rider's position when the walk starts
 
   // Show and speak: keys are pre-made clips (instant), plain strings are made live.
   function announce(parts: (PhraseKey | { text: string })[]): Promise<void> {
@@ -74,10 +112,24 @@ export default function RiderFlow() {
   function showPlan(found: PlanResponse, heardText: string): void {
     setHeard(heardText);
     setPlan(found);
+    planRef.current = found;
+    legRef.current = 0;
+    setLeg(0);
+    const far = found.board_stop.distance_m >= AT_STOP_M || simulatedWalk();
+    setAtStop(!far);
     setStep("planned");
     setMessage(found.speech.join(" "));
     // The first sentence ("34-р автобусанд суугаарай.") is pre-made, so it plays at once.
-    say(found.speech.concat(phrase("open_camera")));
+    say(found.speech.concat(phrase(far ? "plan_walk" : "open_camera")));
+    // Load + warm both models while the route is read out, so the camera detects from its first frame.
+    loadDetector()
+      .then(function (provider) {
+        // Without WebGPU the door model would queue in front of bus detection: it loads after the "yes".
+        return provider === "webgpu" ? loadDoorDetector() : undefined;
+      })
+      .catch(function () {
+        // the camera step loads (and reports) it again
+      });
   }
 
   // GPS if it's precise enough; otherwise the rider is asked to say where they are.
@@ -102,7 +154,45 @@ export default function RiderFlow() {
 
   function begin(): void {
     unlockAudio(); // inside the first touch, or iPhones stay silent
-    findMe(["tutorial", "locating"]);
+    primeBeacon(); // the lesson's ear check plays the door beacon
+    serverCaps().then(function (c) {
+      caps.current = c;
+    });
+    if (tutorialNeeded()) {
+      setStep("learn");
+    } else {
+      findMe(["locating"]);
+    }
+  }
+
+  // After the lesson: find the rider (first time) or go back to choosing a destination (replay from Help).
+  const onLearned = useCallback(function () {
+    if (position.current) {
+      setStep("ask");
+      announce(["welcome"]);
+    } else {
+      findMe(["locating"]);
+    }
+    // announce/findMe only use refs and state setters
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  function replayTutorial(): void {
+    stopSpeaking();
+    primeBeacon();
+    setStep("learn");
+  }
+
+  // Free hosting has no Whisper: the browser recognises the speech, and the text goes to the server.
+  async function hearInBrowser(listeningStep: Step): Promise<string> {
+    stopSpeaking();
+    setStep(listeningStep);
+    setMessage(phrase("menu_stop_listening"));
+    await beep();
+    const rec = listenInBrowser();
+    browserListening.current = rec;
+    const text = await rec.done;
+    browserListening.current = null;
+    return text;
   }
 
   // Beep, record until the rider stops talking (or double taps). null = nothing said; the caller
@@ -142,6 +232,17 @@ export default function RiderFlow() {
   }
 
   async function sayWhereIAm(): Promise<void> {
+    if (!caps.current.stt) {
+      const text = await hearInBrowser("whereListening");
+      if (!text) {
+        setStep("where");
+        announce(["not_heard"]);
+        return;
+      }
+      setStep("working");
+      applyPlace(await locateByText(text));
+      return;
+    }
     const wav = await hear("whereListening", "where").catch(function () {
       return undefined;
     });
@@ -192,6 +293,16 @@ export default function RiderFlow() {
   }
 
   async function sayDestination(): Promise<void> {
+    if (!caps.current.stt) {
+      const text = await hearInBrowser("listening");
+      if (!text) {
+        setStep("ask");
+        announce(["not_heard"]);
+        return;
+      }
+      planTrip(text);
+      return;
+    }
     const positionNow = currentPosition(); // GPS refresh runs while the rider talks
     const wav = await hear("listening", "ask").catch(function () {
       return undefined;
@@ -244,6 +355,20 @@ export default function RiderFlow() {
     setFound(true);
   }, []);
   const onArrived = useCallback(function () {
+    const p = planRef.current;
+    if (p && p.transfer && legRef.current === 0) {
+      // Off bus 1 at the transfer stop: now the second bus (walk there first if it's across the street).
+      legRef.current = 1;
+      setLeg(1);
+      const far = p.transfer.board_stop.distance_m >= AT_STOP_M;
+      setAtStop(!far);
+      setFound(false);
+      setStep("planned");
+      const texts = [phrase("transfer_arrived")].concat(p.transfer.speech, phrase(far ? "plan_walk" : "open_camera"));
+      setMessage(texts.join(" "));
+      say(texts);
+      return;
+    }
     setStep("arrived");
     setMessage(phrase("arrived"));
     say([phrase("arrived")]);
@@ -262,6 +387,9 @@ export default function RiderFlow() {
     if (recording.current) {
       recording.current.stop();
     }
+    if (browserListening.current) {
+      browserListening.current.stop();
+    }
   }
   function sayMyLocation(): void {
     announce(["your_location_is", { text: place }]);
@@ -269,6 +397,34 @@ export default function RiderFlow() {
   function retryGps(): void {
     findMe(["locating"]);
   }
+  function startWalk(): void {
+    stopSpeaking();
+    primeBeacon(); // inside the double tap (iPhone)
+    requestCompassPermission(); // iPhone asks only inside a tap
+    const p = position.current;
+    setWalkFrom(p ? { lat: p.lat, lon: p.lon } : null);
+    setStep("walk");
+  }
+  function whereIsStop(): void {
+    say(walkInfo.current ?? [phrase("wait")]);
+  }
+  const onWalked = useCallback(function () {
+    setAtStop(true);
+    setStep("planned");
+    setMessage(phrase("walk_arrived"));
+  }, []);
+  // Stable props for WalkGuide (a new object each render would restart its GPS and compass).
+  const walkStop = useMemo(
+    function () {
+      if (!plan) {
+        return null;
+      }
+      const b = legOf(plan, leg).board;
+      return { lat: b.lat, lon: b.lon, name: b.name };
+    },
+    [plan, leg],
+  );
+
   function openCamera(): void {
     stopSpeaking();
     primeBeacon(); // inside the double tap, or iPhones won't play the door beacon
@@ -286,7 +442,7 @@ export default function RiderFlow() {
   function stopsLeft(): void {
     const r = rideInfo.current;
     if (r) {
-      say([leftSpeech(r.left), r.next].filter(Boolean));
+      say([leftSpeech(r.left)].concat(r.next).filter(Boolean));
     }
   }
   function gotOff(): void {
@@ -311,11 +467,15 @@ export default function RiderFlow() {
   }
   function startOver(): void {
     setPlan(null);
+    planRef.current = null;
+    legRef.current = 0;
+    setLeg(0);
     setStep("ask");
     announce(["welcome"]);
   }
 
   const help: MenuItem = { ...label("help", "menu_help"), onActivate: sayHelp };
+  const tutorial: MenuItem = { ...label("tutorial", "menu_tutorial"), onActivate: replayTutorial };
   const changeLocation: MenuItem = { ...label("move", "menu_change_location"), onActivate: goWhere };
   const myLocation: MenuItem = {
     ...label("here", "menu_my_location"),
@@ -331,17 +491,25 @@ export default function RiderFlow() {
       { ...label("say-where", "menu_say_where"), onActivate: sayWhereIAm },
       { ...label("gps", "menu_retry_gps"), onActivate: retryGps },
       help,
+      tutorial,
     ];
   } else if (step === "ask") {
-    items = [{ ...label("say-dest", "menu_say_destination"), onActivate: sayDestination }, myLocation, changeLocation, help];
+    items = [{ ...label("say-dest", "menu_say_destination"), onActivate: sayDestination }, myLocation, changeLocation, help, tutorial];
   } else if (step === "listening" || step === "whereListening") {
     items = [{ ...label("stop", "menu_stop_listening"), onActivate: stopRecording }];
   } else if (step === "planned") {
+    const camera: MenuItem = { ...label("camera", "menu_open_camera"), onActivate: openCamera };
+    const walk: MenuItem = { ...label("walk", "menu_walk"), onActivate: startWalk };
+    const repeat: MenuItem = { ...label("repeat", "menu_repeat_route"), onActivate: repeatRoute };
+    const other: MenuItem = { ...label("other", "menu_other_destination"), onActivate: otherDestination };
+    // Far from the stop: guiding there comes first; at the stop: the camera.
+    items = atStop ? [camera, walk, repeat, other, changeLocation, help] : [walk, camera, repeat, other, changeLocation, help];
+  } else if (step === "walk") {
     items = [
+      { ...label("where-stop", "menu_where_stop"), onActivate: whereIsStop },
       { ...label("camera", "menu_open_camera"), onActivate: openCamera },
       { ...label("repeat", "menu_repeat_route"), onActivate: repeatRoute },
-      { ...label("other", "menu_other_destination"), onActivate: otherDestination },
-      changeLocation,
+      { ...label("back", "menu_back"), onActivate: backToPlan },
       help,
     ];
   } else if (step === "camera" && !found) {
@@ -383,6 +551,16 @@ export default function RiderFlow() {
     );
   }
 
+  const cur = plan ? legOf(plan, leg) : null; // the bus the rider is taking now
+
+  if (step === "learn") {
+    return (
+      <main className="flow">
+        <Tutorial onDone={onLearned} />
+      </main>
+    );
+  }
+
   return (
     <main className="flow">
       <p className="message" aria-live="polite">
@@ -391,33 +569,40 @@ export default function RiderFlow() {
       {place && (step === "ask" || step === "listening") && <p className="place">Таны байршил: {place}</p>}
 
       <VoiceMenu key={step} items={items} primary={primary}>
-        {step === "planned" && plan && <PlanCard plan={plan} heard={heard} />}
-        {step === "camera" && plan && (
+        {step === "planned" && plan && <PlanCard plan={plan} heard={heard} leg={leg} />}
+        {step === "walk" && cur && walkStop && (
+          <>
+            <p className="route-banner">{routeLabel(cur.route)}</p>
+            <WalkGuide stop={walkStop} start={walkFrom} simulate={simulatedWalk()} info={walkInfo} onArrived={onWalked} />
+          </>
+        )}
+        {step === "camera" && cur && (
           <>
             {found ? (
               <p className="found" role="alert">
-                {plan.route} ТАНЫ АВТОБУС · хаалга руу
+                {routeLabel(cur.route)} ТАНЫ АВТОБУС · хаалга руу
               </p>
             ) : (
-              <p className="route-banner">{plan.route}</p>
+              <p className="route-banner">{routeLabel(cur.route)}</p>
             )}
             <BusCamera
-              stopId={plan.board_stop.stop_id}
-              route={plan.route}
-              foundSpeech={plan.found_speech}
+              stopId={cur.board.stop_id}
+              route={cur.route}
+              foundSpeech={cur.foundSpeech}
               onFound={onFound}
               onError={onCameraError}
               guide={doorGuide}
             />
           </>
         )}
-        {step === "ride" && plan && (
+        {step === "ride" && cur && (
           <>
-            <p className="route-banner">{plan.route}</p>
+            <p className="route-banner">{routeLabel(cur.route)}</p>
             <RideGuide
-              route={plan.route}
-              board={plan.board_stop.stop_id}
-              alight={plan.alight_stop.stop_id}
+              key={leg} // a fresh ride for the second bus
+              route={cur.route}
+              board={cur.board.stop_id}
+              alight={cur.alight.stop_id}
               simulate={simulatedRide()}
               info={rideInfo}
               onArrived={onArrived}
@@ -426,7 +611,7 @@ export default function RiderFlow() {
         )}
         {step === "arrived" && plan && (
           <p className="found" role="alert">
-            {plan.alight_stop.name}
+            {(plan.transfer ? plan.transfer.alight_stop : plan.alight_stop).name}
             <br />
             ИРЛЭЭ
           </p>

@@ -47,6 +47,22 @@ export async function requestVoicePlan(wav: Blob, lat: number, lon: number): Pro
   }
 }
 
+// What the server can do: a free host has no Whisper (speech is recognised in the browser) and no OCR.
+export interface ServerCaps {
+  stt: boolean;
+  ocr: boolean;
+}
+
+export async function serverCaps(): Promise<ServerCaps> {
+  try {
+    const res = await fetch("/api/health");
+    const body = (await res.json()) as { stt?: boolean; ocr?: boolean };
+    return { stt: body.stt !== false, ocr: body.ocr !== false };
+  } catch {
+    return { stt: true, ocr: true };
+  }
+}
+
 // Closest stop to a GPS position, so the rider hears and sees where the app thinks they are.
 export async function nearestStop(lat: number, lon: number): Promise<NearestStop | null> {
   try {

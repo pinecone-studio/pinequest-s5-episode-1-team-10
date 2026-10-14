@@ -21,3 +21,8 @@ node_modules/
 app/public/ort/
 app/public/test/
 server/hamuga_cache/
+
+# Door model export (server/export_door.py) downloads
+server/yoloe-*.pt
+server/yoloe-*.onnx
+server/mobileclip*

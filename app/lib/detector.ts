@@ -33,12 +33,30 @@ const canvas = typeof document === "undefined" ? null : document.createElement("
 
 let loading: Promise<string> | null = null;
 
+// onnxruntime-web's WASM backend (phones without WebGPU) crashes ("memory access out of bounds") when
+// two sessions run at once (the door model warming up while the bus model detects). Every model load
+// and run, of both models, goes through this one queue.
+let queue: Promise<unknown> = Promise.resolve();
+export function exclusive<T>(job: () => Promise<T>): Promise<T> {
+  const result = queue.then(job, job);
+  queue = result.catch(function () {});
+  return result;
+}
+
 async function load(): Promise<string> {
   // Loaded from public/ort as-is (copied by scripts/copy-ort.mjs) so the bundler never touches it.
   ort = (await import(/* turbopackIgnore: true */ /* webpackIgnore: true */ "/ort/ort.webgpu.min.mjs" as string)) as OrtModule;
   ort.env.wasm.wasmPaths = "/ort/";
   const providers = "gpu" in navigator ? ["webgpu", "wasm"] : ["wasm"];
-  session = await ort.InferenceSession.create(MODEL_URL, { executionProviders: providers });
+  const o = ort;
+  session = await exclusive(function () {
+    return o.InferenceSession.create(MODEL_URL, { executionProviders: providers });
+  });
+  // The first run compiles the GPU shaders (~1 s on a phone): do it now, not on the first camera frame.
+  const s = session;
+  await exclusive(function () {
+    return s.run({ [s.inputNames[0]]: new o.Tensor("float32", new Float32Array(3 * SIZE * SIZE), [1, 3, SIZE, SIZE]) });
+  });
   return providers[0];
 }
 
@@ -51,6 +69,12 @@ export function loadDetector(): Promise<string> {
     });
   }
   return loading;
+}
+
+// The loaded onnxruntime module and its execution providers, for the door model (lib/doorDetector.ts).
+export async function runtime(): Promise<{ ort: OrtModule; providers: string[] }> {
+  const provider = await loadDetector();
+  return { ort: ort as OrtModule, providers: provider === "webgpu" ? ["webgpu", "wasm"] : ["wasm"] };
 }
 
 export function iou(a: Box, b: Box): number {
@@ -111,7 +135,10 @@ export async function detectBuses(video: HTMLVideoElement): Promise<Detections> 
   }
   const { data, scale, padX, padY } = toTensor(video);
   const input = new ort.Tensor("float32", data, [1, 3, SIZE, SIZE]);
-  const output = await session.run({ [session.inputNames[0]]: input });
+  const s = session;
+  const output = await exclusive(function () {
+    return s.run({ [s.inputNames[0]]: input });
+  });
   // Output [1, 84, N]: rows 0-3 = cx, cy, w, h; rows 4.. = class scores.
   const out = output[session.outputNames[0]];
   const values = out.data as Float32Array;

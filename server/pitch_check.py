@@ -47,9 +47,11 @@ def server_health():
 def yolo_model():
     r = httpx.head(APP + "/models/yolo11n.onnx", timeout=10)
     r.raise_for_status()
+    r = httpx.head(APP + "/models/door.onnx", timeout=10)
+    r.raise_for_status()
     r = httpx.head(APP + "/ort/ort.webgpu.min.mjs", timeout=10)
     r.raise_for_status()
-    return "YOLO model and onnxruntime files served"
+    return "bus + front-door models and onnxruntime files served"
 
 
 def plan_demo():

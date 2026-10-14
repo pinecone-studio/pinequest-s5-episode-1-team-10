@@ -31,6 +31,7 @@ DIRECTIONS = {
            "reverseRotStopList": [{"busStopId": "3", "busStopSeq": "0"}, {"busStopId": "1", "busStopSeq": "1"}]},
     "30": {"rotStopList": [{"busStopId": "3", "busStopSeq": "0"}, {"busStopId": "1", "busStopSeq": "1"}],
            "reverseRotStopList": []},
+    "9": {"rotStopList": [{"busStopId": "4", "busStopSeq": "0"}], "reverseRotStopList": []},
 }
 HOME = (47.9003, 106.9000)  # ~33 m from stop 1
 
@@ -49,6 +50,7 @@ def fake_hamuga(monkeypatch, tmp_path):
     monkeypatch.setattr(tts, "prefetch_in_background", lambda texts, live=False: None)
     bus_api._stops.cache_clear(); bus_api._stations.cache_clear()
     bus_api.route_directions.cache_clear()
+    planner._stops_by_id.cache_clear(); planner._neighbours.cache_clear(); planner._names_by_fold.cache_clear()
     yield
     bus_api._stops.cache_clear(); bus_api._stations.cache_clear()
     bus_api.route_directions.cache_clear()
@@ -68,7 +70,9 @@ def test_plan_suggests_direct_route_in_riding_direction():
     assert body["stops_to_ride"] == 2
     assert body["routes_at_stop"] == ["Ч:30", "Ч:75"]
     assert body["speech"][0] == "75-р автобусанд суугаарай."
-    assert body["speech"][2] == "2 зогсоол яваад Сансар ШТС, урд тал зогсоол дээр бууна."
+    # Home stop is ~33 m away; every piece is a pre-recordable clip
+    assert body["speech"] == ["75-р автобусанд суугаарай.", "Суух зогсоол:", "Home.", "Хойд тал.", "Зогсоол руу 30 метр алхана.",
+                              "2 зогсоол явна.", "Буух зогсоол:", "Сансар ШТС.", "Урд тал."]
     assert body["found_speech"] == "75-р автобус ирлээ. Энэ таны автобус."
 
 
@@ -76,10 +80,35 @@ def test_plan_matches_suffixed_words():
     assert plan("Сансарт очно").json()["alight_stop"]["stop_id"] == "3"
 
 
-def test_plan_no_direct_bus_is_404_with_spoken_reason():
-    r = plan("Улсын их дэлгүүр")
+def test_plan_no_bus_at_all_is_404_with_spoken_reason():
+    r = plan("Улсын их дэлгүүр")  # Х:9 only starts there: no direct bus, no transfer
     assert r.status_code == 404
-    assert "шууд автобус алга" in r.json()["detail"]
+    assert r.json()["detail"] == planner.MSG_NO_DIRECT
+
+
+def test_plan_transfer_when_no_direct_bus(monkeypatch):
+    # Х:9 runs Mid -> Улсын Их Дэлгүүр: Home -(Ч:75, 1 stop)-> Mid -(Х:9, 1 stop)-> УИД
+    monkeypatch.setitem(DIRECTIONS, "9", {"rotStopList": [{"busStopId": "2", "busStopSeq": "0"}, {"busStopId": "4", "busStopSeq": "1"}],
+                                          "reverseRotStopList": []})
+    monkeypatch.setitem(GROUP_INFO[1], "routeList", [{"busRouteId": "75", "busRouteNo": "Ч:75"}, {"busRouteId": "9", "busRouteNo": "Х:9"}])
+    bus_api._stops.cache_clear(); planner._stops_by_id.cache_clear(); planner._neighbours.cache_clear()
+    body = plan("Улсын их дэлгүүр").json()
+    assert body["route"] == "Ч:75" and body["board_stop"]["stop_id"] == "1"
+    assert body["alight_stop"]["stop_id"] == "2" and body["stops_to_ride"] == 1
+    t = body["transfer"]
+    assert t["route"] == "Х:9" and t["board_stop"]["stop_id"] == "2" and t["board_stop"]["distance_m"] == 0
+    assert t["alight_stop"]["stop_id"] == "4" and t["stops_to_ride"] == 1
+    assert t["found_speech"] == "9-р автобус ирлээ. Энэ таны автобус."
+    assert t["speech"] == ["9-р автобусанд дамжин суугаарай.", "1 зогсоол явна.", "Буух зогсоол:", "Улсын Их Дэлгүүр.", "Урд тал."]
+    assert body["speech"] == ["75-р автобусанд суугаарай.", "Суух зогсоол:", "Home.", "Хойд тал.", "Зогсоол руу 30 метр алхана.",
+                              "1 зогсоол явна.", "Дамжин суух зогсоол:", "Mid.", "9-р автобусанд дамжин суугаарай.",
+                              "1 зогсоол явна.", "Буух зогсоол:", "Улсын Их Дэлгүүр.", "Урд тал."]
+
+
+def test_direct_bus_beats_a_transfer_with_a_few_more_stops(monkeypatch):
+    # Сансар: Ч:75 direct (2 stops) vs nothing better -> direct, no transfer
+    body = plan("Сансар").json()
+    assert body["route"] == "Ч:75" and body["transfer"] is None
 
 
 def test_plan_unknown_place_is_404():
@@ -245,7 +274,7 @@ def test_gets_off_at_the_named_stop_not_a_closer_neighbour(monkeypatch):
         body = plan("Сансар").json()
         assert body["alight_stop"]["stop_id"] == "3" and body["destination"]["stop_id"] == "3"
         assert body["stops_to_ride"] == 3
-        assert "ойрхон" not in body["speech"][2]
+        assert "Очих газар тань тэндээс ойрхон." not in body["speech"]
     finally:
         GROUP_INFO.pop()
         STATIONS.pop()
@@ -260,7 +289,7 @@ def test_neighbour_only_when_no_bus_reaches_the_named_stop(monkeypatch):
         body = plan("Хүрээлэн").json()
         assert body["destination"]["stop_id"] == "8"
         assert body["alight_stop"]["stop_id"] == "3"
-        assert body["speech"][2].endswith("Хүрээлэн тэндээс ойрхон.")
+        assert body["speech"][-1] == "Очих газар тань тэндээс ойрхон."
     finally:
         GROUP_INFO.pop()
         STATIONS.pop()
@@ -336,7 +365,7 @@ def test_locate_by_text():
 
 def test_standing_at_the_stop_is_not_walk_zero_metres():
     body = plan("Сансар", lat=47.9000, lon=106.9000).json()
-    assert body["speech"][1] == "Home, хойд тал зогсоол дээр байна."
+    assert body["speech"][2:5] == ["Home.", "Хойд тал.", "Та зогсоол дээр байна."]
 
 
 def test_spoken_numbers_become_digits():
@@ -357,10 +386,24 @@ def test_ride_lists_stops_in_riding_order_with_speech():
     assert r.status_code == 200
     stops = r.json()["stops"]
     assert [s["stop_id"] for s in stops] == ["1", "2", "3"]
-    assert stops[2]["lat"] == 47.92 and stops[2]["speech"] == "Дараагийн зогсоол: Сансар ШТС, урд тал."
+    assert stops[2]["lat"] == 47.92 and stops[2]["speech"] == ["Дараагийн зогсоол:", "Сансар ШТС.", "Урд тал."]
+
+
+def test_every_spoken_piece_can_be_prerecorded():
+    pieces = set(planner.piece_phrases()) | set(planner.name_phrases())
+    body = plan("Сансар руу").json()
+    assert set(body["speech"][1:]) <= pieces  # [0] is the per-route sentence, pre-made separately
+    for msg in (planner.MSG_NO_DIRECT, planner.MSG_NOT_FOUND, planner.MSG_CLOSE):
+        assert msg in pieces
 
 
 def test_ride_wrong_direction_is_404():
     # Ч:30 only runs Сансар -> Home
     assert client.get("/ride", params={"route": "Ч:30", "board": "1", "alight": "3"}).status_code == 404
     assert client.get("/ride", params={"route": "Ч:30", "board": "3", "alight": "1"}).status_code == 200
+
+
+def test_premade_only_server_refuses_new_clips(monkeypatch, tmp_path):
+    monkeypatch.setattr(tts, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(tts, "LIVE", False)
+    assert client.get("/tts", params={"text": "Шинэ өгүүлбэр"}).status_code == 422

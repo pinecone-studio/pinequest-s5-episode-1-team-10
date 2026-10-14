@@ -27,9 +27,24 @@ export function unlockAudio(): void {
   });
 }
 
+// One retry: the dev proxy can hit a keep-alive socket the server just closed (ECONNRESET -> 500),
+// and a skipped line ("50 метр.") is worse than a 150 ms delay.
 function fetchClip(text: string): Promise<string | null> {
   return fetch("/api/tts?text=" + encodeURIComponent(text))
     .then(function (res) {
+      if (!res.ok && res.status >= 500) {
+        return new Promise<Blob | null>(function (resolve) {
+          setTimeout(function () {
+            fetch("/api/tts?text=" + encodeURIComponent(text))
+              .then(function (again) {
+                resolve(again.ok ? again.blob() : null);
+              })
+              .catch(function () {
+                resolve(null);
+              });
+          }, 150);
+        });
+      }
       return res.ok ? res.blob() : null;
     })
     .then(function (blob) {
@@ -53,17 +68,25 @@ function play(url: string): Promise<void> {
       resolve();
       return;
     }
-    finish = resolve;
-    audio.onended = function () {
+    const player = audio;
+    // A stalled clip (hidden tab, audio focus taken by a call) must never freeze the flow: give up
+    // a little after the clip's own length.
+    let timer = setTimeout(done, 5000);
+    function done(): void {
+      clearTimeout(timer);
       resolve();
+    }
+    finish = done;
+    player.onloadedmetadata = function () {
+      if (Number.isFinite(player.duration)) {
+        clearTimeout(timer);
+        timer = setTimeout(done, player.duration * 1000 + 1500);
+      }
     };
-    audio.onerror = function () {
-      resolve();
-    };
-    audio.src = url;
-    audio.play().catch(function () {
-      resolve();
-    });
+    player.onended = done;
+    player.onerror = done;
+    player.src = url;
+    player.play().catch(done);
   });
 }
 

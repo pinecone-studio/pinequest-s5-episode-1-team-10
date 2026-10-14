@@ -127,8 +127,11 @@ def route_directions(route_id):
     data = _get("/api/bus/v1/rot_stop_by_route", {"route_id": route_id})
     orders = [[s["busStopId"] for s in sorted(stops, key=lambda s: int(s["busStopSeq"]))]
               for key, stops in data.items() if key.endswith("StopList") and stops]
-    ROUTE_CACHE.mkdir(exist_ok=True)
-    path.write_text(json.dumps(orders))
+    try:
+        ROUTE_CACHE.mkdir(exist_ok=True)
+        path.write_text(json.dumps(orders))
+    except OSError:
+        pass  # read-only disk (serverless host): just don't keep it
     return orders
 
 
