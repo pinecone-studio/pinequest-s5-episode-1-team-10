@@ -39,6 +39,8 @@ async function load(): Promise<string> {
   ort.env.wasm.wasmPaths = "/ort/";
   const providers = "gpu" in navigator ? ["webgpu", "wasm"] : ["wasm"];
   session = await ort.InferenceSession.create(MODEL_URL, { executionProviders: providers });
+  // The first run compiles the GPU shaders (~1 s on a phone): do it now, not on the first camera frame.
+  await session.run({ [session.inputNames[0]]: new ort.Tensor("float32", new Float32Array(3 * SIZE * SIZE), [1, 3, SIZE, SIZE]) });
   return providers[0];
 }
 

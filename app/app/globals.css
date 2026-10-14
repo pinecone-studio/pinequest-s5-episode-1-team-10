@@ -371,3 +371,46 @@ body {
     transition: none;
   }
 }
+
+/* First-use lesson (Tutorial.tsx): big current instruction, the spoken text under it. */
+.tutorial {
+  justify-content: center;
+  text-align: center;
+}
+
+.tutorial-step {
+  margin: 0;
+  font-size: 1rem;
+  color: #aaa;
+}
+
+.tutorial-title {
+  margin: 0;
+  font-size: 2.2rem;
+  font-weight: 800;
+  line-height: 1.2;
+  color: var(--accent);
+}
+
+.tutorial-text {
+  margin: 0 auto;
+  max-width: 32ch;
+  font-size: 1.15rem;
+  line-height: 1.5;
+}
+
+.tutorial {
+  position: relative;
+}
+
+.tutorial-skip {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  padding: 10px 22px;
+  border: 2px solid #555;
+  border-radius: 999px;
+  background: transparent;
+  color: #ddd;
+  font-size: 1rem;
+}

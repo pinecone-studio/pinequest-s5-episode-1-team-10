@@ -22,7 +22,10 @@ export function loadDoorDetector(): Promise<void> {
       .then(function (rt) {
         return rt.ort.InferenceSession.create(MODEL_URL, { executionProviders: rt.providers });
       })
-      .then(function (s) {
+      .then(async function (s) {
+        const { ort } = await runtime();
+        // Compile the GPU shaders now, so the first door frame isn't slow.
+        await s.run({ [s.inputNames[0]]: new ort.Tensor("float32", new Float32Array(3 * SIZE * SIZE), [1, 3, SIZE, SIZE]) });
         session = s;
       })
       .catch(function (e) {

@@ -10,15 +10,19 @@ import { listenInBrowser } from "../lib/listen";
 import { GPS_OK_M, locate, type Position } from "../lib/location";
 import { beep, record, type Recording } from "../lib/record";
 import { primeBeacon } from "../lib/beacon";
+import { loadDetector } from "../lib/detector";
+import { loadDoorDetector } from "../lib/doorDetector";
 import type { DoorGuide } from "../lib/door";
 import { phrase, prefetch, say, stopSpeaking, unlockAudio, type PhraseKey } from "../lib/speech";
 import BusCamera, { doorSpeech } from "./BusCamera";
 import PlanCard from "./PlanCard";
 import RideGuide, { leftSpeech, type RideInfo } from "./RideGuide";
+import Tutorial, { tutorialNeeded } from "./Tutorial";
 import VoiceMenu, { type MenuItem } from "./VoiceMenu";
 
 type Step =
   | "start"
+  | "learn" // first-use lesson: headphones, wearing the phone, gestures, ear check
   | "locating"
   | "where"
   | "whereListening"
@@ -81,6 +85,14 @@ export default function RiderFlow() {
     setMessage(found.speech.join(" "));
     // The first sentence ("34-р автобусанд суугаарай.") is pre-made, so it plays at once.
     say(found.speech.concat(phrase("open_camera")));
+    // Load + warm both models while the route is read out, so the camera detects from its first frame.
+    loadDetector()
+      .then(function () {
+        return loadDoorDetector();
+      })
+      .catch(function () {
+        // the camera step loads (and reports) it again
+      });
   }
 
   // GPS if it's precise enough; otherwise the rider is asked to say where they are.
@@ -105,10 +117,32 @@ export default function RiderFlow() {
 
   function begin(): void {
     unlockAudio(); // inside the first touch, or iPhones stay silent
+    primeBeacon(); // the lesson's ear check plays the door beacon
     serverCaps().then(function (c) {
       caps.current = c;
     });
-    findMe(["tutorial", "locating"]);
+    if (tutorialNeeded()) {
+      setStep("learn");
+    } else {
+      findMe(["locating"]);
+    }
+  }
+
+  // After the lesson: find the rider (first time) or go back to choosing a destination (replay from Help).
+  const onLearned = useCallback(function () {
+    if (position.current) {
+      setStep("ask");
+      announce(["welcome"]);
+    } else {
+      findMe(["locating"]);
+    }
+    // announce/findMe only use refs and state setters
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  function replayTutorial(): void {
+    stopSpeaking();
+    primeBeacon();
+    setStep("learn");
   }
 
   // Free hosting has no Whisper: the browser recognises the speech, and the text goes to the server.
@@ -359,6 +393,7 @@ export default function RiderFlow() {
   }
 
   const help: MenuItem = { ...label("help", "menu_help"), onActivate: sayHelp };
+  const tutorial: MenuItem = { ...label("tutorial", "menu_tutorial"), onActivate: replayTutorial };
   const changeLocation: MenuItem = { ...label("move", "menu_change_location"), onActivate: goWhere };
   const myLocation: MenuItem = {
     ...label("here", "menu_my_location"),
@@ -374,9 +409,10 @@ export default function RiderFlow() {
       { ...label("say-where", "menu_say_where"), onActivate: sayWhereIAm },
       { ...label("gps", "menu_retry_gps"), onActivate: retryGps },
       help,
+      tutorial,
     ];
   } else if (step === "ask") {
-    items = [{ ...label("say-dest", "menu_say_destination"), onActivate: sayDestination }, myLocation, changeLocation, help];
+    items = [{ ...label("say-dest", "menu_say_destination"), onActivate: sayDestination }, myLocation, changeLocation, help, tutorial];
   } else if (step === "listening" || step === "whereListening") {
     items = [{ ...label("stop", "menu_stop_listening"), onActivate: stopRecording }];
   } else if (step === "planned") {
@@ -422,6 +458,14 @@ export default function RiderFlow() {
           Эхлэх
           <span className="hint">Дэлгэцийн хаана ч хамаагүй товшино уу</span>
         </button>
+      </main>
+    );
+  }
+
+  if (step === "learn") {
+    return (
+      <main className="flow">
+        <Tutorial onDone={onLearned} />
       </main>
     );
   }

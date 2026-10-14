@@ -145,6 +145,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
       let lastLostSpoken = 0;
       let lastAheadBuzz = 0;
       let closeSaid = false;
+      const openedAt = performance.now(); // for the "[bus] yes after N ms" log (speed checks)
       let doorFromFront: number | null = null; // smoothed door-model position, share of the bus length
       let doorSeenAt = 0;
       let doorBox: Box | null = null;
@@ -227,6 +228,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
           }
           target = track; // keep following this bus to its door
           foundAt = now;
+          console.info("[bus] yes after " + Math.round(now - openedAt) + " ms from camera open, " + track.votes.length + " reads");
           lastGuideSpoken = now; // the intro below already guides; first clock direction comes after it
           vibrate([400, 100, 400]);
           speak([foundSpeech, phrase("door_intro")]);
@@ -277,7 +279,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
             return;
           }
           track.lastAnswer = performance.now();
-          addVote(track, res.verdict as Verdict);
+          addVote(track, res.verdict as Verdict, res.confidence);
           announce(track);
         });
       }
