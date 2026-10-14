@@ -62,13 +62,14 @@ def locate(text: str = Query(min_length=1, max_length=200)):
 
 
 @app.get("/api/ask", response_model=AskResponse)
-def ask(text: str = Query(min_length=1, max_length=200), lat: float = Query(ge=-90, le=90), lon: float = Query(ge=-180, le=180)):
+def ask(text: str = Query(min_length=1, max_length=200), lat: float = Query(ge=-90, le=90), lon: float = Query(ge=-180, le=180),
+        step: str = "", route: str = "", alight: str = ""):
     """Voice assistant, text in (the browser recognises the speech here): answers from bus data only."""
     try:
-        speech = assistant.answer(text, lat, lon)
+        r = assistant.reply(text, lat, lon, {"step": step, "route": route, "alight": alight})
     except (httpx.HTTPError, RuntimeError):
         raise HTTPException(status_code=503, detail=UNAVAILABLE)
-    return AskResponse(heard=text, answer=" ".join(speech), speech=speech)
+    return AskResponse(heard=text, answer=" ".join(r["speech"]), **r)
 
 
 @app.get("/api/ride", response_model=RideResponse)

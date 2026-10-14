@@ -4,7 +4,7 @@
 // camera -> "this is your bus". Every screen is a VoiceMenu: swipe to hear the options, double tap
 // to choose, all spoken in Mongolian, so a blind rider always knows what they can do.
 import { useCallback, useMemo, useRef, useState, type FormEvent } from "react";
-import type { BoardStop, PlanResponse, PlanStop, VoiceLocateResponse } from "../../shared/contract";
+import type { AskResponse, BoardStop, PlanResponse, PlanStop, VoiceLocateResponse } from "../../shared/contract";
 import { askByText, askByVoice, locateBySpeech, locateByText, nearestStop, requestPlan, requestVoicePlan, serverCaps, type ServerCaps } from "../lib/api";
 import { listenInBrowser } from "../lib/listen";
 import { GPS_OK_M, locate, type Position } from "../lib/location";
@@ -474,45 +474,73 @@ export default function RiderFlow() {
     announce(["welcome"]);
   }
 
-  // Voice assistant: ask a bus question, hear the answer (from our bus data only), stay on this screen.
+  // Voice assistant: the rider says anything (a question or a command) on any screen. It records in
+  // place, so the camera, walk or ride keeps running; the server answers from our bus data only and may
+  // name an action ("plan", "open_camera", "door"...), which is done here like the menu option would.
   async function askQuestion(): Promise<void> {
-    const back = step;
     const pos = position.current;
     if (!pos) {
       announce(["ask_location"]);
       return;
     }
-    let result;
+    const leg = plan ? legOf(plan, legRef.current) : null;
+    const context = { step, route: leg ? leg.route : "", alight: leg ? leg.alight.name : "" };
+    stopSpeaking();
+    setMessage(phrase("listening"));
+    await beep();
+    let result: AskResponse | null;
     if (!caps.current.stt) {
-      const text = await hearInBrowser("listening");
-      setStep(back);
+      const text = await listenInBrowser().done;
       if (!text) {
         announce(["not_heard"]);
         return;
       }
       say([phrase("wait")]);
-      result = await askByText(text, pos.lat, pos.lon);
+      result = await askByText(text, pos.lat, pos.lon, context);
     } else {
-      const wav = await hear("listening", back).catch(function () {
-        return undefined;
-      });
-      if (wav === undefined) {
-        return; // microphone blocked, already said
-      }
-      setStep(back);
+      const rec = record();
+      recording.current = rec;
+      const wav = await rec.done;
+      recording.current = null;
       if (!wav) {
-        announce(["not_heard"]);
+        announce([rec.noMic() ? "mic_failed" : "not_heard"]);
         return;
       }
-      say([phrase("wait")]); // the answer's voice is made live (~8 s)
-      result = await askByVoice(wav, pos.lat, pos.lon);
+      say([phrase("wait")]); // a new sentence's voice is made live (~8 s); fixed ones play at once
+      result = await askByVoice(wav, pos.lat, pos.lon, context);
     }
     if (!result) {
       announce(["server_down"]);
       return;
     }
     setMessage((result.heard ? "“" + result.heard + "” — " : "") + result.answer);
-    say(result.speech);
+    doAction(result);
+  }
+
+  function doAction(result: AskResponse): void {
+    const a = result.action;
+    if (a === "plan" && result.plan) {
+      showPlan(result.plan, result.heard);
+      say(result.speech.concat(phrase(result.plan.board_stop.distance_m >= AT_STOP_M ? "plan_walk" : "open_camera")));
+    } else if (a === "open_camera") {
+      openCamera();
+    } else if (a === "walk") {
+      startWalk();
+    } else if (a === "door") {
+      whereIsDoor();
+    } else if (a === "stops_left") {
+      stopsLeft();
+    } else if (a === "boarded") {
+      boarded();
+    } else if (a === "got_off") {
+      gotOff();
+    } else if (a === "start_over") {
+      startOver();
+    } else if (a === "tutorial") {
+      replayTutorial();
+    } else {
+      say(result.speech);
+    }
   }
 
   const help: MenuItem = { ...label("help", "menu_help"), onActivate: sayHelp };
@@ -532,6 +560,7 @@ export default function RiderFlow() {
     items = [
       { ...label("say-where", "menu_say_where"), onActivate: sayWhereIAm },
       { ...label("gps", "menu_retry_gps"), onActivate: retryGps },
+      askItem,
       help,
       tutorial,
     ];
@@ -552,6 +581,7 @@ export default function RiderFlow() {
       { ...label("camera", "menu_open_camera"), onActivate: openCamera },
       { ...label("repeat", "menu_repeat_route"), onActivate: repeatRoute },
       { ...label("back", "menu_back"), onActivate: backToPlan },
+      askItem,
       help,
     ];
   } else if (step === "camera" && !found) {
@@ -559,6 +589,7 @@ export default function RiderFlow() {
     items = [
       { ...label("repeat", "menu_repeat_route"), onActivate: repeatRoute },
       { ...label("back", "menu_back"), onActivate: backToPlan },
+      askItem,
       help,
     ];
   } else if (step === "camera") {
@@ -569,17 +600,19 @@ export default function RiderFlow() {
       { ...label("boarded", "menu_boarded"), onActivate: boarded },
       { ...label("repeat", "menu_repeat_route"), onActivate: repeatRoute },
       { ...label("back", "menu_back"), onActivate: backToPlan },
+      askItem,
       help,
     ];
   } else if (step === "ride") {
     items = [
       { ...label("left", "menu_stops_left"), onActivate: stopsLeft },
       { ...label("off", "menu_got_off"), onActivate: gotOff },
+      askItem,
       help,
     ];
   } else if (step === "arrived") {
     primary = undefined;
-    items = [{ ...label("restart", "menu_start_over"), onActivate: startOver }, help];
+    items = [{ ...label("restart", "menu_start_over"), onActivate: startOver }, askItem, help];
   }
 
   if (step === "start") {

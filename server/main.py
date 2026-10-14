@@ -25,7 +25,7 @@ from contract import (AskResponse, NearestStop, PlanRequest, PlanResponse, RideR
 async def lifespan(app):
     # Warm OCR (~5 s) and bus data (~1 s) at startup so the first /verify fits the 1 s budget.
     ocr.read_texts(cv2.imencode(".jpg", np.full((32, 32, 3), 255, np.uint8))[1].tobytes())
-    warm = tts.fixed_phrases()
+    warm = tts.fixed_phrases() + assistant.fixed_phrases()
     try:
         bus_api._stops()
         warm += planner.route_phrases()
@@ -130,29 +130,37 @@ async def plan_voice(request: Request, lat: float = Query(ge=-90, le=90), lon: f
     return VoicePlanResponse(heard=heard, plan=result)
 
 
-def _ask(heard, lat, lon):
+def _ask(heard, lat, lon, context):
     try:
-        speech = assistant.answer(heard, lat, lon)
+        r = assistant.reply(heard, lat, lon, context)
     except (httpx.HTTPError, RuntimeError):
         raise HTTPException(status_code=503, detail="Bus data unavailable")
-    print(f"ask: heard {heard!r} -> {' '.join(speech)!r}")
-    return AskResponse(heard=heard, answer=" ".join(speech), speech=speech)
+    # Start the voice now: new sentences take ~8 s, and the app asks for them in a moment.
+    tts.prefetch_in_background(r["speech"], live=True)
+    print(f"ask: heard {heard!r} -> {r['action']} {' '.join(r['speech'])!r}")
+    return AskResponse(heard=heard, answer=" ".join(r["speech"]), **r)
+
+
+def _context(step, route, alight):
+    return {"step": step, "route": route, "alight": alight}
 
 
 @app.post("/ask", response_model=AskResponse)
-async def ask_voice(request: Request, lat: float = Query(ge=-90, le=90), lon: float = Query(ge=-180, le=180)):
-    """A spoken bus question (WAV body, like /plan/voice) -> answer from our bus data only."""
+async def ask_voice(request: Request, lat: float = Query(ge=-90, le=90), lon: float = Query(ge=-180, le=180),
+                    step: str = "", route: str = "", alight: str = ""):
+    """What the rider said (WAV body, like /plan/voice) -> answer or app action, from our bus data only.
+    step/route/alight: the trip in progress (current bus and where to get off), if any."""
     heard = await _hear(request)
     if not heard:
         return AskResponse(heard="", answer=NOT_HEARD, speech=[NOT_HEARD])
-    return await run_in_threadpool(_ask, heard, lat, lon)
+    return await run_in_threadpool(_ask, heard, lat, lon, _context(step, route, alight))
 
 
 @app.get("/ask", response_model=AskResponse)
 def ask_text(text: str = Query(min_length=1, max_length=200), lat: float = Query(ge=-90, le=90),
-             lon: float = Query(ge=-180, le=180)):
+             lon: float = Query(ge=-180, le=180), step: str = "", route: str = "", alight: str = ""):
     """Typed (or browser-recognised) version of POST /ask."""
-    return _ask(text, lat, lon)
+    return _ask(text, lat, lon, _context(step, route, alight))
 
 
 @app.get("/ride", response_model=RideResponse)

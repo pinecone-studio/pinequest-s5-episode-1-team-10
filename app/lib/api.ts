@@ -41,9 +41,21 @@ export async function requestVoicePlan(wav: Blob, lat: number, lon: number): Pro
 }
 
 // Voice assistant: a spoken (WAV) or typed bus question; null if the server can't be reached.
-export async function askByVoice(wav: Blob, lat: number, lon: number): Promise<AskResponse | null> {
+// context: the trip in progress (current bus, where to get off), so "my bus" / "open the camera" make sense.
+export interface AskContext {
+  step: string;
+  route: string;
+  alight: string;
+}
+
+function askQuery(lat: number, lon: number, context: AskContext): string {
+  return "lat=" + lat + "&lon=" + lon + "&step=" + encodeURIComponent(context.step) + "&route=" +
+    encodeURIComponent(context.route) + "&alight=" + encodeURIComponent(context.alight);
+}
+
+export async function askByVoice(wav: Blob, lat: number, lon: number, context: AskContext): Promise<AskResponse | null> {
   try {
-    const res = await fetch("/api/ask?lat=" + lat + "&lon=" + lon, {
+    const res = await fetch("/api/ask?" + askQuery(lat, lon, context), {
       method: "POST",
       headers: { "Content-Type": "audio/wav" },
       body: wav,
@@ -54,9 +66,9 @@ export async function askByVoice(wav: Blob, lat: number, lon: number): Promise<A
   }
 }
 
-export async function askByText(text: string, lat: number, lon: number): Promise<AskResponse | null> {
+export async function askByText(text: string, lat: number, lon: number, context: AskContext): Promise<AskResponse | null> {
   try {
-    const res = await fetch("/api/ask?text=" + encodeURIComponent(text) + "&lat=" + lat + "&lon=" + lon);
+    const res = await fetch("/api/ask?text=" + encodeURIComponent(text) + "&" + askQuery(lat, lon, context));
     return res.ok ? ((await res.json()) as AskResponse) : null;
   } catch {
     return null;

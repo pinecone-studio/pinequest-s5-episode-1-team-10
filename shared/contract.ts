@@ -70,7 +70,20 @@ export interface AskResponse {
   heard: string; // the question as heard ("" if nothing was heard)
   answer: string; // whole answer, for the screen
   speech: string[]; // Mongolian sentences to speak in order; fetch each from /tts
+  action: AskAction | null; // what the app should do (speak `speech` too)
+  plan: PlanResponse | null; // the trip, when action is "plan"
 }
+export type AskAction =
+  | "plan"
+  | "open_camera"
+  | "walk"
+  | "door"
+  | "stops_left"
+  | "boarded"
+  | "got_off"
+  | "repeat_route"
+  | "start_over"
+  | "tutorial";
 
 // POST /locate/voice with a WAV body (or GET /locate?text=): the rider says where they are,
 // when GPS is off or imprecise.
