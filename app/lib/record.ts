@@ -142,17 +142,34 @@ export function record(): Recording {
 }
 
 // Short beep: "speak now". Played before recording so it isn't recorded.
+// Never waits more than BEEP_MAX_MS: a paused audio context (no audio device, a call took the audio,
+// too many contexts on iPhone) never "ends" the tone, and voice input would hang on it forever.
+const BEEP_MAX_MS = 400;
+
 export function beep(): Promise<void> {
   return new Promise(function (resolve) {
-    const ctx = new AudioContext();
-    const osc = ctx.createOscillator();
-    osc.frequency.value = 880;
-    osc.connect(ctx.destination);
-    osc.start();
-    osc.stop(ctx.currentTime + 0.15);
-    osc.onended = function () {
-      ctx.close();
-      resolve();
-    };
+    let done = false;
+    function finish(): void {
+      if (!done) {
+        done = true;
+        resolve();
+      }
+    }
+    setTimeout(finish, BEEP_MAX_MS);
+    try {
+      const ctx = new AudioContext();
+      ctx.resume().catch(function () {});
+      const osc = ctx.createOscillator();
+      osc.frequency.value = 880;
+      osc.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.15);
+      osc.onended = function () {
+        ctx.close();
+        finish();
+      };
+    } catch {
+      finish(); // no audio at all: record anyway
+    }
   });
 }
