@@ -464,7 +464,10 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
           }
         }
         const decided = decideSign(texts, route, routesFor(stopId), cityNumbers());
-        addVote(track, decided.verdict, decided.confidence, decided.number, frame);
+        // With route data, the number rules alone never vote yes: signMatch (above) must agree, as it
+        // ignores a bare number (a stray "72" by an advert). Stricter only (lib/signVerdict.ts, same rule).
+        const verdict = pool && decided.verdict === "yes" ? "unsure" : decided.verdict;
+        addVote(track, verdict, decided.confidence, decided.number, frame);
       }
 
       // Full-resolution sign crop. The best (bright, complete, sharp) frame is the one the worker reads.

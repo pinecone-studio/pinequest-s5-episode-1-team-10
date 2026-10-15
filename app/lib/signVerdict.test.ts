@@ -52,9 +52,9 @@ test("fleet numbers and adverts say yes for no route", function () {
 });
 
 // Found 2026-10-16 by moving this decision here: signMatch ignores the stray "72" (signMatch.test.ts), but
-// the sign parser alone still says yes for Ч:72, a route that stops here. Matcher rules are the lead's
-// decision, so this is a todo (reported, not failing the suite) until it is decided.
-test("a stray bare number (72) is not route Ч:72", { todo: "wrong yes in the ?scanner=azure decision: parse-sign takes a bare 72 as Ч:72" }, function () {
+// the sign parser alone said yes for Ч:72, a route that stops here. Now the parser alone never says yes
+// when route data exists (signMatch must agree).
+test("a stray bare number (72) is not route Ч:72", function () {
   assert.deepEqual(yesFor(["ЛИГ … ? … … PUB ? VIP KEC 72"], POOL), []);
 });
 

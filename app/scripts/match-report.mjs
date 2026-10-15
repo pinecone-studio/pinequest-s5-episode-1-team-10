@@ -4,7 +4,7 @@
 // on a photo with no readable number); exit 1 if there is one. No network: the cache is made by
 // e2e/make-ocr-cache.mjs (on-device OCR in local Chromium) and holds texts only.
 // Also shown, not counted in the exit code: BusCamera's rules (lib/signMatch.ts fast path, else
-// lib/fusion.ts decideSign) as if the same read came in every frame, which is stricter than the phone.
+// lib/fusion.ts decideSign) as if the same read came in every frame (more lenient than the phone, which needs two agreeing reads).
 import { build } from "esbuild";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -97,7 +97,9 @@ function cameraYes(reads) {
       const texts = item.lines.map(function (line) {
         return [line, item.conf];
       });
-      return lib.decideSign(texts, route, near, citySet).verdict === "yes";
+      // BusCamera.judge: with route data, the number rules alone never vote yes (signMatch must agree).
+      const decided = lib.decideSign(texts, route, near, citySet).verdict;
+      return (pool ? (decided === "yes" ? "unsure" : decided) : decided) === "yes";
     });
   });
 }
@@ -165,5 +167,5 @@ entries.forEach(function (item) {
 console.log("");
 console.log(entries.length + " entries (" + Object.keys(cache.photos).length + " photos + " + (cache.frames ?? []).length + " whole-frame reads), " + withText + " with any text, " + labelled + " with a route");
 console.log("Shipped decision (lib/signVerdict.ts): wrong yes " + totals.shipped.wrong + " · right yes " + totals.shipped.right + "/" + labelled);
-console.log("BusCamera rules, one read as if every frame (not in the exit code): wrong yes " + totals.camera.wrong + " · right yes " + totals.camera.right + "/" + labelled);
-process.exit(totals.shipped.wrong > 0 ? 1 : 0);
+console.log("BusCamera rules, one read as if every frame: wrong yes " + totals.camera.wrong + " · right yes " + totals.camera.right + "/" + labelled);
+process.exit(totals.shipped.wrong > 0 || totals.camera.wrong > 0 ? 1 : 0);
