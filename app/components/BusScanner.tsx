@@ -16,6 +16,7 @@ import { makeRouteBook, matchSign, type RouteBook } from "../lib/parse-sign";
 import { explainPermission } from "../lib/permissions";
 import { phrase } from "../lib/speech";
 import { cityNumbers, prefetchStopRoutes, routesFor } from "../lib/stopRoutes";
+import { markDecided } from "../lib/latency";
 
 interface Props {
   stopId: string;
@@ -151,6 +152,7 @@ export default function BusScanner({ stopId, route, foundSpeech, onFound, onErro
           stats.stage = "found";
           stats.yesMs = Math.round(now - openedAt);
           console.info("[scan] yes after " + stats.yesMs + " ms from camera open, read took " + stats.roundTripMs + " ms (azure " + body.timingMs + " ms)");
+          markDecided("azure scanner", now, sentAt); // the frame was cut and sent at sentAt
           announcer.announce(match.route, [foundSpeech], now);
           onFound();
           return;

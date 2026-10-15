@@ -19,6 +19,7 @@ import { isIOS } from "../lib/device";
 import { explainPermission } from "../lib/permissions";
 import { cue, phrase, vibrate, type PhraseKey } from "../lib/speech";
 import { addVote, updateTracks, VOTE_WINDOW, type Track } from "../lib/tracker";
+import { markDecided } from "../lib/latency";
 
 interface Props {
   stopId: string;
@@ -189,6 +190,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
       let lastAheadBuzz = 0;
       let closeSaid = false;
       const openedAt = performance.now(); // for the "[bus] yes after N ms" log (speed checks)
+      const frameTimes = new Map<number, number>(); // frame number -> when it was taken (lib/latency.ts)
       let doorFromFront: number | null = null; // smoothed door-model position, share of the bus length
       let doorSeenAt = 0;
       let doorBox: Box | null = null;
@@ -331,6 +333,8 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
           foundAt = now;
           stats.decideMs = Math.round(now - track.seenAt);
           console.info("[bus] yes after " + Math.round(now - openedAt) + " ms from camera open, " + stats.decideMs + " ms from first sight, " + track.votes.length + " reads");
+          const lastRead = track.reads.length ? track.reads[track.reads.length - 1].frame : -1;
+          markDecided("bus camera", now, frameTimes.get(lastRead) ?? null);
           lastGuideSpoken = now; // the intro below already guides; first clock direction comes after it
           cue("bus", [400, 100, 400]);
           // The side is known only once the bus is moving. Standing still used to say "on your right".
@@ -567,6 +571,8 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         }
         const now = performance.now();
         stats.frames++;
+        frameTimes.set(stats.frames, performance.now());
+        frameTimes.delete(stats.frames - 300); // the deciding read is from a recent frame
         fpsFrames++;
         if (now - fpsFrom > 2000) {
           stats.fps = Math.round((fpsFrames * 10000) / (now - fpsFrom)) / 10;

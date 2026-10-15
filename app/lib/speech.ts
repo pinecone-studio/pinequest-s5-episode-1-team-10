@@ -1,6 +1,7 @@
 // Mongolian speech from the server's OronTTS (/api/tts). Each sentence is its own cached clip.
 import phrases from "../../shared/phrases.json";
 import { speedAudio } from "./speed";
+import { soundStarted } from "./latency";
 
 export type PhraseKey = keyof typeof phrases;
 
@@ -264,7 +265,10 @@ function play(url: string): Promise<void> {
         timer = setTimeout(done, player.duration * 1000 + 1500);
       }
     };
-    player.onplaying = speedAudio;
+    player.onplaying = function () {
+      soundStarted("voice");
+      speedAudio();
+    };
     player.onended = done;
     player.onerror = done;
     player.src = url;
@@ -314,6 +318,7 @@ function playWithContext(url: string): Promise<void> {
         };
         speedAudio();
         source.start();
+        soundStarted("voice");
       });
     })
     .catch(function () {});
@@ -552,6 +557,9 @@ export function cue(name: "bus" | "off" | "sos", pattern: number[]): void {
   // sos: six alternating tones, louder than the others (iPhone has no vibration: this is the signal)
   const tones = name === "bus" ? [660, 880] : name === "sos" ? [880, 1175, 880, 1175, 880, 1175] : [440, 440, 330];
   const volume = name === "sos" ? 0.3 : 0.08;
+  if (name === "bus") {
+    soundStarted("tone");
+  }
   try {
     tones.forEach(function (item, i) {
       const osc = c.createOscillator();
