@@ -61,13 +61,21 @@ export interface ServerCaps {
   speech: boolean; // Speechmatics keys from /api/stt/token: every phone can talk, iPhone included
   chimege: boolean; // final text from Chimege (/api/stt/chimege), Speechmatics as the backup
   readerVoice?: boolean; // the Reader's ElevenLabs voice (/api/reader/voice); else the phone's own
+  readerOcr?: boolean; // the Reader's page text from Google Cloud Vision (/api/reader/ocr); else on the phone
 }
 
 export async function serverCaps(): Promise<ServerCaps> {
   try {
     const res = await fetch("/api/health");
-    const body = (await res.json()) as { stt?: boolean; ocr?: boolean; speech?: boolean; chimege?: boolean; reader_voice?: boolean };
-    return { stt: body.stt !== false, ocr: body.ocr !== false, speech: body.speech === true, chimege: body.chimege === true, readerVoice: body.reader_voice === true };
+    const body = (await res.json()) as { stt?: boolean; ocr?: boolean; speech?: boolean; chimege?: boolean; reader_voice?: boolean; reader_ocr?: boolean };
+    return {
+      stt: body.stt !== false,
+      ocr: body.ocr !== false,
+      speech: body.speech === true,
+      chimege: body.chimege === true,
+      readerVoice: body.reader_voice === true,
+      readerOcr: body.reader_ocr === true,
+    };
   } catch {
     return { stt: true, ocr: true, speech: false, chimege: false, readerVoice: false };
   }

@@ -19,10 +19,10 @@ import { keepScreenOn } from "../lib/wake";
 import { advise, openCamera, quality, type Advice, type Camera } from "../lib/reader/aim";
 import { readerCommand, type ReaderCommand } from "../lib/reader/commands";
 import { startRemoteLog } from "../lib/reader/remoteLog";
-import { analyze, cloudVoice, isReady, keepOffline, listen, loadModels, lowMemoryPhone, readPage, releasePart, synthesize, setCloudVoice, type Reading, type SpeechStream } from "../lib/reader/engine";
+import { analyze, cloudOcr, cloudVoice, isReady, keepOffline, listen, loadModels, lowMemoryPhone, readPage, readPageCloud, releasePart, setCloudOcr, synthesize, setCloudVoice, type Reading, type SpeechStream } from "../lib/reader/engine";
 import { AIM_FRAME } from "../lib/reader/pageOcr";
 import { errorTone, loadingSound, pageEndChime, playStream, prompt, releasePlayer, shutter, stopPlayer, tick, unlockPlayer, waitForVoice, type Playing } from "../lib/reader/player";
-import { SentenceBuilder, UNCLEAR, type Sentence } from "../lib/reader/sentences";
+import { SentenceBuilder, UNCLEAR, type PageLine, type Sentence } from "../lib/reader/sentences";
 import { spokenText } from "../lib/reader/speechText";
 import ReaderPad from "./ReaderPad";
 import type { MenuItem } from "./VoiceMenu";
@@ -187,6 +187,7 @@ export default function Reader() {
     cloudChecked.current = serverCaps().then(function (caps) {
       enableSpeechmatics(caps.speech);
       setCloudVoice(caps.readerVoice === true);
+      setCloudOcr(caps.readerOcr === true);
     });
     const stop = listen(function (msg) {
       if (msg.type === "progress" && msg.part === "voice" && msg.total) {
@@ -472,58 +473,78 @@ export default function Reader() {
         prompt(phrase("read_reading"), "now");
       }
     }, 1500);
-    s.ocr = readPage(
-      photo,
-      function (lines, done, _turned, total) {
-        if (session.current !== s) {
-          return;
+    const onLines = function (lines: PageLine[], done: boolean, _turned: number, total: number): void {
+      if (session.current !== s) {
+        return;
+      }
+      s.lines = total;
+      lines.forEach(function (item) {
+        if (item.conf < UNCLEAR && item.text.trim()) {
+          s.unclear++;
         }
-        s.lines = total;
-        lines.forEach(function (item) {
-          if (item.conf < UNCLEAR && item.text.trim()) {
-            s.unclear++;
-          }
-        });
-        const more = s.builder.add(lines, done);
-        if (more.length) {
-          s.sentences = s.sentences.concat(more);
-          setSentences(s.sentences);
-          // the first sentences' voice is made at once
-          for (let i = s.index; i < Math.min(s.index + 2, s.sentences.length); i++) {
-            if (s.sentences[i].text) {
-              audioFor(s, i, i === s.index);
-            }
+      });
+      const more = s.builder.add(lines, done);
+      if (more.length) {
+        s.sentences = s.sentences.concat(more);
+        setSentences(s.sentences);
+        // the first sentences' voice is made at once
+        for (let i = s.index; i < Math.min(s.index + 2, s.sentences.length); i++) {
+          if (s.sentences[i].text) {
+            audioFor(s, i, i === s.index);
           }
         }
-        if (done) {
-          s.done = true;
-          s.ocr = null;
-          if (lowMemoryPhone()) {
-            releasePart("ocr");
-            if (!isReady("voice") && s.sentences.length) {
-              loadModels(["voice"]);
-            }
+      }
+      if (done) {
+        s.done = true;
+        s.ocr = null;
+        if (lowMemoryPhone()) {
+          releasePart("ocr");
+          if (!isReady("voice") && s.sentences.length) {
+            loadModels(["voice"]);
+          }
+        }
+      }
+      if (s.wake) {
+        s.wake();
+      }
+    };
+    const onFailed = function (): void {
+      if (session.current === s) {
+        s.done = true;
+        if (lowMemoryPhone()) {
+          releasePart("ocr");
+          if (!isReady("voice") && s.sentences.length) {
+            loadModels(["voice"]);
           }
         }
         if (s.wake) {
           s.wake();
         }
-      },
-      function () {
-        if (session.current === s) {
-          s.done = true;
-          if (lowMemoryPhone()) {
-            releasePart("ocr");
-            if (!isReady("voice") && s.sentences.length) {
-              loadModels(["voice"]);
-            }
-          }
-          if (s.wake) {
-            s.wake();
-          }
+      }
+    };
+    if (cloudOcr()) {
+      // Google Cloud Vision first (better ө/ү and punctuation); the phone's reader if it fails.
+      let cancelled = false;
+      s.ocr = {
+        cancel: function () {
+          cancelled = true;
+        },
+      };
+      readPageCloud(photo).then(function (lines) {
+        if (cancelled || session.current !== s) {
+          photo.close();
+          return;
         }
-      },
-    );
+        if (lines) {
+          photo.close();
+          onLines(lines, true, 0, lines.length);
+        } else {
+          s.ocr = readPage(photo, onLines, onFailed);
+        }
+      });
+    } else {
+      s.ocr = readPage(photo, onLines, onFailed);
+    }
     readFrom(s, 0);
   }
 

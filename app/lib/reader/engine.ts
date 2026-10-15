@@ -178,6 +178,47 @@ export interface Reading {
   cancel: () => void;
 }
 
+// Google Cloud Vision for the page text (server/vision.py): reads Mongolian letters (ө, ү) and
+// punctuation more reliably than the phone's small model. Used while the server has a key; the first
+// failure (offline, quota) switches to the phone's reader for the rest of the visit.
+let cloudText = false;
+export function setCloudOcr(on: boolean): void {
+  cloudText = on;
+}
+export function cloudOcr(): boolean {
+  return cloudText;
+}
+
+// The photo as JPEG, small enough for the server (<= 4 MB).
+async function jpegOf(photo: ImageBitmap): Promise<Blob> {
+  const c = new OffscreenCanvas(photo.width, photo.height);
+  (c.getContext("2d") as OffscreenCanvasRenderingContext2D).drawImage(photo, 0, 0);
+  let blob = await c.convertToBlob({ type: "image/jpeg", quality: 0.9 });
+  if (blob.size > 3.5 * 1024 * 1024) {
+    blob = await c.convertToBlob({ type: "image/jpeg", quality: 0.75 });
+  }
+  return blob;
+}
+
+// The page's lines from the cloud, in reading order; null if that failed (the phone then reads it).
+export async function readPageCloud(photo: ImageBitmap): Promise<PageLine[] | null> {
+  try {
+    const t = performance.now();
+    const jpeg = await jpegOf(photo);
+    const res = await fetch("/api/reader/ocr", { method: "POST", headers: { "Content-Type": "image/jpeg" }, body: jpeg });
+    if (!res.ok) {
+      throw new Error("reader ocr " + res.status);
+    }
+    const body = (await res.json()) as { lines: PageLine[] };
+    console.log("[reader] cloud ocr: " + body.lines.length + " lines, " + Math.round(jpeg.size / 1024) + " KB, " + Math.round(performance.now() - t) + " ms");
+    return body.lines;
+  } catch (e) {
+    console.warn("[reader] cloud ocr failed, the phone reads pages from now on", e);
+    cloudText = false;
+    return null;
+  }
+}
+
 // A captured page: lines arrive in reading order, a few at a time, until `done`.
 export function readPage(
   photo: ImageBitmap,

@@ -23,6 +23,7 @@ import tts
 import assistant
 import chimege
 import elevenlabs
+import vision
 import speechmatics
 from contract import AskResponse, SpeechToken, NearestStop, StopRoutes, VerifyTextsRequest, PlanRequest, PlanResponse, RideResponse, VerifyRequest, VerifyResponse, VoiceLocateResponse
 
@@ -37,7 +38,7 @@ UNAVAILABLE = "Bus data unavailable"
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "stt": False, "ocr": False, "speech": speechmatics.configured(), "chimege": chimege.configured(), "reader_voice": elevenlabs.configured()}
+    return {"ok": True, "stt": False, "ocr": False, "speech": speechmatics.configured(), "chimege": chimege.configured(), "reader_voice": elevenlabs.configured(), "reader_ocr": vision.configured()}
 
 
 @app.post("/api/stt/chimege")
@@ -72,6 +73,20 @@ async def reader_voice(req: ReaderVoiceRequest):
         print("reader voice failed:", e)
         raise HTTPException(status_code=503, detail="Reader voice unavailable")
     return Response(mp3, media_type="audio/mpeg", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/reader/ocr")
+async def reader_ocr(request: Request):
+    """A page photo (JPEG) -> its lines in reading order, from Google Cloud Vision (server/vision.py)."""
+    jpeg = await request.body()
+    if len(jpeg) > vision.MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Photo too big")
+    try:
+        lines = await run_in_threadpool(vision.read_page, jpeg)
+    except (httpx.HTTPError, RuntimeError) as e:
+        print("reader ocr failed:", len(jpeg), "bytes,", e)
+        raise HTTPException(status_code=503, detail="Reader OCR unavailable")
+    return {"lines": lines}
 
 
 @app.post("/api/stt/token", response_model=SpeechToken)
