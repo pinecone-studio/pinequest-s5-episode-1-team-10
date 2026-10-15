@@ -939,6 +939,15 @@ export default function RiderFlow() {
     }
   }
 
+  function readStartScreen(): void {
+    unlockAudio();
+    say([
+      "Дэлгэц уншигчтай эхлэх. TalkBack, VoiceOver.",
+      phrase("menu_hear_again"),
+      "Эхлэх. Дэлгэц уншигчгүй бол хаана ч хамаагүй товшино уу.",
+    ]);
+  }
+
   if (step === "start") {
     // A screen-reader user's first swipe lands on the first button; anyone else taps anywhere.
     return (
@@ -950,6 +959,9 @@ export default function RiderFlow() {
           }}
         >
           Дэлгэц уншигчтай эхлэх (TalkBack, VoiceOver)
+        </button>
+        <button type="button" className="action" onClick={readStartScreen}>
+          {phrase("menu_hear_again")}
         </button>
         <button
           className="big start"
@@ -1043,7 +1055,9 @@ export default function RiderFlow() {
         items={actions}
         primary={primary}
         menuId={sos ? "sos" : "main"}
-        intro={!listeningNow && step !== "camera" && step !== "locating" && step !== "working"}
+        title={title}
+        status={message}
+        intro={!listeningNow && step !== "locating" && step !== "working"}
         onHoldStart={startTalk}
         onHoldEnd={endTalk}
       >
