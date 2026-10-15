@@ -15,6 +15,12 @@ export interface VerifyResponse {
   eta_seconds: number | null; // wanted bus ETA at this stop; null if unknown
 }
 
+// GET /stops/{id}/routes: cached at the plan step so sign reads are decided on the phone.
+export interface StopRoutes {
+  routes: string[]; // busRouteNo values serving this stop
+  city_numbers: string[]; // every route number in the city, so an LED "Ч55" read as "455" is not a guess
+}
+
 export interface NearestStop {
   stop_id: string; // Hamuga busStopId, e.g. "000000529"
   name: string;

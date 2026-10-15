@@ -1,5 +1,5 @@
 // Calls to the FastAPI server, proxied under /api (next.config.ts).
-import type { AskResponse, NearestStop, PlanResponse, VerifyRequest, VerifyResponse, VoiceLocateResponse } from "../../shared/contract";
+import type { AskResponse, NearestStop, PlanResponse, StopRoutes, VerifyRequest, VerifyResponse, VoiceLocateResponse } from "../../shared/contract";
 import { VERIFY_TIMEOUT_MS } from "../../shared/contract";
 
 export type PlanResult = { ok: true; plan: PlanResponse } | { ok: false; message: string };
@@ -86,6 +86,17 @@ export async function locateByText(text: string): Promise<VoiceLocateResponse | 
   try {
     const res = await fetch("/api/locate?text=" + encodeURIComponent(text));
     return res.ok ? ((await res.json()) as VoiceLocateResponse) : null;
+  } catch {
+    return null;
+  }
+}
+
+// Routes at this stop, plus every route number in the city. null if the server can't be reached:
+// the plan's own list is kept, and a sign is never confirmed from nothing.
+export async function fetchStopRoutes(stopId: string): Promise<StopRoutes | null> {
+  try {
+    const res = await fetch("/api/stops/" + encodeURIComponent(stopId) + "/routes");
+    return res.ok ? ((await res.json()) as StopRoutes) : null;
   } catch {
     return null;
   }

@@ -11,7 +11,7 @@ export const MIN_BUS_WIDTH = 120; // px; smaller buses are too far to read
 const canvas = typeof document === "undefined" ? null : document.createElement("canvas");
 
 // others: other vehicles in the frame; their area is blacked out so their signs can't be read here.
-// The crop as a canvas (read on the phone by lib/ocr.ts), or null if the bus is too small / far.
+// The crop as a canvas (the full video frame, not the detector's small input), or null if the bus is too small.
 export function signCanvas(video: HTMLVideoElement, box: Box, others: Box[]): HTMLCanvasElement | null {
   const x = Math.max(0, box.x);
   const y = Math.max(0, box.y);
@@ -38,6 +38,38 @@ export function signCanvas(video: HTMLVideoElement, box: Box, others: Box[]): HT
     ctx.fillRect((item.x - x) * sx, (item.y - y) * sy, item.w * sx, item.h * sy);
   });
   return canvas;
+}
+
+// Bright, complete, sharp crops win. LED signs flicker, so a dark frame between flashes must lose.
+export function signScore(canvas: HTMLCanvasElement, box: Box): number {
+  const ctx = canvas.getContext("2d", { willReadFrequently: true }) as CanvasRenderingContext2D;
+  const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const px = img.data;
+  const w = canvas.width;
+  const h = canvas.height;
+  const gray = new Float32Array(w * h);
+  let bright = 0;
+  for (let i = 0; i < w * h; i++) {
+    const g = 0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2];
+    gray[i] = g;
+    bright += g;
+  }
+  bright /= w * h;
+  let sum = 0;
+  let sum2 = 0;
+  let n = 0;
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const lap = gray[y * w + x - 1] + gray[y * w + x + 1] + gray[(y - 1) * w + x] + gray[(y + 1) * w + x] - 4 * gray[y * w + x];
+      sum += lap;
+      sum2 += lap * lap;
+      n++;
+    }
+  }
+  const mean = n ? sum / n : 0;
+  const sharp = n ? sum2 / n - mean * mean : 0;
+  const completeness = Math.min(1, (w * h) / Math.max(1, box.w * box.h * 0.45));
+  return bright * completeness * Math.log(1 + Math.max(0, sharp));
 }
 
 // The crop as base64 JPEG for the server's OCR (/verify).

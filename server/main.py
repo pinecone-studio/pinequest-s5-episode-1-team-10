@@ -20,7 +20,7 @@ import stt
 import tts
 from bus_api import get_eta_seconds
 import assistant
-from contract import (AskResponse, SpeechToken, NearestStop, VerifyTextsRequest, PlanRequest, PlanResponse, RideResponse, VerifyRequest, VerifyResponse,
+from contract import (AskResponse, SpeechToken, NearestStop, StopRoutes, VerifyTextsRequest, PlanRequest, PlanResponse, RideResponse, VerifyRequest, VerifyResponse,
                       VoiceLocateResponse, VoicePlanResponse)
 
 @asynccontextmanager
@@ -204,6 +204,18 @@ def ride(route: str = Query(min_length=1, max_length=16), board: str = Query(min
     # Stop names are said on the bus a minute or more from now: make them while the rider boards.
     tts.prefetch_in_background([p for s in stops[1:] for p in s["speech"]], live=True)
     return {"route": route, "stops": stops}
+
+
+@app.get("/stops/{stop_id}/routes", response_model=StopRoutes)
+def stop_routes(stop_id: str):
+    """Cached by the phone at the plan step. Sign reads are then decided on the phone."""
+    try:
+        return {
+            "routes": bus_api.routes_at_stop(stop_id) or [],
+            "city_numbers": sorted(bus_api.city_route_numbers()),
+        }
+    except (httpx.HTTPError, RuntimeError):
+        raise HTTPException(status_code=503, detail="Bus data unavailable")
 
 
 @app.get("/tts")

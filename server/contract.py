@@ -30,6 +30,11 @@ class VerifyResponse(BaseModel):
     eta_seconds: Optional[int] = Field(default=None, description="Wanted bus ETA at this stop; null if unknown")
 
 
+class StopRoutes(BaseModel):
+    routes: list[str] = Field(description="busRouteNo values serving this stop")
+    city_numbers: list[str] = Field(description="Every route number in the city, for LED misreads")
+
+
 class NearestStop(BaseModel):
     stop_id: str = Field(description='Hamuga busStopId, e.g. "000000529"')
     name: str

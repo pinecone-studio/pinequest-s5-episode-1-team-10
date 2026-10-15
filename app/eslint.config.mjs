@@ -20,6 +20,7 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     "public/ort/**",
     "public/reader-worker.js", // built by scripts/build-reader-worker.mjs
+    "public/bus-ocr-worker.js", // built by scripts/build-bus-ocr-worker.mjs
   ]),
 ]);
 

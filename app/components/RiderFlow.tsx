@@ -21,8 +21,8 @@ import { groupDigits, phoneDigits } from "../lib/phoneWords";
 import { currentSavedReader, saveMode, setCurrentReader, subscribeReader, type Mode, type Reader } from "../lib/mode";
 import { routeLabel } from "../lib/route";
 import { loadDetector } from "../lib/detector";
+import { prefetchStopRoutes } from "../lib/stopRoutes";
 import { loadDoorDetector } from "../lib/doorDetector";
-import { loadOcr } from "../lib/ocr";
 import type { DoorGuide } from "../lib/door";
 import { beep, phrase, prefetch, rememberClips, say, startWaitingTick, stopSpeaking, unlockAudio, vibrate, type PhraseKey } from "../lib/speech";
 import { onSpeedReport, showSpeed, speedCancel, speedMark, speedStart } from "../lib/speed";
@@ -231,6 +231,10 @@ export default function RiderFlow() {
   }
 
   function showPlan(found: PlanResponse): void {
+    prefetchStopRoutes(found.board_stop.stop_id, found.routes_at_stop, found.route);
+    if (found.transfer) {
+      prefetchStopRoutes(found.transfer.board_stop.stop_id, [], found.transfer.route);
+    }
     setPlan(found);
     planRef.current = found;
     legRef.current = 0;
@@ -243,7 +247,13 @@ export default function RiderFlow() {
     // ~25 MB; later from the browser cache), bus detector and sign reader at the same time. Not earlier:
     // on a slow line, downloading from the start made a trip plan take 17 s instead of 1 s.
     const detecting = loadDetector();
-    const reading = caps.current.ocr ? Promise.resolve(true) : loadOcr(); // free hosting: the phone reads the signs
+    // Free hosting: the phone reads the sign in a worker. Warm the file cache now, while the route is
+    // read out, but don't start a second copy of the model on this thread.
+    const reading = caps.current.ocr
+      ? Promise.resolve()
+      : Promise.all(["/models/ocr_det_int8.onnx", "/models/ocr_rec_int8.onnx", "/models/ocr_keys.txt"].map(function (item) {
+          return fetch(item);
+        }));
     Promise.all([detecting, reading])
       .then(function ([provider]) {
         // Without WebGPU the door model would queue in front of bus detection: it loads after the "yes".
