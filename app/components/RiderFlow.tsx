@@ -21,6 +21,7 @@ import { groupDigits, phoneDigits } from "../lib/phoneWords";
 import { currentSavedReader, saveMode, setCurrentReader, subscribeReader, type Mode, type Reader } from "../lib/mode";
 import { routeLabel } from "../lib/route";
 import { loadDetector } from "../lib/detector";
+import { prefetchStopRoutes } from "../lib/stopRoutes";
 import { loadDoorDetector } from "../lib/doorDetector";
 import { loadOcr } from "../lib/ocr";
 import type { DoorGuide } from "../lib/door";
@@ -231,6 +232,10 @@ export default function RiderFlow() {
   }
 
   function showPlan(found: PlanResponse): void {
+    prefetchStopRoutes(found.board_stop.stop_id, found.routes_at_stop, found.route);
+    if (found.transfer) {
+      prefetchStopRoutes(found.transfer.board_stop.stop_id, [], found.transfer.route);
+    }
     setPlan(found);
     planRef.current = found;
     legRef.current = 0;

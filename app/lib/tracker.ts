@@ -24,6 +24,7 @@ export interface Track {
   pending: boolean; // a /verify request is in flight
   lastAsked: number;
   lastAnswer: number; // when /verify last answered for this bus (or when it was first seen)
+  seenAt: number; // first frame of this track: decision time is measured from here
   vx: number; // horizontal speed of the box centre, px/ms, smoothed (+ = moving right)
 }
 
@@ -65,6 +66,7 @@ export function updateTracks(tracks: Track[], boxes: Box[], now: number): Track[
         pending: false,
         lastAsked: 0,
         lastAnswer: now,
+        seenAt: now,
         vx: 0,
       };
       live.push(t);

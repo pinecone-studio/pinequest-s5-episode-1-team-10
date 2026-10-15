@@ -22,7 +22,7 @@ import tts
 import assistant
 import chimege
 import speechmatics
-from contract import AskResponse, SpeechToken, NearestStop, VerifyTextsRequest, PlanRequest, PlanResponse, RideResponse, VerifyRequest, VerifyResponse, VoiceLocateResponse
+from contract import AskResponse, SpeechToken, NearestStop, StopRoutes, VerifyTextsRequest, PlanRequest, PlanResponse, RideResponse, VerifyRequest, VerifyResponse, VoiceLocateResponse
 
 HERE = Path(__file__).parent
 bus_api.ROUTE_CACHE = HERE / "hamuga_cache"  # read-only on Vercel; new routes are fetched, not saved
@@ -134,6 +134,18 @@ def speak(text: str = Query(min_length=1, max_length=tts.MAX_CHARS)):
     if key not in CLIPS:
         raise HTTPException(status_code=404, detail="No pre-made clip for this text")
     return RedirectResponse(f"/tts/{key}.mp3", status_code=302, headers={"Cache-Control": "public, max-age=86400"})
+
+
+@app.get("/api/stops/{stop_id}/routes", response_model=StopRoutes)
+def stop_routes(stop_id: str):
+    """Cached by the phone at the plan step. Sign reads are then decided on the phone."""
+    try:
+        return {
+            "routes": bus_api.routes_at_stop(stop_id) or [],
+            "city_numbers": sorted(bus_api.city_route_numbers()),
+        }
+    except (httpx.HTTPError, RuntimeError):
+        raise HTTPException(status_code=503, detail="Bus data unavailable")
 
 
 @app.post("/api/verify", response_model=VerifyResponse)

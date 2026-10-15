@@ -7,6 +7,8 @@
 import { useEffect, useRef, type MutableRefObject } from "react";
 import type { Verdict, VerifyResponse } from "../../shared/contract";
 import { verifySign, verifyTexts } from "../lib/api";
+import { decideSign } from "../lib/fusion";
+import { cityNumbers, prefetchStopRoutes, routesFor } from "../lib/stopRoutes";
 import { aimBeacon, startBeacon, stopBeacon } from "../lib/beacon";
 import { MIN_BUS_WIDTH, signCanvas, signCrop } from "../lib/crop";
 import { loadOcr, readSign } from "../lib/ocr";
@@ -150,6 +152,9 @@ interface CamStats {
   reads: number;
   lastText: string;
   error: string;
+  detectMs: number;
+  ocrMs: number;
+  decideMs: number; // first frame of the confirmed bus -> "yes"
 }
 
 export default function BusCamera({ stopId, route, foundSpeech, onFound, onError, guide, phoneOcr, onAnnounce, screenReader }: Props) {
@@ -182,14 +187,14 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
       let doorSeenAt = 0;
       let doorBox: Box | null = null;
       let lastDoorRun = 0;
-      const stats: CamStats = { stage: "starting", provider: "", video: "", frames: 0, fps: 0, buses: 0, widest: 0, reads: 0, lastText: "", error: "" };
+      const stats: CamStats = { stage: "starting", provider: "", video: "", frames: 0, fps: 0, buses: 0, widest: 0, reads: 0, lastText: "", error: "", detectMs: 0, ocrMs: 0, decideMs: 0 };
       (window as unknown as { __cam: CamStats }).__cam = stats;
       let fpsFrom = performance.now();
       let fpsFrames = 0;
       const debugTimer = setInterval(function () {
         if (debugRef.current) {
           debugRef.current.textContent =
-            stats.stage + " · " + stats.provider + " · " + stats.video + " · " + stats.fps + " fps · buses " + stats.buses + " (widest " + stats.widest + " px) · reads " + stats.reads + (stats.lastText ? " «" + stats.lastText + "»" : "") + (stats.error ? " · ERROR " + stats.error : "");
+            stats.stage + " · " + stats.provider + " · " + stats.video + " · " + stats.fps + " fps · buses " + stats.buses + " (widest " + stats.widest + " px) · reads " + stats.reads + (stats.lastText ? " «" + stats.lastText + "»" : "") + " · detect " + stats.detectMs + " ms · ocr " + stats.ocrMs + " ms · decide " + stats.decideMs + " ms" + (stats.error ? " · ERROR " + stats.error : "");
         }
       }, 500);
 
@@ -319,7 +324,8 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
           target = track; // keep following this bus to its door
           loadDoorDetector(); // already loaded with WebGPU; on CPU it starts now (geometry until it's ready)
           foundAt = now;
-          console.info("[bus] yes after " + Math.round(now - openedAt) + " ms from camera open, " + track.votes.length + " reads");
+          stats.decideMs = Math.round(now - track.seenAt);
+          console.info("[bus] yes after " + Math.round(now - openedAt) + " ms from camera open, " + stats.decideMs + " ms from first sight, " + track.votes.length + " reads");
           lastGuideSpoken = now; // the intro below already guides; first clock direction comes after it
           cue("bus", [400, 100, 400]);
           // The side is known only once the bus is moving. Standing still used to say "on your right".
@@ -359,7 +365,9 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
           if (!canvas) {
             return;
           }
+          const readAt = performance.now();
           answer = readSign(canvas).then(function (texts) {
+            stats.ocrMs = Math.round(performance.now() - readAt);
             stats.reads++;
             stats.lastText = texts
               .map(function (item) {
@@ -367,7 +375,10 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
               })
               .join(" ")
               .slice(0, 40);
-            return verifyTexts(texts, stopId, route);
+            // The verdict is decided here. The server is told only so the read is logged.
+            const decided = decideSign(texts, route, routesFor(stopId), cityNumbers());
+            verifyTexts(texts, stopId, route);
+            return { verdict: decided.verdict, confidence: decided.confidence, eta_seconds: null };
           });
         } else {
           const crop = signCrop(video, track.box, masked);
@@ -405,7 +416,9 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         if (stopped || !video || !overlay) {
           return;
         }
+        const detectAt = performance.now();
         const found = await detectBuses(video);
+        stats.detectMs = Math.round(performance.now() - detectAt);
         if (stopped) {
           return;
         }
@@ -613,9 +626,10 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         try {
           provider = await loadDetector();
           if (phoneOcr) {
-            // Nothing read yet ("unsure"): wakes the free server and fetches this stop's routes, so the
-            // first real read isn't the one that waits for them.
-            verifyTexts([], stopId, route);
+            // The plan step already asked. Ask again in case this stop was not cached yet.
+            if (!routesFor(stopId)) {
+              prefetchStopRoutes(stopId, [], "");
+            }
             signReader = await loadOcr();
             if (!signReader) {
               stats.error = "sign reader not loaded";
