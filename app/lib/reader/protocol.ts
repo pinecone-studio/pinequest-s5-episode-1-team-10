@@ -30,5 +30,5 @@ export type FromEngine =
   // A sentence's audio, piece by piece (split at punctuation); `last` ends it (samples may be null).
   | { type: "audio"; id: number; samples: Float32Array | null; rate: number; last: boolean }
   | { type: "log"; text: string } // timings, with ?debug=1
-  | { type: "files"; urls: string[] } // files the worker loaded (kept for offline use by public/read-sw.js)
+  | { type: "files"; urls: string[] } // files the worker loaded (kept for offline use by public/sw.js)
   | { type: "failed"; id: number; message: string };

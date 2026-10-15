@@ -4,11 +4,16 @@ import { speedAudio } from "./speed";
 
 export type PhraseKey = keyof typeof phrases;
 
-// One audio element for every clip: iOS only lets a page play sound from an element that was
-// started inside a touch, so it's unlocked on the first touch and reused after that.
+// iPhone plays sound only from things started inside a touch. So EVERY touch (not only the first)
+// re-unlocks both ways of playing: one audio element for every clip, and a Web Audio context that
+// takes over if the element is still refused. iOS 17+: audio session "playback", so clips are heard
+// even with the ringer switch on silent. (Before: one attempt with an empty WAV, which iPhones can
+// refuse, and then every later clip was silently skipped.)
 const audio = typeof Audio === "undefined" ? null : new Audio();
-const SILENCE = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=";
-let unlocked = false;
+let ctx: AudioContext | null = null;
+let elementUnlocked = false;
+let synthUnlocked = false;
+let silence = "";
 let turn = 0; // bumped on every say(): older queues stop
 let finish: (() => void) | null = null; // resolves the clip that's playing
 
@@ -16,24 +21,90 @@ export function phrase(key: PhraseKey): string {
   return phrases[key];
 }
 
-// Call from inside a touch/click handler, before the first say().
+// 0.1 s of real silence (a WAV with samples: iPhones refuse an empty one).
+function silentWav(): string {
+  if (!silence) {
+    const n = 800; // 8 kHz, 8-bit mono
+    const bytes = new Uint8Array(44 + n);
+    const v = new DataView(bytes.buffer);
+    const text = function (at: number, s: string): void {
+      for (let i = 0; i < s.length; i++) {
+        bytes[at + i] = s.charCodeAt(i);
+      }
+    };
+    text(0, "RIFF");
+    v.setUint32(4, 36 + n, true);
+    text(8, "WAVEfmt ");
+    v.setUint32(16, 16, true);
+    v.setUint16(20, 1, true);
+    v.setUint16(22, 1, true);
+    v.setUint32(24, 8000, true);
+    v.setUint32(28, 8000, true);
+    v.setUint16(32, 1, true);
+    v.setUint16(34, 8, true);
+    text(36, "data");
+    v.setUint32(40, n, true);
+    bytes.fill(128, 44);
+    silence = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
+  }
+  return silence;
+}
+
+// The shared Web Audio context (also for the beep), resumed by the last touch.
+export function audioContext(): AudioContext | null {
+  if (!ctx && typeof window !== "undefined" && typeof AudioContext !== "undefined") {
+    ctx = new AudioContext();
+  }
+  return ctx;
+}
+
+// Inside a touch/click/key handler. Safe to call on every one.
 export function unlockAudio(): void {
-  if (unlocked || !audio) {
+  if (typeof window === "undefined") {
     return;
   }
-  unlocked = true;
-  audio.src = SILENCE;
-  audio.play().catch(function () {
-    unlocked = false;
-  });
-  // iPhone also keeps the phone's own voice (the fallback for sentences without a clip) silent until
-  // it has spoken once inside a touch.
-  const synth = typeof window === "undefined" ? null : window.speechSynthesis;
-  if (synth) {
+  const session = (navigator as Navigator & { audioSession?: { type: string } }).audioSession;
+  // (Not while the microphone is on: lib/speechmatics.ts sets "play-and-record" for that and back after.)
+  if (session && session.type !== "play-and-record") {
+    try {
+      session.type = "playback";
+    } catch {
+      // older iOS: the ringer switch decides
+    }
+  }
+  const c = audioContext();
+  if (c) {
+    if (c.state !== "running") {
+      c.resume().catch(function () {});
+    }
+    const s = c.createBufferSource();
+    s.buffer = c.createBuffer(1, 1, 22050);
+    s.connect(c.destination);
+    s.start(0);
+  }
+  if (audio && !elementUnlocked && audio.paused) {
+    audio.src = silentWav();
+    audio
+      .play()
+      .then(function () {
+        elementUnlocked = true;
+      })
+      .catch(function () {});
+  }
+  // The phone's own voice (for sentences without a clip) is also silent until it has spoken in a touch.
+  const synth = window.speechSynthesis;
+  if (synth && !synthUnlocked) {
+    synthUnlocked = true;
     const u = new SpeechSynthesisUtterance(" ");
     u.volume = 0;
     synth.speak(u);
   }
+}
+
+if (typeof document !== "undefined") {
+  ["touchend", "pointerup", "click", "keydown"].forEach(function (item) {
+    document.addEventListener(item, unlockAudio, true);
+  });
 }
 
 // Text -> name of its pre-made clip (free hosting), played straight from /tts/<name>.mp3 instead of
@@ -176,8 +247,54 @@ function play(url: string): Promise<void> {
     player.onerror = done;
     player.src = url;
     player.playbackRate = 1; // the reader may have left it faster
-    player.play().catch(done);
+    player.play().catch(function () {
+      // Refused (iPhone without a recent touch on this element): the same clip through Web Audio.
+      clearTimeout(timer);
+      player.onerror = null;
+      playWithContext(url).then(done);
+    });
   });
+}
+
+function playWithContext(url: string): Promise<void> {
+  const c = audioContext();
+  if (!c) {
+    return Promise.resolve();
+  }
+  if (c.state !== "running") {
+    c.resume().catch(function () {});
+  }
+  return fetch(url)
+    .then(function (res) {
+      return res.arrayBuffer();
+    })
+    .then(function (bytes) {
+      return c.decodeAudioData(bytes);
+    })
+    .then(function (buffer) {
+      return new Promise<void>(function (resolve) {
+        const source = c.createBufferSource();
+        source.buffer = buffer;
+        source.connect(c.destination);
+        const timer = setTimeout(end, buffer.duration * 1000 + 1500);
+        function end(): void {
+          clearTimeout(timer);
+          resolve();
+        }
+        source.onended = end;
+        finish = function () {
+          try {
+            source.stop();
+          } catch {
+            // already ended
+          }
+          end();
+        };
+        speedAudio();
+        source.start();
+      });
+    })
+    .catch(function () {});
 }
 
 export function stopSpeaking(): void {
@@ -269,12 +386,161 @@ function speakWithPhone(text: string): Promise<void> {
   });
 }
 
+// Short beep: "speak now". Played before recording so it isn't recorded.
+// Never waits more than BEEP_MAX_MS: a paused audio context (no audio device, a call took the audio,
+// too many contexts on iPhone) never "ends" the tone, and voice input would hang on it forever.
+const BEEP_MAX_MS = 400;
+
+export function beep(): Promise<void> {
+  return new Promise(function (resolve) {
+    let done = false;
+    function finish(): void {
+      if (!done) {
+        done = true;
+        resolve();
+      }
+    }
+    setTimeout(finish, BEEP_MAX_MS);
+    try {
+      // The shared context the last touch unlocked (a new one starts suspended on iPhone: no beep).
+      const ctx = audioContext();
+      if (!ctx) {
+        finish();
+        return;
+      }
+      ctx.resume().catch(function () {});
+      const osc = ctx.createOscillator();
+      osc.frequency.value = 880;
+      osc.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.15);
+      osc.onended = finish;
+    } catch {
+      finish(); // no audio at all: record anyway
+    }
+  });
+}
+
 export function sayPhrase(key: PhraseKey): Promise<void> {
   return say([phrase(key)]);
 }
 
+// A soft click about once a second, so a slow GPS fix or a slow server is not silence.
+// The first click is after one second: a fast answer never ticks.
+export function startWaitingTick(): () => void {
+  let stopped = false;
+  let timer = 0;
+  function click(): void {
+    if (stopped) {
+      return;
+    }
+    const c = audioContext();
+    if (c) {
+      if (c.state !== "running") {
+        c.resume().catch(function () {});
+      }
+      try {
+        const osc = c.createOscillator();
+        const gain = c.createGain();
+        gain.gain.value = 0.03;
+        osc.frequency.value = 520;
+        osc.connect(gain);
+        gain.connect(c.destination);
+        osc.start();
+        osc.stop(c.currentTime + 0.04);
+      } catch {
+        // no audio device: the status text still says what is happening
+      }
+    }
+    timer = window.setTimeout(click, 1000);
+  }
+  timer = window.setTimeout(click, 1000);
+  return function () {
+    stopped = true;
+    window.clearTimeout(timer);
+  };
+}
+
 export function vibrate(pattern: number[]): void {
-  if ("vibrate" in navigator) {
+  if (typeof navigator !== "undefined" && "vibrate" in navigator) {
     navigator.vibrate(pattern);
+    return;
+  }
+  const c = audioContext();
+  if (!c) {
+    return;
+  }
+  if (c.state !== "running") {
+    c.resume().catch(function () {});
+  }
+  let at = c.currentTime + 0.01;
+  pattern.forEach(function (item, i) {
+    if (i % 2 === 0) {
+      pulse(c, at, item);
+    }
+    at += item / 1000;
+  });
+}
+
+function pulse(c: AudioContext, at: number, ms: number): void {
+  const osc = c.createOscillator();
+  const gain = c.createGain();
+  let freq = 1800;
+  let level = 0.08;
+  let len = 0.012;
+  if (ms >= 400) {
+    freq = 520;
+    level = 0.3;
+    len = Math.min(ms, 600) / 1000;
+  } else if (ms >= 200) {
+    osc.type = "square"; // harsh on purpose: danger
+    freq = 1000;
+    level = 0.25;
+    len = ms / 1000;
+  } else if (ms >= 100) {
+    freq = 700;
+    level = 0.2;
+    len = ms / 1000;
+  } else if (ms >= 30) {
+    freq = 1200;
+    level = 0.12;
+    len = 0.03;
+  }
+  osc.frequency.value = freq;
+  gain.gain.setValueAtTime(0.0001, at);
+  gain.gain.exponentialRampToValueAtTime(level, at + 0.005);
+  gain.gain.setValueAtTime(level, at + Math.max(0.006, len - 0.01));
+  gain.gain.exponentialRampToValueAtTime(0.0001, at + len);
+  osc.connect(gain);
+  gain.connect(c.destination);
+  osc.start(at);
+  osc.stop(at + len + 0.02);
+}
+
+// iPhone Safari has no vibration. These two moments also play a short sound.
+export function cue(name: "bus" | "off", pattern: number[]): void {
+  vibrate(pattern);
+  const c = audioContext();
+  if (!c) {
+    return;
+  }
+  if (c.state !== "running") {
+    c.resume().catch(function () {});
+  }
+  const tones = name === "bus" ? [660, 880] : [440, 440, 330];
+  try {
+    tones.forEach(function (item, i) {
+      const osc = c.createOscillator();
+      const gain = c.createGain();
+      gain.gain.value = 0.08;
+      osc.frequency.value = item;
+      osc.connect(gain);
+      gain.connect(c.destination);
+      const at = c.currentTime + i * 0.18;
+      osc.start(at);
+      osc.stop(at + 0.12);
+    });
+  } catch {
+    // the spoken sentence is still the signal
   }
 }

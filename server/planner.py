@@ -581,6 +581,25 @@ def _suggest_bus(num, letter, prefix, lat, lon):
 
 ALT_MIN = 0.6  # another stop name this close to what was heard is offered when the match isn't exact
 ALT_MAX = 2
+GUESS_MIN = 0.8  # nothing matched: the closest-sounding stop at least this close is ASKED about, never used
+# Measured with Speechmatics on our clips: "Зайсан" -> "Айсан" / "Байсан" (0.91), which the strict
+# search rejects (a short word must match almost exactly) and the rider heard "not found".
+
+
+def _closest_guess(words):
+    """Stops of the one name that sounds most like the words (whole phrase or a single word), or []."""
+    phrase = _squash(" ".join(words))
+    if not phrase:
+        return []
+    by_name = {}
+    for s in bus_api._stops():
+        by_name.setdefault(bus_api.base_name(s["name"]), []).append(s)
+    def score(name):
+        whole = difflib.SequenceMatcher(None, phrase, _squash(name)).ratio()
+        word = max((difflib.SequenceMatcher(None, w, nw).ratio() for w in words if len(w) >= 4 for nw in name.split()), default=0)
+        return max(whole, word if len(name.split()) == 1 else 0)  # one word only stands for a one-word name
+    best = max(by_name, key=score)
+    return by_name[best] if score(best) >= GUESS_MIN else []
 
 
 def _alternatives(words, named):
@@ -605,9 +624,19 @@ def suggest(text, lat, lon):
         return _suggest_bus(*bus, lat, lon)
     words = query_words(text)
     named, nearby = find_destination(words, text)
+    guessed = False
+    if not named and words:
+        named = _closest_guess(words)
+        guessed = bool(named)
+        if guessed:
+            name = bus_api.base_name(named[0]["name"])
+            near = named[0]
+            named = [s for s in bus_api._stops() if bus_api.base_name(s["name"]) == name
+                     and bus_api._distance_m(near["lat"], near["lon"], s["lat"], s["lon"]) <= SAME_PLACE_M]
+            nearby = []
     # Sure = the whole stop name was heard, even split up by speech recognition ("Сүх баатарын тал бай").
     said = {_squash(fold(" ".join(words))), _squash(fold(cyrillic(text)))}
-    sure = bool(exact_name(text)) or any(_squash(fold(bus_api.base_name(s["name"]))) in said for s in named)
+    sure = not guessed and (bool(exact_name(text)) or any(_squash(fold(bus_api.base_name(s["name"]))) in said for s in named))
     plan = _suggest_to(words, named, nearby, lat, lon)
     plan["sure"] = sure
     plan["alternatives"] = [] if sure else _alternatives(words, named)

@@ -16,6 +16,12 @@ const REC_H = 48;
 const BIN_THRESH = 0.3; // DB: pixel is text
 const BOX_THRESH = 0.5; // DB: mean probability of a region to keep it
 const UNCLIP = 1.6; // DB: grow each region by area * UNCLIP / perimeter
+// Words: the text model's map is solid across a whole sign line, so "455 ЭЙН 1000-Е" came out as one
+// read, and with Cyrillic Э read as "3" the route number was lost ("4553H1000-E"). A line is split at
+// columns much darker than its lit ones (the space between LED words), and each word is read alone.
+// Measured on the sign: word gap ~35 brightness, gaps inside a number ~80-95, lit LEDs 120-200.
+const GAP_DARK = 0.35; // a column darker than this share of the line's bright columns is a gap
+const GAP_MIN = 0.15; // ...and a gap at least this share of the line height separates words
 const MEAN = [0.485, 0.456, 0.406]; // B, G, R
 const STD = [0.229, 0.224, 0.225];
 
@@ -36,7 +42,9 @@ export function loadOcr(): Promise<boolean> {
           return item.text();
         }),
       ]);
-      keys = ["blank"].concat(text.split("\n"), [" "]);
+      // \r?\n: a Windows checkout (git autocrlf) turns the file into CRLF, and a "\r" glued to every
+      // character made "455" arrive as "4\r5\r5\r" -> never a route number, never "yes".
+      keys = ["blank"].concat(text.split(/\r?\n/), [" "]);
       det = await exclusive(function () {
         return rt.ort.InferenceSession.create(detBytes, { executionProviders: rt.providers });
       });
@@ -131,6 +139,61 @@ function regions(prob: Float32Array, w: number, h: number, sw: number, sh: numbe
   return out;
 }
 
+// One text line -> its words (or the line itself when it has no clear gaps).
+function splitWords(crop: HTMLCanvasElement, box: Region): Region[] {
+  const x1 = Math.max(0, Math.floor(box.x1));
+  const y1 = Math.max(0, Math.floor(box.y1));
+  const w = Math.min(crop.width, Math.ceil(box.x2)) - x1;
+  const h = Math.min(crop.height, Math.ceil(box.y2)) - y1;
+  if (w < 8 || h < 8) {
+    return [box];
+  }
+  const ctx = crop.getContext("2d", { willReadFrequently: true }) as CanvasRenderingContext2D;
+  const px = ctx.getImageData(x1, y1, w, h).data;
+  const gray = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    gray[i] = 0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2];
+  }
+  const bg = Float32Array.from(gray).sort()[Math.floor((w * h) / 2)]; // the sign's background
+  const ink = new Float32Array(w); // per column: the strongest difference from the background
+  for (let x = 0; x < w; x++) {
+    let m = 0;
+    for (let y = 0; y < h; y++) {
+      m = Math.max(m, Math.abs(gray[y * w + x] - bg));
+    }
+    ink[x] = m;
+  }
+  const bright = Float32Array.from(ink).sort()[Math.floor(w * 0.9)];
+  const minRun = Math.max(2, Math.floor(GAP_MIN * h));
+  const cuts: number[] = [];
+  let x = 0;
+  while (x < w) {
+    if (ink[x] < GAP_DARK * bright) {
+      let end = x;
+      while (end < w && ink[end] < GAP_DARK * bright) {
+        end++;
+      }
+      if (end - x >= minRun && x > 0 && end < w) {
+        cuts.push(Math.floor((x + end) / 2));
+      }
+      x = end;
+    } else {
+      x++;
+    }
+  }
+  if (!cuts.length) {
+    return [box];
+  }
+  const edges = [0].concat(cuts, [w]);
+  const words: Region[] = [];
+  for (let i = 0; i + 1 < edges.length; i++) {
+    if (edges[i + 1] - edges[i] >= 0.3 * h) {
+      words.push({ x1: x1 + edges[i], y1: box.y1, x2: x1 + edges[i + 1], y2: box.y2 });
+    }
+  }
+  return words.length ? words : [box];
+}
+
 // [(text, confidence)] read on the sign crop; [] if the models aren't loaded.
 export async function readSign(crop: HTMLCanvasElement): Promise<[string, number][]> {
   if (!(await loadOcr()) || !det || !rec) {
@@ -148,7 +211,11 @@ export async function readSign(crop: HTMLCanvasElement): Promise<[string, number
   });
   const prob = detOut[d.outputNames[0]].data as Float32Array;
   const texts: [string, number][] = [];
-  for (const box of regions(prob, w, h, sw, sh)) {
+  const lines = regions(prob, w, h, sw, sh);
+  const boxes = lines.flatMap(function (item) {
+    return splitWords(crop, item);
+  });
+  for (const box of boxes) {
     const bw = box.x2 - box.x1;
     const bh = box.y2 - box.y1;
     if (bw < 2 || bh < 2) {

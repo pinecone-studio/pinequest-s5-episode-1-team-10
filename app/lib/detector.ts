@@ -45,12 +45,50 @@ export function exclusive<T>(job: () => Promise<T>): Promise<T> {
 
 // Model files are downloaded outside the queue: on a slow phone connection the door model (40 MB)
 // took ~45 s, and while it downloaded inside the queue the bus model and sign reading had to wait.
+// Low priority: they download in the background while the rider uses the app, and must never hold up
+// its own requests (measured on a slow line: a trip plan took 17 s instead of 1 s behind them).
 export async function modelBytes(url: string): Promise<Uint8Array> {
-  const response = await fetch(url);
+  const response = await fetch(url, { priority: "low" } as RequestInit);
   if (!response.ok) {
     throw new Error(url + ": " + response.status);
   }
   return new Uint8Array(await response.arrayBuffer());
+}
+
+// WebGPU only where onnxruntime's WebGPU path is proven (Chrome, Android). iPhone/iPad and Safari
+// have WebGPU now too, but a session that builds and then returns nothing would never find a bus, so
+// they use the WASM path, which works there (checked in WebKit: ~10 fps, bus found, sign read).
+// ?cpu forces WASM anywhere (testing).
+function webgpuWanted(): boolean {
+  if (!("gpu" in navigator) || new URLSearchParams(window.location.search).has("cpu")) {
+    return false;
+  }
+  const ua = navigator.userAgent;
+  const ios = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const safari = /AppleWebKit/.test(ua) && !/Chrome\/|Chromium\/|Edg\//.test(ua);
+  return !ios && !safari;
+}
+
+// Session + a first run (compiles the GPU shaders, ~1 s on a phone, now instead of on the first camera
+// frame) on a plain grey frame, whose output must be real numbers: a broken GPU path fails here.
+async function build(o: OrtModule, bytes: Uint8Array, providers: string[]): Promise<Ort.InferenceSession> {
+  const s = await exclusive(function () {
+    return o.InferenceSession.create(bytes, { executionProviders: providers });
+  });
+  const grey = new Float32Array(3 * SIZE * SIZE).fill(114 / 255);
+  const out = await exclusive(function () {
+    return s.run({ [s.inputNames[0]]: new o.Tensor("float32", grey, [1, 3, SIZE, SIZE]) });
+  });
+  const values = out[s.outputNames[0]].data as Float32Array;
+  let finite = values.length > 0;
+  for (let i = 0; i < values.length && finite; i += 97) {
+    finite = Number.isFinite(values[i]);
+  }
+  if (!finite) {
+    s.release().catch(function () {});
+    throw new Error("detector output is not numbers on " + providers[0]);
+  }
+  return s;
 }
 
 async function load(): Promise<string> {
@@ -58,18 +96,18 @@ async function load(): Promise<string> {
   // Loaded from public/ort as-is (copied by scripts/copy-ort.mjs) so the bundler never touches it.
   ort = (await import(/* turbopackIgnore: true */ /* webpackIgnore: true */ "/ort/ort.webgpu.min.mjs" as string)) as OrtModule;
   ort.env.wasm.wasmPaths = "/ort/";
-  const providers = "gpu" in navigator ? ["webgpu", "wasm"] : ["wasm"];
   const o = ort;
   const bytes = await download;
-  session = await exclusive(function () {
-    return o.InferenceSession.create(bytes, { executionProviders: providers });
-  });
-  // The first run compiles the GPU shaders (~1 s on a phone): do it now, not on the first camera frame.
-  const s = session;
-  await exclusive(function () {
-    return s.run({ [s.inputNames[0]]: new o.Tensor("float32", new Float32Array(3 * SIZE * SIZE), [1, 3, SIZE, SIZE]) });
-  });
-  return providers[0];
+  if (webgpuWanted()) {
+    try {
+      session = await build(o, bytes, ["webgpu", "wasm"]);
+      return "webgpu";
+    } catch (e) {
+      console.warn("bus detector: WebGPU failed, using WASM", e);
+    }
+  }
+  session = await build(o, bytes, ["wasm"]);
+  return "wasm";
 }
 
 // One shared load: the model is 10 MB and a second session would double GPU memory.

@@ -13,7 +13,8 @@ import { loadOcr, readSign } from "../lib/ocr";
 import { detectBuses, loadDetector, type Box } from "../lib/detector";
 import { detectFrontDoor, loadDoorDetector } from "../lib/doorDetector";
 import { frontIsRight, guideToDoor, type DoorGuide } from "../lib/door";
-import { phrase, say, sayPhrase, vibrate, type PhraseKey } from "../lib/speech";
+import { explainPermission } from "../lib/permissions";
+import { cue, phrase, vibrate, type PhraseKey } from "../lib/speech";
 import { addVote, updateTracks, VOTE_WINDOW, type Track } from "../lib/tracker";
 
 interface Props {
@@ -24,6 +25,8 @@ interface Props {
   onError: () => void;
   guide: MutableRefObject<DoorGuide | null>; // latest door guidance, for the "where is the door?" option
   phoneOcr: boolean; // the server has no OCR (free hosting): read the sign on the phone, send only the texts
+  onAnnounce: (texts: string[]) => Promise<void>; // status text and speech, so a hint is never only spoken
+  screenReader: boolean; // door-close sentence names the button instead of a double tap
 }
 
 const GUIDE_EVERY_MS = 4000; // repeat "door at 2 o'clock, 9 steps" this often
@@ -33,9 +36,9 @@ const DOOR_EVERY_MS = 150; // door model runs at most this often (it's 4x the bu
 const DOOR_KEEP_MS = 2000; // a door seen this recently still counts (it moves with the bus box)
 
 // "Хаалга 2 цагийн зүгт. 9 алхам." from pre-made clips.
-export function doorSpeech(g: DoorGuide): string[] {
+export function doorSpeech(g: DoorGuide, screenReader?: boolean): string[] {
   if (g.close) {
-    return [phrase("door_close")];
+    return [phrase(screenReader ? "door_close_sr" : "door_close")];
   }
   if (g.ahead) {
     return [phrase("door_ahead"), phrase(("steps_" + g.steps) as PhraseKey)];
@@ -47,6 +50,12 @@ const ASK_EVERY_MS = 250; // per bus, between /verify requests
 const MAX_PENDING = 1; // /verify requests in flight at once: the server reads one sign at a time
 const NO_ANSWER_MS = 5000; // bus in view this long with no /verify answer -> "not sure"
 const REPEAT_AFTER_MS = 5000; // don't repeat "bus seen" / "not your bus" more often than this
+// Guidance while looking for the bus, so the rider is never left in silence: what the camera sees and
+// what to do about it. One hint at a time, never over other speech.
+const LOADING_SAY_MS = 2500; // models still loading after this: "getting ready"
+const NO_BUS_MS = 8000; // nothing in view this long: "no bus, keep pointing at the road"
+const READ_HARD_MS = 6000; // a near bus read this long without any answer: "point at its front"
+const EDGE = 0.02; // a bus box this close to the frame edge is cut off
 
 const COLORS: Record<string, string> = { checking: "#ffd400", yes: "#00e676", no: "#ff1744", unsure: "#ff9100" };
 const LABELS: Record<string, string> = { checking: "Шалгаж байна", yes: "ТАНЫ АВТОБУС", no: "Биш", unsure: "Итгэлгүй" };
@@ -123,9 +132,29 @@ function draw(
   }
 }
 
-export default function BusCamera({ stopId, route, foundSpeech, onFound, onError, guide, phoneOcr }: Props) {
+// What the camera step is doing, for whoever helps debug on a phone (?debug=1 shows it on screen;
+// tests read window.__cam).
+interface CamStats {
+  stage: string;
+  provider: string;
+  video: string;
+  frames: number;
+  fps: number;
+  buses: number;
+  widest: number;
+  reads: number;
+  lastText: string;
+  error: string;
+}
+
+export default function BusCamera({ stopId, route, foundSpeech, onFound, onError, guide, phoneOcr, onAnnounce, screenReader }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
+  const debugRef = useRef<HTMLParagraphElement>(null);
+  const announceRef = useRef(onAnnounce);
+  useEffect(function () {
+    announceRef.current = onAnnounce;
+  });
 
   useEffect(
     function () {
@@ -148,12 +177,70 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
       let doorSeenAt = 0;
       let doorBox: Box | null = null;
       let lastDoorRun = 0;
+      const stats: CamStats = { stage: "starting", provider: "", video: "", frames: 0, fps: 0, buses: 0, widest: 0, reads: 0, lastText: "", error: "" };
+      (window as unknown as { __cam: CamStats }).__cam = stats;
+      let fpsFrom = performance.now();
+      let fpsFrames = 0;
+      const debugTimer = setInterval(function () {
+        if (debugRef.current) {
+          debugRef.current.textContent =
+            stats.stage + " · " + stats.provider + " · " + stats.video + " · " + stats.fps + " fps · buses " + stats.buses + " (widest " + stats.widest + " px) · reads " + stats.reads + (stats.lastText ? " «" + stats.lastText + "»" : "") + (stats.error ? " · ERROR " + stats.error : "");
+        }
+      }, 500);
 
       function speak(texts: string[]): void {
         talking = true;
-        say(texts).then(function () {
+        announceRef.current(texts).then(function () {
           talking = false;
         });
+      }
+
+      let signReader = true; // false: the sign model never loaded, so "not sure" would be a lie
+      let lastHint = 0;
+      let scanningSince = 0;
+      let lastBusAt = 0;
+      let readingSince = 0;
+      function hint(key: PhraseKey, every: number): void {
+        const now = performance.now();
+        if (talking || now - lastHint < every) {
+          return;
+        }
+        lastHint = now;
+        speak([phrase(key)]);
+      }
+
+      // Before the bus is confirmed: say what the camera sees and what to do.
+      function guideSearch(video: HTMLVideoElement, buses: Box[], near: Track[], now: number): void {
+        if (buses.length) {
+          lastBusAt = now;
+        }
+        if (!near.length) {
+          readingSince = 0;
+        } else if (!readingSince) {
+          readingSince = now;
+        }
+        if (!buses.length) {
+          if (now - Math.max(scanningSince, lastBusAt) > NO_BUS_MS) {
+            hint("no_bus_yet", 12000);
+          }
+          return;
+        }
+        if (!near.length) {
+          hint("bus_far", 10000); // seen, but too small to read yet
+          return;
+        }
+        const b = near[0].box; // the closest bus
+        const cutLeft = b.x <= video.videoWidth * EDGE;
+        const cutRight = b.x + b.w >= video.videoWidth * (1 - EDGE);
+        if (cutLeft && !cutRight) {
+          hint("bus_left", 6000);
+        } else if (cutRight && !cutLeft) {
+          hint("bus_right", 6000);
+        } else if (now - readingSince > READ_HARD_MS && near.every(function (item) {
+          return item.decision === "checking";
+        })) {
+          hint("sign_hard", 10000);
+        }
       }
 
       // Door guidance for the confirmed bus, every frame.
@@ -187,10 +274,10 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         if (g.close && !closeSaid) {
           closeSaid = true;
           vibrate([300, 100, 300]);
-          speak(doorSpeech(g));
+          speak(doorSpeech(g, screenReader));
         } else if (!talking && now - lastGuideSpoken > GUIDE_EVERY_MS) {
           lastGuideSpoken = now;
-          speak(doorSpeech(g));
+          speak(doorSpeech(g, screenReader));
         }
         if (g.ahead && now - lastAheadBuzz > 1000) {
           lastAheadBuzz = now;
@@ -229,20 +316,28 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
           foundAt = now;
           console.info("[bus] yes after " + Math.round(now - openedAt) + " ms from camera open, " + track.votes.length + " reads");
           lastGuideSpoken = now; // the intro below already guides; first clock direction comes after it
-          vibrate([400, 100, 400]);
-          speak([foundSpeech, phrase("door_intro")]);
+          cue("bus", [400, 100, 400]);
+          // The side is known only once the bus is moving. Standing still used to say "on your right".
+          let intro: PhraseKey = "door_intro_plain";
+          if (Math.abs(track.vx) > track.box.w * 0.0002) {
+            intro = track.vx > 0 ? "door_intro_right" : "door_intro_left";
+          }
+          speak([foundSpeech, phrase(intro)]);
           startBeacon();
           onFound();
         } else if (track.decision === "no" && now - lastNoSpoken > REPEAT_AFTER_MS) {
           lastNoSpoken = now;
           vibrate([100, 80, 100]);
-          sayPhrase("not_your_bus");
+          speak([phrase("not_your_bus")]);
         } else if (track.decision === "unsure") {
-          sayPhrase("not_sure");
+          speak([phrase("not_sure")]);
         }
       }
 
       function ask(video: HTMLVideoElement, track: Track, now: number, others: Box[]): void {
+        if (phoneOcr && !signReader) {
+          return;
+        }
         // Other tracked buses are masked too, not only the weak detections.
         const masked = others.concat(
           tracks
@@ -260,6 +355,13 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
             return;
           }
           answer = readSign(canvas).then(function (texts) {
+            stats.reads++;
+            stats.lastText = texts
+              .map(function (item) {
+                return item[0];
+              })
+              .join(" ")
+              .slice(0, 40);
             return verifyTexts(texts, stopId, route);
           });
         } else {
@@ -282,7 +384,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
             // No answer in time: not a vote. If a bus stays in view with no answers at all, say so.
             if (performance.now() - track.lastAnswer > NO_ANSWER_MS && track.announced === "checking") {
               track.announced = "unsure";
-              sayPhrase("not_sure");
+              speak([phrase("not_sure")]);
             }
             return;
           }
@@ -303,6 +405,20 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
           return;
         }
         const now = performance.now();
+        stats.frames++;
+        fpsFrames++;
+        if (now - fpsFrom > 2000) {
+          stats.fps = Math.round((fpsFrames * 10000) / (now - fpsFrom)) / 10;
+          fpsFrom = now;
+          fpsFrames = 0;
+        }
+        stats.buses = found.buses.length;
+        stats.widest = Math.round(
+          found.buses.reduce(function (w, item) {
+            return Math.max(w, item.w);
+          }, 0),
+        );
+        stats.video = video.videoWidth + "x" + video.videoHeight;
         tracks = updateTracks(tracks, found.buses, now);
         if (target) {
           // The bus is confirmed: only the door matters now (no more sign reading).
@@ -322,7 +438,8 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         });
         if (near.length && now - lastSeenSpoken > REPEAT_AFTER_MS * 2) {
           lastSeenSpoken = now;
-          sayPhrase("bus_seen");
+          lastHint = now;
+          speak([phrase("bus_seen")]);
         }
         near
           .sort(function (a, b) {
@@ -333,6 +450,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
               ask(video, item, now, found.others);
             }
           });
+        guideSearch(video, found.buses, near, now);
         draw(overlay, video, tracks, null, null, null);
         requestNext();
       }
@@ -346,25 +464,86 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         }
       }
 
-      async function start(): Promise<void> {
-        // ?video=/test/bus.webm plays a recorded clip instead of the camera (testing, demo video);
-        // ?image=/test/tov_nomyn_san_1.png shows a still photo as if the camera were pointed at it.
-        const params = new URLSearchParams(window.location.search);
-        const recorded = params.get("video");
-        const photo = params.get("image");
+      // ?video=/test/bus.webm plays a recorded clip instead of the camera (testing, demo video);
+      // ?image=/test/tov_nomyn_san_1.png shows a still photo as if the camera were pointed at it.
+      const params = new URLSearchParams(window.location.search);
+      const recorded = params.get("video");
+      const photo = params.get("image");
+      function openStream(): Promise<MediaStream | null> {
         if (photo) {
-          stream = await photoStream(photo);
-        } else if (!recorded) {
+          return photoStream(photo);
+        }
+        if (recorded) {
+          return Promise.resolve(null);
+        }
+        return navigator.mediaDevices.getUserMedia({
+          // 1080p: the route number on an LED sign is a few dozen pixels; more pixels, further away.
+          video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } },
+          audio: false,
+        });
+      }
+
+      // #2 Back from a locked screen / a call / another app: iPhone stops the camera while the page is
+      // hidden. Start it again if it stopped, and tell the rider the camera is looking again.
+      let hiddenAt = 0;
+      async function onVisibility(): Promise<void> {
+        if (document.visibilityState === "hidden") {
+          hiddenAt = performance.now();
+          return;
+        }
+        const away = hiddenAt ? performance.now() - hiddenAt : 0;
+        hiddenAt = 0;
+        const video = videoRef.current;
+        if (stopped || !video || away < 2000) {
+          return;
+        }
+        const track = stream ? stream.getVideoTracks()[0] : null;
+        if (stream && (!track || track.readyState === "ended" || track.muted || video.paused)) {
           try {
-            stream = await navigator.mediaDevices.getUserMedia({
-              video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
-              audio: false,
+            const fresh = await openStream();
+            if (stopped) {
+              if (fresh) {
+                fresh.getTracks().forEach(function (item) {
+                  item.stop();
+                });
+              }
+              return;
+            }
+            stream.getTracks().forEach(function (item) {
+              item.stop();
             });
-          } catch {
-            sayPhrase("camera_failed");
-            onError();
-            return;
+            stream = fresh;
+            video.srcObject = fresh;
+          } catch (e) {
+            stats.error = "camera restart " + (e instanceof Error ? e.name : "");
           }
+        }
+        video.play().catch(function () {});
+        // Bus already confirmed: the door directions follow by themselves; else: looking again.
+        speak([target ? phrase("app_resumed") : phrase("camera_resumed")]);
+      }
+      document.addEventListener("visibilitychange", onVisibility);
+
+      async function start(): Promise<void> {
+        if (!photo && !recorded) {
+          await explainPermission("camera"); // the first time the phone asks for the camera
+        }
+        // While the phone's camera box waits for an answer, repeat what to press (a blind rider may
+        // not find it at once; nothing else happens until it's answered).
+        const askAgain = setInterval(function () {
+          if (!stopped) {
+            speak([phrase("camera_permission")]);
+          }
+        }, 15000);
+        try {
+          stream = await openStream().finally(function () {
+            clearInterval(askAgain);
+          });
+        } catch (e) {
+          stats.error = "camera " + (e instanceof Error ? e.name : "");
+          speak([phrase("camera_failed")]);
+          onError();
+          return;
         }
         const video = videoRef.current;
         if (stopped || !video) {
@@ -378,19 +557,84 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         }
         try {
           await video.play();
-        } catch {
-          return; // unmounted while starting (React runs effects twice in dev)
+        } catch (e) {
+          if (stopped) {
+            return; // unmounted while starting (React runs effects twice in dev)
+          }
+          // iPhone can refuse to start the video outside a touch: start it on the rider's next one.
+          stats.error = "play " + (e instanceof Error ? e.name : "");
+          speak([phrase("camera_tap")]);
+          const v = video;
+          await new Promise<void>(function (resolve) {
+            function retry(): void {
+              if (stopped) {
+                document.removeEventListener("pointerup", retry, true);
+                resolve();
+                return;
+              }
+              v.play()
+                .then(function () {
+                  document.removeEventListener("pointerup", retry, true);
+                  stats.error = "";
+                  resolve();
+                })
+                .catch(function () {});
+            }
+            document.addEventListener("pointerup", retry, true);
+          });
         }
         if (stopped) {
           return;
         }
-        sayPhrase("camera_on");
-        const provider = await loadDetector();
-        if (phoneOcr) {
-          // Nothing read yet ("unsure"): wakes the free server and fetches this stop's routes, so the
-          // first real read isn't the one that waits for them.
-          verifyTexts([], stopId, route);
-          await loadOcr(); // reads the signs here; 15 MB, cached by the browser after the first time
+        speak([phrase("camera_on")]);
+        stats.stage = "loading";
+        // Models still loading (first time: ~25 MB): say so, so the rider knows to wait.
+        let loadingSaid = false;
+        const loadingTimer = setInterval(function () {
+          loadingSaid = true;
+          if (!talking) {
+            speak([phrase("camera_loading")]);
+          }
+        }, 10000);
+        const firstLoadingSay = setTimeout(function () {
+          loadingSaid = true;
+          speak([phrase("camera_loading")]);
+        }, LOADING_SAY_MS);
+        let provider = "";
+        try {
+          provider = await loadDetector();
+          if (phoneOcr) {
+            // Nothing read yet ("unsure"): wakes the free server and fetches this stop's routes, so the
+            // first real read isn't the one that waits for them.
+            verifyTexts([], stopId, route);
+            signReader = await loadOcr();
+            if (!signReader) {
+              stats.error = "sign reader not loaded";
+              if (!stopped) {
+                speak([phrase("ocr_failed")]);
+              }
+            }
+          }
+        } catch (e) {
+          clearInterval(loadingTimer);
+          clearTimeout(firstLoadingSay);
+          stats.error = "detector " + (e instanceof Error ? e.message : String(e));
+          if (!stopped) {
+            speak([phrase("camera_failed")]);
+            onError();
+          }
+          return;
+        }
+        clearInterval(loadingTimer);
+        clearTimeout(firstLoadingSay);
+        if (stopped) {
+          return;
+        }
+        stats.provider = provider;
+        stats.stage = "looking";
+        scanningSince = performance.now();
+        if (loadingSaid) {
+          speak([phrase("camera_ready")]);
         }
         // Door model in the background, needed only once the bus is found. Without WebGPU both models
         // share one CPU queue, so it waits for the "yes" instead of slowing the sign reading.
@@ -403,6 +647,8 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
       start();
       return function () {
         stopped = true;
+        document.removeEventListener("visibilitychange", onVisibility);
+        clearInterval(debugTimer);
         stopBeacon();
         guide.current = null;
         if (stream) {
@@ -412,13 +658,14 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         }
       };
     },
-    [stopId, route, foundSpeech, onFound, onError, guide, phoneOcr],
+    [stopId, route, foundSpeech, onFound, onError, guide, phoneOcr, screenReader],
   );
 
   return (
     <div className="camera">
-      <video ref={videoRef} playsInline muted className="camera-video" />
+      <video ref={videoRef} playsInline muted className="camera-video" aria-hidden="true" />
       <canvas ref={overlayRef} className="camera-overlay" aria-hidden="true" />
+      {typeof window !== "undefined" && new URLSearchParams(window.location.search).has("debug") && <p ref={debugRef} className="camera-debug" />}
     </div>
   );
 }

@@ -109,6 +109,12 @@ class RideResponse(BaseModel):
     stops: list[RideStop] = Field(description="Boarding stop first, alighting stop last, in riding order")
 
 
+class SpeechToken(BaseModel):
+    jwt: str = Field(description="Temporary Speechmatics key (60 s): open the WebSocket as url + '?jwt=' + jwt")
+    url: str = Field(description="Speechmatics real-time WebSocket URL")
+    ttl: int = Field(description="Seconds the key is valid")
+
+
 class AskResponse(BaseModel):
     heard: str = Field(description="The question as heard (or typed); '' if nothing was heard")
     answer: str = Field(description="The whole answer, for the screen")

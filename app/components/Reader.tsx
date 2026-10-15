@@ -8,10 +8,10 @@
 //   one tap: where am I     press and hold: say a command (iPhone: a spoken menu)     screen-reader mode: plain buttons
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { canListenInMongolian, listenInBrowser } from "../lib/listen";
-import { savedMode, type Mode } from "../lib/mode";
-import { beep } from "../lib/record";
-import { hasClip, phrase, vibrate, type PhraseKey } from "../lib/speech";
+import { serverCaps } from "../lib/api";
+import { canListen, enableSpeechmatics, listen as listenToRider } from "../lib/listen";
+import { savedMode, savedReader, type Mode } from "../lib/mode";
+import { beep, hasClip, phrase, vibrate, type PhraseKey } from "../lib/speech";
 import { advise, openCamera, quality, type Advice, type Camera } from "../lib/reader/aim";
 import { readerCommand, type ReaderCommand } from "../lib/reader/commands";
 import { startRemoteLog } from "../lib/reader/remoteLog";
@@ -211,6 +211,10 @@ export default function Reader() {
       return;
     }
     startRemoteLog();
+    // Online with a speech key on the server (Speechmatics): the rider can say commands on an iPhone too.
+    serverCaps().then(function (caps) {
+      enableSpeechmatics(caps.speech);
+    });
     const stop = listen(function (msg) {
       if (msg.type === "progress" && msg.part === "voice" && msg.total) {
         setVoiceLoad(Math.min(99, Math.round((100 * msg.loaded) / msg.total)));
@@ -266,22 +270,15 @@ export default function Reader() {
     if (navigator.storage && navigator.storage.persist) {
       navigator.storage.persist().catch(function () {}); // keep the 50 MB of models
     }
-    // Production only: in development the code's file names don't change with their content, so a
-    // kept copy would hide your edits. Scope "/": the reader's workers live under /_next/static/.
-    if (process.env.NODE_ENV === "production" && "serviceWorker" in navigator) {
-      navigator.serviceWorker
-        .register("/read-sw.js", { scope: "/" })
-        .then(function () {
-          keepOffline(
-            ["/read"].concat(
-              performance.getEntriesByType("resource").map(function (item) {
-                return item.name;
-              }),
-            ),
-          );
-        })
-        .catch(function () {});
-    }
+    // The app's one service worker (public/sw.js, registered by components/OfflineClips.tsx in the
+    // production build) keeps this page offline; it's told which files this visit used.
+    keepOffline(
+      ["/read"].concat(
+        performance.getEntriesByType("resource").map(function (item) {
+          return item.name;
+        }),
+      ),
+    );
     trace("start tapped: " + (modeRef.current === "sr" ? "screen reader" : "voice") + " mode");
     setPhase("aim");
     // Heard at once, before any model is loaded: a blind rider must know the app took the tap.
@@ -738,7 +735,7 @@ export default function Reader() {
   }
 
   function helpKey(): PhraseKey {
-    return modeRef.current === "sr" ? "read_help_sr" : canListenInMongolian() ? "read_help" : "read_help_menu";
+    return modeRef.current === "sr" ? "read_help_sr" : canListen() ? "read_help" : "read_help_menu";
   }
 
   function help(): void {
@@ -893,7 +890,7 @@ export default function Reader() {
       closeMenu();
       return;
     }
-    if (!canListenInMongolian()) {
+    if (!canListen()) {
       openMenu();
       return;
     }
@@ -905,7 +902,7 @@ export default function Reader() {
     if (s && s.playing && wasPlaying) {
       s.playing.pause();
     }
-    const rec = listenInBrowser();
+    const rec = listenToRider();
     talking.current = rec;
     beep();
     setStatus(phrase("listening"));
@@ -1033,7 +1030,7 @@ export default function Reader() {
     );
     return (
       <main className="flow reader">
-        <SrScreen title={title} status={status} actions={actions}>
+        <SrScreen title={title} stepId={phase} status={status} live={savedReader() === "screen"} actions={actions}>
           {view}
         </SrScreen>
       </main>

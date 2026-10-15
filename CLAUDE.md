@@ -82,7 +82,7 @@ Two languages only: **TypeScript** (app) and **Python** (model + server).
 | Detection (bus, door, route_sign) | YOLO11n fine-tuned → ONNX → onnxruntime-web | Phone |
 | Tracking + stopping logic | Own IoU box tracker | Phone |
 | Guidance audio | Web Audio API (PannerNode), recorded Mongolian voice clips | Phone |
-| Voice input (Mongolian) | Chrome speech recognition `mn-MN`; backup Chimege API; last resort tap zones + voice menu | Phone + cloud |
+| Voice input (Mongolian) | Speechmatics real-time (`mn`), streamed from the phone, 60 s key from our server; backup Chrome speech recognition `mn-MN`; last resort typing + voice menu | Phone + cloud |
 | Model training | Ultralytics YOLO11n, Colab/Kaggle GPU | Cloud notebook |
 | Labeling | Roboflow | Browser |
 | Route-number OCR | PaddleOCR on sign crops | Server |
@@ -93,7 +93,7 @@ Two languages only: **TypeScript** (app) and **Python** (model + server).
 | Reader: OCR | Same detector at 1280 px + **PaddleOCR `cyrillic_PP-OCRv5_mobile_rec`** (Apache-2.0, 8 MB, has ө/ү); lines cut along their own angle, 6 at a time (`lib/reader/pageOcr.ts`); Tesseract not needed (PaddleOCR already 99%+) | Phone (worker) |
 | Reader: reading order | Deskewed XY-cut: columns may lean (tilted photos), cut only between paragraph text, rows of the same column layout merged first (`lib/reader/layout.ts`) | Phone |
 | Reader: voice | **Meta MMS-TTS `facebook/mms-tts-mon`** (VITS, CC-BY-NC-4.0: free, non-commercial) → ONNX, weights packed 114 → 35 MB (`deploy/reader_models.py`); ш→щ, ө→ѳ (its training alphabet); numbers/units in words (`lib/reader/speechText.ts`); WebGPU when the phone has it (~15x faster than real time), else WASM (~1.7x); spoken piece by piece; never the phone's own voice. Fixed reader sentences: pre-made OronTTS clips when made | Phone (worker) |
-| Reader: offline | `public/read-sw.js` keeps the page, code and onnxruntime; models in Cache Storage (`lib/reader/modelStore.ts`) | Phone |
+| Reader: offline | `public/sw.js` keeps the page, code and onnxruntime; models in Cache Storage (`lib/reader/modelStore.ts`) | Phone |
 | Reader: summary / questions (optional) | Free LLM tier (e.g. Gemini Flash free tier; limits change, check AI Studio) — only when asked, never for the read-aloud text | Cloud |
 
 ## Architecture & data contract

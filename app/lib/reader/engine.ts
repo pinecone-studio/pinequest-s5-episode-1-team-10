@@ -72,7 +72,7 @@ function engine(part: Part): Worker {
   return w;
 }
 
-// Asks the service worker (public/read-sw.js) to keep these files for offline use.
+// Asks the service worker (public/sw.js) to keep these files for offline use.
 export function keepOffline(urls: string[]): void {
   if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) {
     return;

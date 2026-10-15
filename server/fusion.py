@@ -10,6 +10,7 @@ _TOKEN = re.compile(r"\d{1,3}[^\W\d_]{0,2}")
 # "Ч:58" is read as "4:58" by the English model: drop whatever sits before a colon.
 _PREFIX = re.compile(r"\S*:")
 _GLUED = re.compile(r"(\d{1,3})(?:[^\W\d_]{3,}|[^\W\d_]+\d)")
+_SUFFIXED = re.compile(r"(\d{1,3})[^\W\d_]{1,2}")
 
 
 def _normalize(s):
@@ -49,15 +50,25 @@ def candidates(texts, routes_here=None, city_numbers=None):
         return found
     here = {route_number(r) for r in routes_here}
     che_here = {route_number(r) for r in routes_here if r.strip().startswith("Ч")}
+
+    def route_of(tok):
+        if tok in here:
+            return tok
+        if city_numbers is not None and tok.startswith("4") and tok[1:] in che_here and tok not in city_numbers:
+            return tok[1:]
+        return None
+
     out = {}
     for tok, conf in found.items():
-        if tok in here:
-            num = tok
-        elif city_numbers is not None and tok.startswith("4") and tok[1:] in che_here and tok not in city_numbers:
-            num = tok[1:]
-        else:
-            continue
-        out[num] = max(conf, out.get(num, 0.0))
+        num = route_of(tok)
+        # The destination's first letter run into the number ("Ч:55 Н..." read "455H" on Safari):
+        # when no route in the city is (or starts with) the lettered token, the bare number counts.
+        # A lettered route (29Б, 7а) or a cut-off one ("3Н" of 3НА) is never cut down to a bare number.
+        bare = _SUFFIXED.fullmatch(tok)
+        if num is None and bare and city_numbers is not None and not any(n.startswith(tok) for n in city_numbers):
+            num = route_of(bare.group(1))
+        if num is not None:
+            out[num] = max(conf, out.get(num, 0.0))
     return out
 
 
