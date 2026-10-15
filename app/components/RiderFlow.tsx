@@ -167,12 +167,13 @@ export default function RiderFlow() {
     setMessage(found.speech.join(" "));
     // The first sentence ("34-р автобусанд суугаарай.") is pre-made, so it plays at once.
     say(found.speech.concat(phrase("open_camera")));
-    // Load + warm both models while the route is read out, so the camera detects from its first frame.
-    loadDetector()
-      .then(async function (provider) {
-        if (!caps.current.ocr) {
-          await loadOcr(); // free hosting: the phone reads the signs (before the 40 MB door model downloads)
-        }
+    // Camera models download while the route is read out and the rider walks to the stop (first visit
+    // ~25 MB; later from the browser cache), bus detector and sign reader at the same time. Not earlier:
+    // on a slow line, downloading from the start made a trip plan take 17 s instead of 1 s.
+    const detecting = loadDetector();
+    const reading = caps.current.ocr ? Promise.resolve(true) : loadOcr(); // free hosting: the phone reads the signs
+    Promise.all([detecting, reading])
+      .then(function ([provider]) {
         // Without WebGPU the door model would queue in front of bus detection: it loads after the "yes".
         return provider === "webgpu" ? loadDoorDetector() : undefined;
       })
@@ -246,14 +247,6 @@ export default function RiderFlow() {
     serverCaps().then(function (c) {
       caps.current = c;
       setServerOcr(c.ocr);
-      // Camera models download now, in parallel (first visit ~25 MB: ~25 s on a slow connection), so
-      // they're ready by the time the rider opens the camera; later visits come from the browser cache.
-      loadDetector().catch(function () {
-        // the camera step loads (and reports) it again
-      });
-      if (!c.ocr) {
-        loadOcr();
-      }
       enableSpeechmatics(c.speech);
       if (c.speech) {
         warmSpeech(); // a key ready before the rider first speaks

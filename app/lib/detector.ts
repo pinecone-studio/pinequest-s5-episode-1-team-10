@@ -45,8 +45,10 @@ export function exclusive<T>(job: () => Promise<T>): Promise<T> {
 
 // Model files are downloaded outside the queue: on a slow phone connection the door model (40 MB)
 // took ~45 s, and while it downloaded inside the queue the bus model and sign reading had to wait.
+// Low priority: they download in the background while the rider uses the app, and must never hold up
+// its own requests (measured on a slow line: a trip plan took 17 s instead of 1 s behind them).
 export async function modelBytes(url: string): Promise<Uint8Array> {
-  const response = await fetch(url);
+  const response = await fetch(url, { priority: "low" } as RequestInit);
   if (!response.ok) {
     throw new Error(url + ": " + response.status);
   }
