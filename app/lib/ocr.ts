@@ -53,6 +53,17 @@ export function loadOcr(): Promise<boolean> {
       rec = await exclusive(function () {
         return rt.ort.InferenceSession.create(recBytes, { executionProviders: rt.providers });
       });
+      // One dummy detection, so the first real sign doesn't pay for shader / wasm compile.
+      const warm = det;
+      try {
+        await exclusive(function () {
+          return warm.run({
+            [warm.inputNames[0]]: new rt.ort.Tensor("float32", new Float32Array(3 * 32 * 320), [1, 3, 320, 32]),
+          });
+        });
+      } catch (e) {
+        console.warn("sign reader warmup skipped", e);
+      }
       return true;
     })().catch(function (e) {
       loading = null;

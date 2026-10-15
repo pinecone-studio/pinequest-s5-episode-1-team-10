@@ -12,7 +12,7 @@ export interface Box {
 }
 
 const MODEL_URL = "/models/yolo11n.onnx";
-const SIZE = 640; // model input is SIZE x SIZE
+const SIZE = 320; // model input is SIZE x SIZE. 320 is enough for a bus and about 4x less work than 640.
 const BUS_CLASS = 5; // COCO "bus"
 const MIN_SCORE = 0.4;
 // Weaker hits (a bus half out of frame, a car) aren't tracked, but their area is blacked out of
@@ -56,18 +56,18 @@ export async function modelBytes(url: string): Promise<Uint8Array> {
   return new Uint8Array(await response.arrayBuffer());
 }
 
-// WebGPU only where onnxruntime's WebGPU path is proven (Chrome, Android). iPhone/iPad and Safari
-// have WebGPU now too, but a session that builds and then returns nothing would never find a bus, so
-// they use the WASM path, which works there (checked in WebKit: ~10 fps, bus found, sign read).
-// ?cpu forces WASM anywhere (testing).
+// WebGPU wherever the phone has it, including iPhone. The warmup run below must return real numbers;
+// if it doesn't, the caller uses WASM. ?cpu forces WASM (testing).
 function webgpuWanted(): boolean {
-  if (!("gpu" in navigator) || new URLSearchParams(window.location.search).has("cpu")) {
-    return false;
-  }
-  const ua = navigator.userAgent;
-  const ios = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-  const safari = /AppleWebKit/.test(ua) && !/Chrome\/|Chromium\/|Edg\//.test(ua);
-  return !ios && !safari;
+  return "gpu" in navigator && !new URLSearchParams(window.location.search).has("cpu");
+}
+
+function wasmThreads(o: OrtModule): number {
+  // Threaded WASM needs cross-origin isolation (next.config.ts sends COOP + COEP). Without it, one
+  // thread: asking for more crashes the runtime.
+  const threads = typeof self !== "undefined" && self.crossOriginIsolated ? Math.min(navigator.hardwareConcurrency || 1, 4) : 1;
+  o.env.wasm.numThreads = threads;
+  return threads;
 }
 
 // Session + a first run (compiles the GPU shaders, ~1 s on a phone, now instead of on the first camera
@@ -108,6 +108,7 @@ async function load(): Promise<string> {
     (globalThis as { ortMaxPages?: number }).ortMaxPages = 8192;
   }
   const o = ort;
+  const threads = wasmThreads(o);
   const bytes = await download;
   if (webgpuWanted()) {
     try {
@@ -118,7 +119,7 @@ async function load(): Promise<string> {
     }
   }
   session = await build(o, bytes, ["wasm"]);
-  return "wasm";
+  return threads > 1 ? "wasm/" + threads : "wasm";
 }
 
 // One shared load: the model is 10 MB and a second session would double GPU memory.
