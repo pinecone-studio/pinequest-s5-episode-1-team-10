@@ -272,7 +272,7 @@ def _best_transfer(origins, dests):
                         if t1["stop_id"] not in reach:
                             continue
                         c1, o, r1, n1 = reach[t1["stop_id"]]
-                        if spoken_route(r1) == spoken_route(r2):
+                        if (spoken_key(r1) or r1.strip()) == (spoken_key(r2) or r2.strip()):
                             continue  # same number on the sign (Ч:29Б / Ч:29Б-Z variants): not a real transfer
                         cost = c1 + (k - j) + TRANSFER_PENALTY + walk / TRANSFER_WALK_COST_M
                         if best is None or cost < best[0]:
@@ -372,16 +372,15 @@ def spoken_key(route_no):
 
 
 def spoken_route(route_no):
-    """'Ч:75' -> '75-р автобус', 'М:1А-Ма' -> '1 А автобус'."""
-    key = spoken_key(route_no)
-    if not key:
-        return f"{route_no.strip()} автобус"
-    num, letter = key
-    return f"{num} {letter} автобус" if letter else f"{num}-р автобус"
+    """'Ч:75' -> 'Ч далан тав автобус', 'М:1А-Ма' -> 'М нэг А автобус': the route in words (numwords.route_words,
+    letters as shared/route_speech.json says them), never digits or the raw code. Just 'автобус' if it has
+    no route number. Only for speech: which routes are the same bus is spoken_key."""
+    words = numwords.route_words(route_no)
+    return f"{words} автобус" if words else "автобус"
 
 
 def transfer_speech(route_no):
-    """'29-р автобусанд дамжин суугаарай.' -- per route, pre-recordable like take_speech."""
+    """'Ч хорин ес автобусанд дамжин суугаарай.' -- per route, pre-recordable like take_speech."""
     return f"{spoken_route(route_no)}анд дамжин суугаарай."
 
 
@@ -416,9 +415,9 @@ def _plan(o, route, n, d, named, exact, transfer=None):
         leg1_off = t1
     else:
         leg1_off = d
-    # Pieces, all pre-recordable: "29 Б автобусанд суугаарай." "Суух зогсоол:" "Вокзал." "Хойд тал."
+    # Pieces, all pre-recordable: "Ч хорин ес Б автобусанд суугаарай." "Суух зогсоол:" "Вокзал." "Хойд тал."
     # "Зогсоол руу 460 метр алхана." "6 зогсоол явна." then either "Буух зогсоол:" ... or
-    # "Дамжин суух зогсоол:" "МУИС." ["Зогсоол руу 120 метр алхана."] "3-р автобусанд дамжин суугаарай." "4 зогсоол явна." "Буух зогсоол:" ...
+    # "Дамжин суух зогсоол:" "МУИС." ["Зогсоол руу 120 метр алхана."] "Ч гурав автобусанд дамжин суугаарай." "4 зогсоол явна." "Буух зогсоол:" ...
     speech = [take_speech(route), "Суух зогсоол:"] + stop_pieces(o["name"]) + [walk_piece(o["distance_m"]), ride_piece(n)]
     plan = {
         "route": route,
@@ -439,7 +438,7 @@ def _plan(o, route, n, d, named, exact, transfer=None):
             "alight_stop": _stop_out(d),
             "stops_to_ride": n2,
             "found_speech": found_speech(r2),
-            # Said at the transfer stop: ["Зогсоол руу 40 метр алхана."] "29-р автобусанд дамжин суугаарай." "4 зогсоол явна." "Буух зогсоол:" ...
+            # Said at the transfer stop: ["Зогсоол руу 40 метр алхана."] "Ч хорин ес автобусанд дамжин суугаарай." "4 зогсоол явна." "Буух зогсоол:" ...
             "speech": second + ["Буух зогсоол:"] + stop_pieces(d["name"]) + near_note,
         }
     plan["speech"] = speech + ["Буух зогсоол:"] + stop_pieces(d["name"]) + near_note
