@@ -26,6 +26,14 @@ export function unlockAudio(): void {
   audio.play().catch(function () {
     unlocked = false;
   });
+  // iPhone also keeps the phone's own voice (the fallback for sentences without a clip) silent until
+  // it has spoken once inside a touch.
+  const synth = typeof window === "undefined" ? null : window.speechSynthesis;
+  if (synth) {
+    const u = new SpeechSynthesisUtterance(" ");
+    u.volume = 0;
+    synth.speak(u);
+  }
 }
 
 // Text -> name of its pre-made clip (free hosting), played straight from /tts/<name>.mp3 instead of
@@ -147,10 +155,29 @@ export function stopSpeaking(): void {
 
 // Speaks the sentences in order, interrupting whatever was playing. All clips are requested at
 // once so the server makes the later ones while the first plays. Resolves when done or interrupted.
-export async function say(texts: string[]): Promise<void> {
+let speaking: Promise<void> = Promise.resolve(); // the current queue, for sayAfter
+export function say(texts: string[]): Promise<void> {
   stopSpeaking();
+  speaking = playAll(texts, turn);
+  return speaking;
+}
+
+// Speaks after whatever is being said now, without cutting it off (a screen's options after its
+// message). A later say() or stopSpeaking() drops it, like everything queued.
+export function sayAfter(texts: string[]): Promise<void> {
   const mine = turn;
-  const clips = texts.map(fetchClip);
+  const clips = texts.map(fetchClip); // fetched now, played in turn
+  speaking = speaking.then(function () {
+    return mine === turn ? playClips(texts, clips, mine) : undefined;
+  });
+  return speaking;
+}
+
+function playAll(texts: string[], mine: number): Promise<void> {
+  return playClips(texts, texts.map(fetchClip), mine);
+}
+
+async function playClips(texts: string[], clips: Promise<string | null>[], mine: number): Promise<void> {
   for (let i = 0; i < clips.length; i++) {
     const url = await clips[i];
     if (mine !== turn) {

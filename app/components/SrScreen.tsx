@@ -30,7 +30,10 @@ export default function SrScreen({ title, status, actions, children }: Props) {
       <h1 ref={heading} tabIndex={-1} className="title">
         {title}
       </h1>
-      {status && <p className="status">{status}</p>}
+      {/* Always in the page (empty or not) so every new message is announced, not only new screens. */}
+      <p className="status" role="status" aria-live="polite" aria-atomic="true">
+        {status}
+      </p>
       {children}
       <div className="actions">
         {actions.map(function (item) {

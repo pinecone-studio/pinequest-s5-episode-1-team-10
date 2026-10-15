@@ -43,6 +43,16 @@ export function canListenInBrowser(): boolean {
   return typeof window !== "undefined" && recognitionClass() !== null;
 }
 
+// iPhone / iPad (every browser there is Safari underneath): Apple's speech recognition has no
+// Mongolian, so asking would only fail or return another language. Typing is offered at once.
+export function canListenInMongolian(): boolean {
+  if (!canListenInBrowser()) {
+    return false;
+  }
+  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  return !ios;
+}
+
 function kind(code: string): ListenError {
   if (code === "not-allowed" || code === "audio-capture") {
     return "no-mic";

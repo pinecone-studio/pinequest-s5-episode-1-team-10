@@ -9,7 +9,7 @@
 // Keyboard (desktop testing, Bluetooth keyboards): arrows move, Enter/Space choose, R repeats.
 // Options are also real buttons with labels, so the phone's own screen reader can use them.
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
-import { phrase, say, unlockAudio, vibrate } from "../lib/speech";
+import { phrase, say, sayAfter, unlockAudio, vibrate } from "../lib/speech";
 
 export interface MenuItem {
   id: string;
@@ -24,6 +24,7 @@ interface Props {
   menuId?: string; // a different value = a different menu on the same screen (SOS): start from its top again
   onHoldStart?: () => void; // finger held still HOLD_MS: start listening
   onHoldEnd?: () => void; // finger lifted after a hold: stop listening
+  intro?: boolean; // read the options out when the screen (or menu) opens, after its message
   children?: ReactNode; // shown inside the touch surface (plan card, camera)
 }
 
@@ -31,7 +32,10 @@ export const SWIPE_PX = 40;
 export const DOUBLE_TAP_MS = 350;
 export const HOLD_MS = 500;
 
-export default function VoiceMenu({ items, primary, menuId, onHoldStart, onHoldEnd, children }: Props) {
+// The gesture hint follows the options only the first few times; after that the rider knows it.
+let hintsLeft = 3;
+
+export default function VoiceMenu({ items, primary, menuId, onHoldStart, onHoldEnd, intro, children }: Props) {
   const [index, setIndexState] = useState(-1); // -1: nothing reached yet
   // Fast swipes arrive before React re-renders, so the live position is kept in a ref too.
   const at = useRef(-1);
@@ -52,6 +56,31 @@ export default function VoiceMenu({ items, primary, menuId, onHoldStart, onHoldE
       }
     };
   }, []);
+
+  // Everything on the screen is spoken: after the screen's own message, what can be done here.
+  const labels = items
+    .map(function (item) {
+      return item.label;
+    })
+    .join("|");
+  const introduced = useRef(""); // React may run the effect twice (dev): say the options once
+  useEffect(
+    function () {
+      if (!intro || !labels || introduced.current === menuId + labels) {
+        return;
+      }
+      introduced.current = menuId + labels;
+      const texts = [phrase("options_intro")].concat(labels.split("|"));
+      if (hintsLeft > 0) {
+        hintsLeft--;
+        texts.push(phrase("options_hint"));
+      }
+      sayAfter(texts);
+    },
+    // once per screen (VoiceMenu is keyed by step) and per menu on it (SOS); not on every render
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [menuId, intro],
+  );
 
   // A new menu on the same screen (the screen itself, e.g. the camera, keeps running): the next
   // gesture starts from its top.
