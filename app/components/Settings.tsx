@@ -10,12 +10,14 @@ interface Props {
   mode: Mode;
   onMode: (mode: Mode) => void;
   onDestination: (text: string) => void;
+  onPlace: (text: string) => void;
   onTutorial: () => void;
   onBack: () => void;
 }
 
-export default function Settings({ mode, onMode, onDestination, onTutorial, onBack }: Props) {
+export default function Settings({ mode, onMode, onDestination, onPlace, onTutorial, onBack }: Props) {
   const [typed, setTyped] = useState("");
+  const [place, setPlace] = useState("");
   const heading = useRef<HTMLHeadingElement>(null);
 
   useEffect(function () {
@@ -28,6 +30,12 @@ export default function Settings({ mode, onMode, onDestination, onTutorial, onBa
     e.preventDefault();
     if (typed.trim()) {
       onDestination(typed.trim());
+    }
+  }
+  function submitPlace(e: FormEvent): void {
+    e.preventDefault();
+    if (place.trim()) {
+      onPlace(place.trim());
     }
   }
 
@@ -60,6 +68,21 @@ export default function Settings({ mode, onMode, onDestination, onTutorial, onBa
       </fieldset>
 
       <FamilyContact />
+
+      <form className="field" onSubmit={submitPlace}>
+        <label htmlFor="place">Одоо байгаа газраа бичих</label>
+        <input
+          id="place"
+          value={place}
+          onChange={function (e) {
+            setPlace(e.target.value);
+          }}
+          placeholder="Төв номын сан"
+        />
+        <button type="submit" className="action">
+          Энэ зогсоол дээр байна
+        </button>
+      </form>
 
       <form className="field" onSubmit={submit}>
         <label htmlFor="dest">Очих газраа бичих (туслагч)</label>

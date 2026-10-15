@@ -161,6 +161,14 @@ export default function VoiceMenu({ items, primary, menuId, onHoldStart, onHoldE
 
   function onPointerDown(e: PointerEvent): void {
     unlockAudio();
+    // Keep the finger's lift even if it slides off this surface, or a hold never stops listening.
+    if (e.currentTarget instanceof HTMLElement) {
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        // the lift still ends the hold when it lands on this surface
+      }
+    }
     down.current = { x: e.clientX, y: e.clientY };
     cancelHold();
     if (onHoldStart) {
