@@ -6,7 +6,7 @@ export const metadata: Metadata = {
   title: "Автобус хөтөч",
   description: "Хараагүй зорчигчийг зөв автобусны хаалга хүртэл хөтөлнө.",
   // iPhone "Add to Home Screen": full screen, its name and icon (Android reads app/manifest.ts).
-  appleWebApp: { capable: true, title: "Автобус хөтөч", statusBarStyle: "black" },
+  appleWebApp: { capable: true, title: "bus-khutuch", statusBarStyle: "black" },
   icons: { apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }] },
 };
 

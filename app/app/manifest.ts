@@ -5,8 +5,8 @@ import type { MetadataRoute } from "next";
 export default function manifest(): MetadataRoute.Manifest {
   return {
     id: "/",
-    name: "Автобус хөтөч",
-    short_name: "Автобус хөтөч",
+    name: "bus-khutuch",
+    short_name: "bus-khutuch",
     description: "Хараагүй зорчигчийг зөв автобусны хаалга хүртэл хөтөлнө.",
     lang: "mn",
     dir: "ltr",

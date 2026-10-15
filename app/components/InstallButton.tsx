@@ -7,13 +7,10 @@
 //   The steps are not a live region (VoiceOver would talk over the app's voice): swipe to read them.
 import { useState, useSyncExternalStore } from "react";
 import { installState, openInstallDialog, serverInstallState, subscribeInstall } from "../lib/install";
-import { phrase, say, unlockAudio } from "../lib/speech";
+import { IOS_INSTALL_STEPS } from "../lib/installSteps";
+import { say, unlockAudio } from "../lib/speech";
 
-// TODO(wording): placeholder drafts in shared/phrases.json (install_ios_1..3), to be rewritten by the
-// team. The iPhone install steps in Mongolian for a VoiceOver user, one sentence each, in order: Share
-// button (bottom of Safari) → "Add to Home Screen" → "Add". After changing them, make their clips
-// (server: make_speech.py --fixed) so the deploy plays them in the Mongolian voice.
-const IOS_STEPS = [phrase("install_ios_1"), phrase("install_ios_2"), phrase("install_ios_3")];
+const IOS_STEPS = IOS_INSTALL_STEPS; // TODO(wording) in lib/installSteps.ts; hidden while empty
 
 export default function InstallButton() {
   const state = useSyncExternalStore(subscribeInstall, installState, serverInstallState);
@@ -33,7 +30,7 @@ export default function InstallButton() {
     );
   }
 
-  if (state === "ios") {
+  if (state === "ios" && IOS_STEPS.length) {
     return (
       <div className="install-help">
         <button
