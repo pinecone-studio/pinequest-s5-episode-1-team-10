@@ -242,7 +242,7 @@ export default function Reader() {
       return;
     }
     unlockPlayer();
-    keepAwake();
+    keepScreenOn(true); // the whole reading session (iPhone reloads a page that slept)
     const m = chosen ?? savedMode() ?? "voice";
     modeRef.current = m;
     setMode(m);

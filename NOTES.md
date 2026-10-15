@@ -1,8 +1,6 @@
 # Work Notes — Handoff
-
 Read this first every session. Before `/clear`, update all three sections:
 "Update NOTES.md with what we did, the decisions, and what's next."
-
 ## Next
 - [ ] **Finish PR feat/smaller-models-offline**: browser checks with the int8 `ocr_det`/`ocr_rec`/`door` (Chrome WebGPU, `?cpu`, WebKit), then switch the URLs in `lib/ocr.ts` + `lib/doorDetector.ts`; find why the WebKit camera test never starts on Windows; `npm run build && npm start` + Playwright offline test for `sw.js` (scratchpad `sw.mjs`).
 - [ ] **Camera at a real bus stop** (iPhone + Android, live site, add `&debug=1` to see what the camera sees: stage, wasm/webgpu, video size, fps, buses, widest bus px, sign reads + last text, errors). Check: the spoken hints (no bus / far / turn left-right / point at the front), "yes" within a few seconds when the bus is close, door clock directions, wrong "yes" = 0. Note the widest-bus px at which signs start reading.
@@ -53,7 +51,6 @@ Read this first every session. Before `/clear`, update all three sections:
 - [ ] Tune `fusion.CONF_MIN` (0.8) on real sign photos from Otgonjargal's filming; test Cyrillic suffixes (7а, 3Ма) on real signs.
 - [ ] Share data contract with team (`server/contract.py`, `shared/contract.ts`) and get agreement — due Sat 2026-10-10. 
 - [ ] Commit/PR the memory-cycle change when the user says so (not pushed yet).
-
 ## Decisions
 - **2026-10-15** **Reader built on its own page `/read`** (user: "make this one in another page"; free; 90%+; efficient; deployable for free). The bus flow only gained one home option ("Бичиг унших") and a voice route ("ном унш", "энийг уншаад өг" open it; "дахин унш" still asks the bus assistant). Everything on the phone, offline after the first visit:
   - **Capture**: the bus sign reader's text detector on 960 px frames (480 px found only 19% of lines on a whole page; 960 px 99.9%) → ticks (higher = closer to ready), short directions, auto-capture after 2 ready frames (or 9 s with text in view), torch in the dark; full-res photo (≤3000 px). "Move closer" only below the line height that still read 99.3% (0.003 of the frame with a full-res photo, 0.0045 with only a video frame).
@@ -141,7 +138,6 @@ Read this first every session. Before `/clear`, update all three sections:
 - **2026-10-08** `NOTES.md` is the session handoff file (Done / Decisions / Next). Memory cycle: work → update notes → clear → read notes → continue.
 - **2026-10-07** `main` is protected → work on branches, merge through PRs.
 - **2026-10-07** Plan before work: show plan + questions, wait for approval.
-
 ## Done
 - **2026-10-15** **Reader screens match the bus flow** (branch `fix/reader-flow`, not deployed). `/read` opened on its own starts with the two halves (screen reader first). Aim, reading, and page end share one button order: one large action, up to three more, then Автобус руу буцах and Дахин сонсох. The status line is the sentence being read; Дахин сонсох and one tap say that sentence again. Voice mode names the reading buttons once, from pre-made clips. The camera stays off the start screen, the video is hidden from the screen reader, and a sliding finger still ends a hold. iPhone keeps loading the voice only after the photo. Not checked on a real iPhone. New sentences that need a reader clip: `read_retake_sr`, and `read_help_sr` (the wording changed, so the old clip no longer matches).
 - **2026-10-15** Merged `origin/main` into the reader branch (PR prep): conflicts in `RiderFlow.tsx` (kept main's Speechmatics `listen()`/`canListen()`; the "read this" route now checks the heard text before the server round trip), `speech.ts` (kept main's Web Audio fallback for a refused `play()` + the reader's `playbackRate = 1`), `phrases.json` (both sets), `NOTES.md`. The reader now uses main's `listen()`/`canListen()`/`beep` (so hold-to-say commands work on iPhone when the server gives Speechmatics keys; otherwise the spoken menu), `SrScreen` `stepId`/`live`, and main's single service worker: the reader's offline part moved into `public/sw.js` (own cache `reader-app-v4`), `read-sw.js` removed (two workers with the same scope replace each other). `BusCamera.tsx` taken from `origin/fix/main-build` (f56289d): main's own copy has syntax errors (block lost in the #26-#27 merge), so `tsc`/`next build` fail on main without it.
@@ -212,9 +208,9 @@ Read this first every session. Before `/clear`, update all three sections:
 - Built pitch deck (11 slides, Mongolian, speaker notes) as a Slides artifact.
 - Restructured `NOTES.md` into handoff format (Next / Decisions / Done).
 - Added "Memory cycle" rule to `CLAUDE.md`.
-
 ### 2026-10-07
 - Moved `CLAUDE.md` and `NOTES.md` into the git repo; pushed branch `docs/claude-guide` for a PR (merged).
 - Added "Plan before work" rule to `CLAUDE.md`.
 - Created `CLAUDE.md` from the Google Doc hackathon plan.
 - Created `NOTES.md`.
+- **2026-10-15** **main didn't build after #27 + #28** (merged on top of #26): the #26/#27 conflict in `BusCamera.tsx` was resolved by deleting the end of the camera-restart code and the start of `start()` (camera permission hint + its 15 s repeat, the visibility listener), leaving a syntax error; `RiderFlow.tsx` `useSyncExternalStore` fallback typed as string. Rebuilt the block in #27's style (`speak` = status + speech), restored the `explainPermission` import, typed the fallback `Reader`; made the 10 missing clips (#27's new sentences). Checked: tsc + eslint clean, 106 server tests, `next build`, blind voice flow, SOS branches, camera in WebKit (photo 1 yes 3.05 s, photo 2 never), real camera path (no bus -> bus seen -> 55-р автобус ирлээ -> door 1 o'clock), safety (wake lock, camera restart, ride resume), 0 errors.
