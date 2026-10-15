@@ -180,23 +180,43 @@ export default function RideGuide({ route, board, alight, simulate, info, onArri
         say([phrase("ride_start")]);
         if (simulate) {
           simulateDrive();
-        } else if ("geolocation" in navigator) {
-          watchId = navigator.geolocation.watchPosition(
-            function (pos) {
-              // A fix this vague could put the bus a stop early or late: wait for a better one.
-              if (pos.coords.accuracy <= MAX_FIX_M) {
-                onPosition(pos.coords.latitude, pos.coords.longitude);
-              }
-            },
-            function () {},
-            { enableHighAccuracy: true, maximumAge: 2000 },
-          );
+        } else {
+          watchGps();
         }
       }
+
+      function watchGps(): void {
+        if (!("geolocation" in navigator)) {
+          return;
+        }
+        if (watchId !== null) {
+          navigator.geolocation.clearWatch(watchId);
+        }
+        watchId = navigator.geolocation.watchPosition(
+          function (pos) {
+            // A fix this vague could put the bus a stop early or late: wait for a better one.
+            if (pos.coords.accuracy <= MAX_FIX_M) {
+              onPosition(pos.coords.latitude, pos.coords.longitude);
+            }
+          },
+          function () {},
+          { enableHighAccuracy: true, maximumAge: 2000 },
+        );
+      }
+
+      // #2 Back from a locked screen / a call / another app: iPhone may have stopped the GPS watch while
+      // the page was hidden, so it's started again (RiderFlow says how many stops are left).
+      function onVisibility(): void {
+        if (document.visibilityState === "visible" && !stopped && !simulate && watchId !== null) {
+          watchGps();
+        }
+      }
+      document.addEventListener("visibilitychange", onVisibility);
 
       start();
       return function () {
         stopped = true;
+        document.removeEventListener("visibilitychange", onVisibility);
         if (watchId !== null) {
           navigator.geolocation.clearWatch(watchId);
         }

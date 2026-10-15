@@ -13,6 +13,7 @@ import { loadOcr, readSign } from "../lib/ocr";
 import { detectBuses, loadDetector, type Box } from "../lib/detector";
 import { detectFrontDoor, loadDoorDetector } from "../lib/doorDetector";
 import { frontIsRight, guideToDoor, type DoorGuide } from "../lib/door";
+import { explainPermission } from "../lib/permissions";
 import { phrase, say, sayPhrase, vibrate, type PhraseKey } from "../lib/speech";
 import { addVote, updateTracks, VOTE_WINDOW, type Track } from "../lib/tracker";
 
@@ -448,27 +449,86 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         }
       }
 
-      async function start(): Promise<void> {
-        // ?video=/test/bus.webm plays a recorded clip instead of the camera (testing, demo video);
-        // ?image=/test/tov_nomyn_san_1.png shows a still photo as if the camera were pointed at it.
-        const params = new URLSearchParams(window.location.search);
-        const recorded = params.get("video");
-        const photo = params.get("image");
+      // ?video=/test/bus.webm plays a recorded clip instead of the camera (testing, demo video);
+      // ?image=/test/tov_nomyn_san_1.png shows a still photo as if the camera were pointed at it.
+      const params = new URLSearchParams(window.location.search);
+      const recorded = params.get("video");
+      const photo = params.get("image");
+      function openStream(): Promise<MediaStream | null> {
         if (photo) {
-          stream = await photoStream(photo);
-        } else if (!recorded) {
+          return photoStream(photo);
+        }
+        if (recorded) {
+          return Promise.resolve(null);
+        }
+        return navigator.mediaDevices.getUserMedia({
+          // 1080p: the route number on an LED sign is a few dozen pixels; more pixels, further away.
+          video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } },
+          audio: false,
+        });
+      }
+
+      // #2 Back from a locked screen / a call / another app: iPhone stops the camera while the page is
+      // hidden. Start it again if it stopped, and tell the rider the camera is looking again.
+      let hiddenAt = 0;
+      async function onVisibility(): Promise<void> {
+        if (document.visibilityState === "hidden") {
+          hiddenAt = performance.now();
+          return;
+        }
+        const away = hiddenAt ? performance.now() - hiddenAt : 0;
+        hiddenAt = 0;
+        const video = videoRef.current;
+        if (stopped || !video || away < 2000) {
+          return;
+        }
+        const track = stream ? stream.getVideoTracks()[0] : null;
+        if (stream && (!track || track.readyState === "ended" || track.muted || video.paused)) {
           try {
-            stream = await navigator.mediaDevices.getUserMedia({
-              // 1080p: the route number on an LED sign is a few dozen pixels; more pixels, further away.
-              video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } },
-              audio: false,
+            const fresh = await openStream();
+            if (stopped) {
+              if (fresh) {
+                fresh.getTracks().forEach(function (item) {
+                  item.stop();
+                });
+              }
+              return;
+            }
+            stream.getTracks().forEach(function (item) {
+              item.stop();
             });
+            stream = fresh;
+            video.srcObject = fresh;
           } catch (e) {
-            stats.error = "camera " + (e instanceof Error ? e.name : "");
-            sayPhrase("camera_failed");
-            onError();
-            return;
+            stats.error = "camera restart " + (e instanceof Error ? e.name : "");
           }
+        }
+        video.play().catch(function () {});
+        // Bus already confirmed: the door directions follow by themselves; else: looking again.
+        speak([target ? phrase("app_resumed") : phrase("camera_resumed")]);
+      }
+      document.addEventListener("visibilitychange", onVisibility);
+
+      async function start(): Promise<void> {
+        if (!photo && !recorded) {
+          await explainPermission("camera"); // the first time the phone asks for the camera
+        }
+        // While the phone's camera box waits for an answer, repeat what to press (a blind rider may
+        // not find it at once; nothing else happens until it's answered).
+        const askAgain = setInterval(function () {
+          if (!stopped) {
+            sayPhrase("camera_permission");
+          }
+        }, 15000);
+        try {
+          stream = await openStream().finally(function () {
+            clearInterval(askAgain);
+          });
+        } catch (e) {
+          stats.error = "camera " + (e instanceof Error ? e.name : "");
+          sayPhrase("camera_failed");
+          onError();
+          return;
         }
         const video = videoRef.current;
         if (stopped || !video) {
@@ -568,6 +628,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
       start();
       return function () {
         stopped = true;
+        document.removeEventListener("visibilitychange", onVisibility);
         clearInterval(debugTimer);
         stopBeacon();
         guide.current = null;
