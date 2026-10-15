@@ -416,7 +416,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         const track = tracks.find(function (item) {
           return item.id === data.trackId;
         });
-        if (!track || stopped || target || track.decision === "yes" || track.decision === "no") {
+        if (!track || stopped || target || track.locked || track.decision === "yes" || track.decision === "no") {
           return;
         }
         dispatch(data.trackId);
@@ -430,7 +430,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
 
       // Full-resolution sign crop. The best (bright, complete, sharp) frame is the one the worker reads.
       function keepCrop(video: HTMLVideoElement, track: Track, now: number, others: Box[], frame: number): void {
-        if (track.decision === "no" || !steady(track)) {
+        if (track.locked || track.decision === "no" || !steady(track)) {
           return;
         }
         const masked = others.concat(

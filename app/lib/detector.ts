@@ -14,7 +14,7 @@ export interface Box {
 const MODEL_URL = "/models/yolo11n.onnx";
 const SIZE = 320; // model input is SIZE x SIZE. 320 is enough for a bus and about 4x less work than 640.
 const BUS_CLASS = 5; // COCO "bus"
-const MIN_SCORE = 0.4;
+const BUS_MIN = 0.1; // >= 0.5 may start a track; 0.1-0.5 only continues one (lib/tracker.ts)
 // Weaker hits (a bus half out of frame, a car) aren't tracked, but their area is blacked out of
 // other buses' sign crops so a neighbour's sign is never read as this bus's (tov_nomyn_san_2.png).
 const MASK_CLASSES = [2, 5, 7]; // car, bus, truck
@@ -216,13 +216,13 @@ export async function detectBuses(video: HTMLVideoElement): Promise<Detections> 
     MASK_CLASSES.forEach(function (item) {
       maskScore = Math.max(maskScore, values[(4 + item) * n + i]);
     });
-    if (maskScore < MASK_SCORE) {
+    if (busScore < BUS_MIN && maskScore < MASK_SCORE) {
       continue;
     }
     const w = values[2 * n + i] / scale;
     const h = values[3 * n + i] / scale;
     const box = { x: (values[i] - padX) / scale - w / 2, y: (values[n + i] - padY) / scale - h / 2, w, h, score: busScore };
-    if (busScore >= MIN_SCORE) {
+    if (busScore >= BUS_MIN) {
       buses.push(box);
     } else {
       weak.push({ ...box, score: maskScore });
