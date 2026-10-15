@@ -397,8 +397,17 @@ export default function RiderFlow() {
     }
   }
 
-  // Nothing came back from the browser's recognition: say why, and show the browser's reason for a
-  // helper. A browser that can't recognise Mongolian (iPhone) goes straight to typing, now and later.
+  // Browser reason codes stay in the console. ?debug=1 also shows them, for a helper at a laptop.
+  function debugNote(code?: string): string {
+    if (!code) {
+      return "";
+    }
+    console.warn(code);
+    return new URLSearchParams(window.location.search).get("debug") === "1" ? " (" + code + ")" : "";
+  }
+
+  // Nothing came back from the browser's recognition: say why. A browser that can't recognise
+  // Mongolian (iPhone) goes straight to typing, now and later.
   function notHeard(heard: Heard, typeInstead: TypeFor): void {
     if (heard.error === "unsupported") {
       voiceBroken.current = true;
@@ -408,7 +417,7 @@ export default function RiderFlow() {
     const missed = typeInstead === "where" && modeRef.current === "sr" ? "not_heard_where_sr" : "not_heard";
     const key = heard.error === "no-mic" ? "mic_failed" : heard.error === "network" ? "voice_network" : missed;
     say([phrase(key)]);
-    setMessage(phrase(key) + (heard.error === "not-heard" ? "" : " (" + heard.code + ")"));
+    setMessage(phrase(key) + (heard.error === "not-heard" ? "" : debugNote(heard.code)));
   }
 
 
@@ -564,7 +573,7 @@ export default function RiderFlow() {
     flushSync(function () {
       setTypeFor(kind);
       setStep("typing");
-      setMessage(parts.join(" ") + (code ? " (" + code + ")" : ""));
+      setMessage(parts.join(" ") + debugNote(code));
     });
     if (typeField.current) {
       typeField.current.focus();
