@@ -37,7 +37,7 @@ input {
   min-height: 100dvh;
   max-width: 640px;
   margin: 0 auto;
-  padding: 16px;
+  padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -351,4 +351,77 @@ input {
 .reader-wait {
   font-size: 2rem;
   color: var(--muted);
+}
+
+/* Phone: the sentence and the buttons stay on one screen, including the iPhone home indicator. */
+.reader {
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow: hidden;
+  gap: 10px;
+}
+
+.reader .title {
+  font-size: 1.45rem;
+}
+
+.reader .status {
+  font-size: 1.3rem;
+  line-height: 1.35;
+  max-height: 5.4em;
+  overflow-y: auto;
+}
+
+.reader .reader-pad {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 8px;
+}
+
+.reader-aim .reader-pad {
+  flex: 0 1 auto;
+}
+
+.reader-aim .reader-video {
+  max-height: 28dvh;
+}
+
+.reader .reader-text {
+  max-height: none;
+  font-size: 1.25rem;
+}
+
+.reader .action {
+  min-height: 56px;
+  touch-action: manipulation;
+}
+
+.reader-primary {
+  min-height: 72px;
+  font-size: 1.6rem;
+}
+
+.reader-aim .reader-primary {
+  flex: 1;
+  min-height: 22vh;
+  font-size: 2rem;
+}
+
+.reader-row,
+.reader-bar {
+  display: flex;
+  gap: 10px;
+}
+
+.reader-row .action,
+.reader-bar .action {
+  flex: 1;
+  min-width: 0;
+}
+
+.reader-bar .action {
+  min-height: 52px;
+  background: transparent;
+  color: var(--fg);
+  border: 3px solid var(--line);
 }
