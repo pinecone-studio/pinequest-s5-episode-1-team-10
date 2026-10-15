@@ -211,8 +211,10 @@ export const test = base.extend<Options & Fixtures>({
       problems.push("page error: " + e.message);
     });
     page.on("requestfailed", function (req) {
-      // Cancelled by the app itself (leaving the camera aborts its reads in flight): not a failure
-      if (/^(net::ERR_ABORTED|cancelled)$/i.test(req.failure()?.errorText ?? "") && !req.url().startsWith("blob:")) {
+      // Cancelled by the browser or the app itself (leaving the camera aborts its reads in flight; the
+      // audio player drops its range loads of a clip when it moves to the next one): not a failure.
+      // A clip URL freed too early still fails here (net::ERR_FILE_NOT_FOUND / WebKitBlobResource error).
+      if (/^(net::ERR_ABORTED|cancelled)$/i.test(req.failure()?.errorText ?? "")) {
         return;
       }
       problems.push("request failed: " + req.method() + " " + req.url() + " " + (req.failure()?.errorText ?? ""));

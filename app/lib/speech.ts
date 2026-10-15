@@ -245,6 +245,10 @@ export function prefetch(texts: string[]): void {
   });
 }
 
+// The clip URL the player was last given. Freed only once the player has moved on to another one:
+// freed while still its src, the browser asks for it again and the request fails.
+let playerUrl: string | null = null;
+
 function play(url: string): Promise<void> {
   return new Promise(function (resolve) {
     if (!audio) {
@@ -273,6 +277,10 @@ function play(url: string): Promise<void> {
     player.onended = done;
     player.onerror = done;
     player.src = url;
+    if (playerUrl && playerUrl !== url && playerUrl.startsWith("blob:")) {
+      URL.revokeObjectURL(playerUrl);
+    }
+    playerUrl = url;
     player.playbackRate = 1; // the reader may have left it faster
     player.play().catch(function () {
       // Refused (iPhone without a recent touch on this element): the same clip through Web Audio.
@@ -367,8 +375,7 @@ async function playClips(texts: string[], clips: Promise<string | null>[], mine:
       return;
     }
     if (url) {
-      await play(url);
-      URL.revokeObjectURL(url);
+      await play(url); // freed by the next play() (see playerUrl)
     } else if (texts[i].trim() && !localClips.has(texts[i])) {
       await speakWithPhone(texts[i]); // no clip (free hosting: not pre-made): never silent
     }
