@@ -27,7 +27,7 @@ grep -rl '\.\./\.\./shared/' components lib app | xargs sed -i '' 's#\.\./\.\./s
 
 # /api/* = lite server
 mkdir -p api/_server/oron_tts api/_server/data/oron_mn_pinyin public/tts
-for f in lite planner bus_api numwords fusion assistant contract tts gpu speechmatics chimege elevenlabs vision; do cp "$R/server/$f.py" api/_server/; done
+for f in lite planner bus_api numwords fusion assistant contract tts gpu speechmatics chimege elevenlabs vision gemini_ocr; do cp "$R/server/$f.py" api/_server/; done
 cp -R "$R/server/hamuga_cache" api/_server/
 # Station + stop lists as of now (2 Hamuga calls here instead of 2 per new Vercel instance)
 (set -a && . "$R/.env" && set +a && cd "$R/server" && .venv/bin/python -c 'import sys, bus_api; bus_api.save_snapshot(sys.argv[1])' "$D/api/_server/stops_snapshot.json")
