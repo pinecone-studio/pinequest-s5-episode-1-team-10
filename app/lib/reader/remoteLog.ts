@@ -1,7 +1,26 @@
-// ?log=1: the reader's console lines and errors are sent to `/__log`, one request per line, so a
-// phone with no developer tools (an iPhone away from a Mac) still shows what happened, up to the
-// moment a tab is closed for using too much memory. Only for testing; nothing listens on a deploy.
+// ?log=1: the page's console lines and errors are sent to `/__log`, one request per line, so a phone
+// with no developer tools (an iPhone away from a Mac) still shows what happened, up to the moment a
+// tab is closed for using too much memory. Only for testing; nothing listens on a deploy.
+// Kept for the tab (sessionStorage), so it goes on after the page starts again or opens /read.
+// Every line carries the page's id (a new one each time the page loads) and a heartbeat every 5 s says
+// whether the page is visible and holds the screen lock: no pagehide / hidden line before the
+// heartbeats stop means the page was killed, not locked.
+import { wakeStatus } from "../wake";
+
 let started = false;
+const PAGE = Math.random().toString(36).slice(2, 6);
+
+function wanted(): boolean {
+  try {
+    if (new URLSearchParams(window.location.search).get("log") === "1") {
+      window.sessionStorage.setItem("avtobus.log", "1");
+      return true;
+    }
+    return window.sessionStorage.getItem("avtobus.log") === "1";
+  } catch {
+    return new URLSearchParams(window.location.search).get("log") === "1";
+  }
+}
 
 function send(level: string, parts: unknown[]): void {
   const text = parts
@@ -14,16 +33,21 @@ function send(level: string, parts: unknown[]): void {
     .join(" ");
   fetch("/__log", {
     method: "POST",
-    body: Math.round(performance.now()) + " ms " + level + " " + text,
+    body: "[" + PAGE + "] " + Math.round(performance.now()) + " ms " + level + " " + text,
     keepalive: true,
   }).catch(function () {});
 }
 
 export function startRemoteLog(): void {
-  if (started || new URLSearchParams(window.location.search).get("log") !== "1") {
+  if (started || typeof window === "undefined" || !wanted()) {
     return;
   }
   started = true;
+  let beats = 0;
+  setInterval(function () {
+    beats++;
+    send("hb", ["#" + beats, document.visibilityState, "wake: " + wakeStatus(), window.location.pathname]);
+  }, 5000);
   (["log", "warn", "error"] as const).forEach(function (item) {
     const original = console[item].bind(console);
     console[item] = function (...args: unknown[]) {
