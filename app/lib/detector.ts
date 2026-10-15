@@ -1,18 +1,19 @@
 // YOLO11n (COCO, ONNX) in the browser: finds buses in a video frame.
 // ponytail: pretrained COCO "bus" class until our fine-tuned bus/door/route_sign model exists.
 import type * as Ort from "onnxruntime-web";
+import { iou, type Box } from "./box";
 import { isIOS } from "./device";
 
-export interface Box {
-  x: number; // left, video pixels
-  y: number; // top
-  w: number;
-  h: number;
-  score: number;
-}
+// Where the box type and overlap live now (lib/box.ts); re-exported so other files keep importing from here.
+export { iou };
+export type { Box };
 
 const MODEL_URL = "/models/yolo11n.onnx";
-const SIZE = 320; // model input is SIZE x SIZE. 320 is enough for a bus and about 4x less work than 640.
+// The model's input is fixed at export time (public/models/yolo11n.onnx is 640 x 640, 8400 anchors). The
+// size actually used is read from the loaded model (inputSize), never assumed: a size that differs from
+// the model's makes onnxruntime throw on every frame and the camera dies. This is only the fallback.
+const DEFAULT_SIZE = 640;
+let size = DEFAULT_SIZE;
 const BUS_CLASS = 5; // COCO "bus"
 const BUS_MIN = 0.1; // >= 0.5 may start a track; 0.1-0.5 only continues one (lib/tracker.ts)
 // Weaker hits (a bus half out of frame, a car) aren't tracked, but their area is blacked out of
@@ -71,15 +72,30 @@ function wasmThreads(o: OrtModule): number {
   return threads;
 }
 
+// The side of the model's square input, from the loaded model itself. A model exported with a dynamic
+// size (names, not numbers) or without metadata falls back to DEFAULT_SIZE.
+export function inputSize(s: Pick<Ort.InferenceSession, "inputMetadata">): number {
+  const meta = s.inputMetadata && s.inputMetadata[0];
+  if (meta && meta.isTensor && meta.shape.length === 4) {
+    const h = meta.shape[2];
+    const w = meta.shape[3];
+    if (typeof h === "number" && typeof w === "number" && h > 0 && h === w) {
+      return h;
+    }
+  }
+  return DEFAULT_SIZE;
+}
+
 // Session + a first run (compiles the GPU shaders, ~1 s on a phone, now instead of on the first camera
 // frame) on a plain grey frame, whose output must be real numbers: a broken GPU path fails here.
 async function build(o: OrtModule, bytes: Uint8Array, providers: string[]): Promise<Ort.InferenceSession> {
   const s = await exclusive(function () {
     return o.InferenceSession.create(bytes, { executionProviders: providers });
   });
-  const grey = new Float32Array(3 * SIZE * SIZE).fill(114 / 255);
+  const side = inputSize(s);
+  const grey = new Float32Array(3 * side * side).fill(114 / 255);
   const out = await exclusive(function () {
-    return s.run({ [s.inputNames[0]]: new o.Tensor("float32", grey, [1, 3, SIZE, SIZE]) });
+    return s.run({ [s.inputNames[0]]: new o.Tensor("float32", grey, [1, 3, side, side]) });
   });
   const values = out[s.outputNames[0]].data as Float32Array;
   let finite = values.length > 0;
@@ -90,6 +106,7 @@ async function build(o: OrtModule, bytes: Uint8Array, providers: string[]): Prom
     s.release().catch(function () {});
     throw new Error("detector output is not numbers on " + providers[0]);
   }
+  size = side;
   return s;
 }
 
@@ -140,34 +157,24 @@ export async function runtime(): Promise<{ ort: OrtModule; providers: string[] }
   return { ort: ort as OrtModule, providers: provider === "webgpu" ? ["webgpu", "wasm"] : ["wasm"] };
 }
 
-export function iou(a: Box, b: Box): number {
-  const x1 = Math.max(a.x, b.x);
-  const y1 = Math.max(a.y, b.y);
-  const x2 = Math.min(a.x + a.w, b.x + b.w);
-  const y2 = Math.min(a.y + a.h, b.y + b.h);
-  const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
-  const union = a.w * a.h + b.w * b.h - inter;
-  return union > 0 ? inter / union : 0;
-}
-
-// Letterbox the frame into SIZE x SIZE, keeping aspect ratio, as YOLO was trained.
+// Letterbox the frame into size x size (the model's input), keeping aspect ratio, as YOLO was trained.
 function toTensor(video: HTMLVideoElement): { data: Float32Array; scale: number; padX: number; padY: number } {
   const vw = video.videoWidth;
   const vh = video.videoHeight;
-  const scale = Math.min(SIZE / vw, SIZE / vh);
-  const padX = (SIZE - vw * scale) / 2;
-  const padY = (SIZE - vh * scale) / 2;
+  const scale = Math.min(size / vw, size / vh);
+  const padX = (size - vw * scale) / 2;
+  const padY = (size - vh * scale) / 2;
   const c = canvas as HTMLCanvasElement;
-  if (c.width !== SIZE || c.height !== SIZE) {
-    c.width = SIZE; // once: re-sizing every frame re-allocates the canvas (iPhone memory)
-    c.height = SIZE;
+  if (c.width !== size || c.height !== size) {
+    c.width = size; // once: re-sizing every frame re-allocates the canvas (iPhone memory)
+    c.height = size;
   }
   const ctx = c.getContext("2d", { willReadFrequently: true }) as CanvasRenderingContext2D;
   ctx.fillStyle = "rgb(114,114,114)";
-  ctx.fillRect(0, 0, SIZE, SIZE);
+  ctx.fillRect(0, 0, size, size);
   ctx.drawImage(video, padX, padY, vw * scale, vh * scale);
-  const pixels = ctx.getImageData(0, 0, SIZE, SIZE).data;
-  const area = SIZE * SIZE;
+  const pixels = ctx.getImageData(0, 0, size, size).data;
+  const area = size * size;
   const data = new Float32Array(3 * area);
   for (let i = 0; i < area; i++) {
     data[i] = pixels[i * 4] / 255;
@@ -199,7 +206,7 @@ export async function detectBuses(video: HTMLVideoElement): Promise<Detections> 
     return { buses: [], others: [] };
   }
   const { data, scale, padX, padY } = toTensor(video);
-  const input = new ort.Tensor("float32", data, [1, 3, SIZE, SIZE]);
+  const input = new ort.Tensor("float32", data, [1, 3, size, size]);
   const s = session;
   const output = await exclusive(function () {
     return s.run({ [s.inputNames[0]]: input });

@@ -2,9 +2,9 @@
 // One read never decides, and a contradicting route number clears the track.
 // A bus hidden for under 1.5 s stays the same track, so its reads are not thrown away.
 import type { Verdict } from "../../shared/contract";
-import { iou, type Box } from "./detector";
-import { applyRead, type CountedRead } from "./judge";
-import { motionFromBox, predictMotion, updateMotion, type Motion } from "./kalman";
+import { iou, type Box } from "./box.ts";
+import { applyRead, type CountedRead } from "./judge.ts";
+import { motionFromBox, predictMotion, updateMotion, type Motion } from "./kalman.ts";
 
 export const VOTE_WINDOW = 7; // shown on the debug overlay only; the decision itself is two reads
 const MATCH_IOU = 0.3;
