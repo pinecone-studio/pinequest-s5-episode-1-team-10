@@ -25,7 +25,7 @@ import { loadDetector } from "../lib/detector";
 import { prefetchStopRoutes } from "../lib/stopRoutes";
 import { loadDoorDetector } from "../lib/doorDetector";
 import type { DoorGuide } from "../lib/door";
-import { beep, phrase, prefetch, rememberClips, say, startWaitingTick, stopSpeaking, unlockAudio, vibrate, type PhraseKey } from "../lib/speech";
+import { beep, phrase, playInstant, prefetch, rememberClips, say, startWaitingTick, stopSpeaking, unlockAudio, vibrate, type Earcon, type PhraseKey } from "../lib/speech";
 import { onSpeedReport, showSpeed, speedCancel, speedMark, speedStart } from "../lib/speed";
 import { wantsReader } from "../lib/reader/commands";
 import BusCamera, { doorSpeech } from "./BusCamera";
@@ -183,7 +183,10 @@ export default function RiderFlow() {
 
   // The app's Mongolian voice, unless Settings says the screen reader should read the status.
   // On a new screen-reader step the clip starts 600 ms after the heading takes focus.
-  function voice(texts: string[]): Promise<void> {
+  // `earcon`: a camera verdict ("match" / "wrong"): the earcon and the sentence play at once from memory
+  // (lib/speech.ts playInstant), never delayed. With the phone's screen reader reading the screen, only
+  // the earcon plays and the screen reader reads the new status line.
+  function voice(texts: string[], earcon?: Earcon): Promise<void> {
     const joined = texts
       .filter(function (item) {
         return item.trim() !== "";
@@ -195,7 +198,11 @@ export default function RiderFlow() {
     if (modeRef.current === "sr" && readerRef.current === "screen") {
       stopSpeaking();
       delaySpeech.current = false;
-      return Promise.resolve();
+      return earcon ? playInstant(earcon, []) : Promise.resolve();
+    }
+    if (earcon) {
+      delaySpeech.current = false;
+      return playInstant(earcon, texts);
     }
     const wait = delaySpeech.current && modeRef.current === "sr" && readerRef.current === "app";
     delaySpeech.current = false;

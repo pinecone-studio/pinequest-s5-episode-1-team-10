@@ -17,9 +17,9 @@ import { detectFrontDoor, loadDoorDetector } from "../lib/doorDetector";
 import { frontIsRight, guideToDoor, type DoorGuide } from "../lib/door";
 import { isIOS } from "../lib/device";
 import { explainPermission } from "../lib/permissions";
-import { cue, phrase, vibrate, type PhraseKey } from "../lib/speech";
+import { buzz, phrase, prepareInstant, vibrate, type Earcon, type PhraseKey } from "../lib/speech";
 import { addVote, updateTracks, VOTE_WINDOW, type Track } from "../lib/tracker";
-import { markDecided } from "../lib/latency";
+import { latencyText, markDecided } from "../lib/latency";
 
 interface Props {
   stopId: string;
@@ -29,7 +29,7 @@ interface Props {
   onError: () => void;
   guide: MutableRefObject<DoorGuide | null>; // latest door guidance, for the "where is the door?" option
   phoneOcr: boolean; // the server has no OCR (free hosting): read the sign on the phone, send only the texts
-  onAnnounce: (texts: string[]) => Promise<void>; // status text and speech, so a hint is never only spoken
+  onAnnounce: (texts: string[], earcon?: Earcon) => Promise<void>; // status text and speech, so a hint is never only spoken
   screenReader: boolean; // door-close sentence names the button instead of a double tap
 }
 
@@ -202,13 +202,13 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
       const debugTimer = setInterval(function () {
         if (debugRef.current) {
           debugRef.current.textContent =
-            stats.stage + " · " + stats.provider + " · " + stats.video + " · " + stats.fps + " fps · buses " + stats.buses + " (widest " + stats.widest + " px) · reads " + stats.reads + (stats.lastText ? " «" + stats.lastText + "»" : "") + " · detect " + stats.detectMs + " ms · ocr " + stats.ocrMs + " ms · decide " + stats.decideMs + " ms" + (stats.error ? " · ERROR " + stats.error : "");
+            stats.stage + " · " + stats.provider + " · " + stats.video + " · " + stats.fps + " fps · buses " + stats.buses + " (widest " + stats.widest + " px) · reads " + stats.reads + (stats.lastText ? " «" + stats.lastText + "»" : "") + " · detect " + stats.detectMs + " ms · ocr " + stats.ocrMs + " ms · decide " + stats.decideMs + " ms" + (latencyText() ? " · " + latencyText() : "") + (stats.error ? " · ERROR " + stats.error : "");
         }
       }, 500);
 
-      function speak(texts: string[]): void {
+      function speak(texts: string[], earcon?: Earcon): void {
         talking = true;
-        announceRef.current(texts).then(function () {
+        announceRef.current(texts, earcon).then(function () {
           talking = false;
         });
       }
@@ -336,19 +336,20 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
           const lastRead = track.reads.length ? track.reads[track.reads.length - 1].frame : -1;
           markDecided("bus camera", now, frameTimes.get(lastRead) ?? null);
           lastGuideSpoken = now; // the intro below already guides; first clock direction comes after it
-          cue("bus", [400, 100, 400]);
+          buzz([200, 100, 200]);
           // The side is known only once the bus is moving. Standing still used to say "on your right".
           let intro: PhraseKey = "door_intro_plain";
           if (Math.abs(track.vx) > track.box.w * 0.0002) {
             intro = track.vx > 0 ? "door_intro_right" : "door_intro_left";
           }
-          speak([foundSpeech, phrase(intro)]);
+          // Earcon at once, then "Ч:55 ирлээ. Энэ таны автобус." and the door sentence, all from memory.
+          speak([foundSpeech, phrase(intro)], "match");
           startBeacon();
           onFound();
         } else if (track.decision === "no" && now - lastNoSpoken > REPEAT_AFTER_MS) {
           lastNoSpoken = now;
           vibrate([100, 80, 100]);
-          speak([phrase("not_your_bus")]);
+          speak([phrase("not_your_bus")], "wrong");
         } else if (track.decision === "unsure") {
           speak([phrase("not_sure")]);
         }
@@ -775,6 +776,8 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
           return;
         }
         speak([phrase("camera_on")]);
+        // The verdict sentences into memory now (earcons too), so a match plays with no download or decode.
+        prepareInstant([foundSpeech, phrase("door_intro_plain"), phrase("door_intro_right"), phrase("door_intro_left"), phrase("not_your_bus"), phrase("not_sure")]);
         stats.stage = "loading";
         // Models still loading (first time: ~25 MB): say so, so the rider knows to wait.
         let loadingSaid = false;

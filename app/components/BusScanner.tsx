@@ -14,9 +14,9 @@ import { createCallBudget } from "../lib/call-budget";
 import { createLedCropper, type LedCrop } from "../lib/crop-led";
 import { makeRouteBook, matchSign, type RouteBook } from "../lib/parse-sign";
 import { explainPermission } from "../lib/permissions";
-import { phrase } from "../lib/speech";
+import { phrase, prepareInstant, type Earcon } from "../lib/speech";
 import { cityNumbers, prefetchStopRoutes, routesFor } from "../lib/stopRoutes";
-import { markDecided } from "../lib/latency";
+import { latencyText, markDecided } from "../lib/latency";
 
 interface Props {
   stopId: string;
@@ -24,7 +24,7 @@ interface Props {
   foundSpeech: string;
   onFound: () => void;
   onError: () => void;
-  onAnnounce: (texts: string[]) => Promise<void>; // status text and speech
+  onAnnounce: (texts: string[], earcon?: Earcon) => Promise<void>; // status text and speech
 }
 
 const FRAME_MS = 100; // ~10 frames a second
@@ -88,15 +88,15 @@ export default function BusScanner({ stopId, route, foundSpeech, onFound, onErro
       const noise: { box: Box; until: number }[] = [];
       const cropper = createLedCropper();
       const budget = createCallBudget(CALLS_PER_MINUTE, BURST);
-      const announcer = createAnnouncer(function (texts) {
-        return announceRef.current(texts);
+      const announcer = createAnnouncer(function (texts, earcon) {
+        return announceRef.current(texts, earcon);
       });
       const stats: ScanStats = { stage: "starting", video: "", frames: 0, sent: 0, answers: 0, busy: 0, overBudget: 0, noise: 0, lastLines: "", azureMs: 0, roundTripMs: 0, yesMs: 0, error: "" };
       (window as unknown as { __scan: ScanStats }).__scan = stats;
       const debugTimer = setInterval(function () {
         if (debugRef.current) {
           debugRef.current.textContent =
-            stats.stage + " · " + stats.video + " · frames " + stats.frames + " · sent " + stats.sent + " · answers " + stats.answers + " · dropped busy " + stats.busy + " / budget " + stats.overBudget + " / noise " + stats.noise + " · azure " + stats.azureMs + " ms · round trip " + stats.roundTripMs + " ms" + (stats.lastLines ? " «" + stats.lastLines + "»" : "") + (stats.yesMs ? " · yes " + stats.yesMs + " ms" : "") + (stats.error ? " · ERROR " + stats.error : "");
+            stats.stage + " · " + stats.video + " · frames " + stats.frames + " · sent " + stats.sent + " · answers " + stats.answers + " · dropped busy " + stats.busy + " / budget " + stats.overBudget + " / noise " + stats.noise + " · azure " + stats.azureMs + " ms · round trip " + stats.roundTripMs + " ms" + (stats.lastLines ? " «" + stats.lastLines + "»" : "") + (stats.yesMs ? " · yes " + stats.yesMs + " ms" : "") + (latencyText() ? " · " + latencyText() : "") + (stats.error ? " · ERROR " + stats.error : "");
         }
       }, 500);
 
@@ -153,12 +153,12 @@ export default function BusScanner({ stopId, route, foundSpeech, onFound, onErro
           stats.yesMs = Math.round(now - openedAt);
           console.info("[scan] yes after " + stats.yesMs + " ms from camera open, read took " + stats.roundTripMs + " ms (azure " + body.timingMs + " ms)");
           markDecided("azure scanner", now, sentAt); // the frame was cut and sent at sentAt
-          announcer.announce(match.route, [foundSpeech], now);
+          announcer.announce(match.route, [foundSpeech], now, "match");
           onFound();
           return;
         }
         if (match.verdict === "no" && match.route) {
-          announcer.announce(match.route, [phrase("not_your_bus")], now);
+          announcer.announce(match.route, [phrase("not_your_bus")], now, "wrong");
           return;
         }
         if (match.route) {
@@ -326,6 +326,7 @@ export default function BusScanner({ stopId, route, foundSpeech, onFound, onErro
           prefetchStopRoutes(stopId, [], ""); // the plan step already asked; in case it failed
         }
         announcer.preload([foundSpeech, phrase("not_your_bus"), phrase("not_sure")]);
+        prepareInstant([foundSpeech, phrase("not_your_bus")]); // decoded into memory: no wait at the verdict
         const video = videoRef.current;
         if (!video) {
           return;

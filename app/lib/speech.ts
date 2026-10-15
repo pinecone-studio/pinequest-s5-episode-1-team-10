@@ -1,7 +1,7 @@
 // Mongolian speech from the server's OronTTS (/api/tts). Each sentence is its own cached clip.
 import phrases from "../../shared/phrases.json";
 import { speedAudio } from "./speed";
-import { soundStarted } from "./latency";
+import { soundScheduled, soundStarted } from "./latency";
 
 export type PhraseKey = keyof typeof phrases;
 
@@ -557,9 +557,6 @@ export function cue(name: "bus" | "off" | "sos", pattern: number[]): void {
   // sos: six alternating tones, louder than the others (iPhone has no vibration: this is the signal)
   const tones = name === "bus" ? [660, 880] : name === "sos" ? [880, 1175, 880, 1175, 880, 1175] : [440, 440, 330];
   const volume = name === "sos" ? 0.3 : 0.08;
-  if (name === "bus") {
-    soundStarted("tone");
-  }
   try {
     tones.forEach(function (item, i) {
       const osc = c.createOscillator();
@@ -574,5 +571,179 @@ export function cue(name: "bus" | "off" | "sos", pattern: number[]): void {
     });
   } catch {
     // the spoken sentence is still the signal
+  }
+}
+
+// --- Instant verdicts (the bus camera): earcon + spoken line with no wait ------------------------------
+// When the camera opens, the earcons are made and the verdict sentences are decoded into memory
+// (AudioBuffers). At the match nothing is fetched or decoded: whatever is speaking is cut off, the
+// earcon starts on the next audio frame and the sentence is queued on the same clock right after it.
+// The context was unlocked by the rider's first tap (unlockAudio, required on iPhone) and plays as
+// "playback" (not muted by the ringer switch; VoiceOver ducks it while it talks, it isn't cut off).
+
+export type Earcon = "match" | "wrong";
+const decoded = new Map<string, AudioBuffer>();
+let earcons: Record<Earcon, AudioBuffer> | null = null;
+
+// match: two rising notes (bright, "yes"); wrong: two falling low notes (dull, "no"). ~0.3 s.
+function makeEarcons(c: AudioContext): Record<Earcon, AudioBuffer> {
+  function notes(list: [number, number][], wave: (phase: number) => number, volume: number): AudioBuffer {
+    const rate = c.sampleRate;
+    const total = list.reduce(function (sum, item) {
+      return sum + item[1];
+    }, 0);
+    const buffer = c.createBuffer(1, Math.ceil(rate * total), rate);
+    const d = buffer.getChannelData(0);
+    let at = 0;
+    list.forEach(function (item) {
+      const n = Math.round(rate * item[1]);
+      for (let i = 0; i < n; i++) {
+        const t = i / rate;
+        const env = Math.min(1, t / 0.005) * Math.exp((-4 * t) / item[1]); // 5 ms attack, soft decay
+        d[at + i] = volume * env * wave(2 * Math.PI * item[0] * t);
+      }
+      at += n;
+    });
+    return buffer;
+  }
+  return {
+    match: notes(
+      [
+        [880, 0.11],
+        [1320, 0.2],
+      ],
+      Math.sin,
+      0.35,
+    ),
+    wrong: notes(
+      [
+        [330, 0.15],
+        [247, 0.22],
+      ],
+      function (ph) {
+        return 0.8 * Math.sin(ph) + 0.2 * Math.sin(3 * ph); // a little rougher
+      },
+      0.35,
+    ),
+  };
+}
+
+// When the bus screen opens: earcons made, the sentences decoded (from the clips' cache: no network
+// at match time). Safe to call again; already-decoded sentences are skipped.
+export function prepareInstant(texts: string[]): Promise<void> {
+  const c = audioContext();
+  if (!c) {
+    return Promise.resolve();
+  }
+  if (!earcons) {
+    earcons = makeEarcons(c);
+  }
+  return Promise.all(
+    texts.map(async function (item) {
+      if (!item.trim() || decoded.has(item)) {
+        return;
+      }
+      const blob = await clipBlob(item);
+      if (!blob) {
+        return;
+      }
+      try {
+        decoded.set(item, await c.decodeAudioData(await blob.arrayBuffer()));
+      } catch {
+        // not decodable here: said the usual way
+      }
+    }),
+  ).then(function () {});
+}
+
+// The verdict: everything speaking stops, the earcon plays at once, then the sentences (from memory;
+// a sentence not in memory is said the usual way after the earcon). Resolves when said or cut off.
+export function playInstant(earcon: Earcon, texts: string[]): Promise<void> {
+  stopSpeaking();
+  if (typeof window !== "undefined" && window.speechSynthesis) {
+    window.speechSynthesis.cancel();
+  }
+  const c = audioContext();
+  if (!c) {
+    return say(texts);
+  }
+  if (c.state !== "running") {
+    c.resume().catch(function () {});
+  }
+  if (!earcons) {
+    earcons = makeEarcons(c);
+  }
+  const mine = turn;
+  const sources: AudioBufferSourceNode[] = [];
+  function start(buffer: AudioBuffer, at: number): number {
+    const source = (c as AudioContext).createBufferSource();
+    source.buffer = buffer;
+    source.connect((c as AudioContext).destination);
+    source.start(at);
+    sources.push(source);
+    return at + buffer.duration;
+  }
+  const t0 = c.currentTime;
+  let at = start(earcons[earcon], t0);
+  soundScheduled("earcon", c, t0);
+  const spoken = texts.filter(function (item) {
+    return item.trim() !== "";
+  });
+  const inMemory = spoken.every(function (item) {
+    return decoded.has(item);
+  });
+  return new Promise<void>(function (resolve) {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    function end(): void {
+      if (timer) {
+        clearTimeout(timer);
+      }
+      if (finish === stop) {
+        finish = null;
+      }
+      resolve();
+    }
+    function stop(): void {
+      sources.forEach(function (item) {
+        try {
+          item.stop();
+        } catch {
+          // not started yet
+        }
+      });
+      end();
+    }
+    finish = stop;
+    if (inMemory) {
+      at += 0.06;
+      spoken.forEach(function (item, i) {
+        if (i === 0) {
+          soundScheduled("voice", c, at);
+        }
+        at = start(decoded.get(item) as AudioBuffer, at) + 0.25;
+      });
+      timer = setTimeout(end, Math.max(0, at - c.currentTime) * 1000 + 300);
+    } else {
+      timer = setTimeout(
+        function () {
+          if (finish === stop) {
+            finish = null;
+          }
+          if (mine === turn && spoken.length) {
+            say(spoken).then(resolve);
+          } else {
+            resolve();
+          }
+        },
+        Math.max(0, at - c.currentTime) * 1000,
+      );
+    }
+  });
+}
+
+// Android only (iPhone has no vibration; it has the earcon).
+export function buzz(pattern: number[]): void {
+  if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
+    navigator.vibrate(pattern);
   }
 }
