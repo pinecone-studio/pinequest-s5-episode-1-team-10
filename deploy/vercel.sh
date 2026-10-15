@@ -8,6 +8,7 @@
 # Needs: the server venv (server/.venv, for the MP3 conversion and the vendored text normalizer),
 # the clips in server/tts_cache/female (server/make_speech.py), `vercel login`, and the
 # HAMUGA_API_KEY and SPEECHMATICS_API_KEY env vars set once in the Vercel project (never in these files).
+#   deploy/vercel.sh --preview  build + deploy a Preview (test link), not Production
 # On the phone: sign reading runs in the browser (lib/ocr.ts), speech recognition is the browser's.
 set -e
 R=$(cd "$(dirname "$0")/.." && pwd)
@@ -44,12 +45,15 @@ sys.path.insert(0, str(Path(__file__).parent / "_server"))
 from lite import app  # noqa: E402,F401  (Vercel serves this ASGI app)
 PY
 printf 'fastapi==0.128.8\npydantic==2.13.5\nhttpx==0.28.1\n' > requirements.txt
-# icn1 (Seoul): nearest Vercel region to the Hamuga API in Ulaanbaatar (US East added ~2 s per new stop)
+# hkg1 (Hong Kong), next to the Azure sign reader (eastasia). Measured 2026-10-16 with two previews:
+# Azure whole-frame read 123-215 ms from hkg1 vs 272-357 ms from icn1 (Seoul); phone -> server from
+# Ulaanbaatar ~215 vs ~260 ms. Hamuga is no reason for Seoul any more (stops snapshot, route cache).
+# The free plan runs every function in one region.
 # Clips are named by their content hash, so they never change: the phone keeps them for a year and
 # never asks again. Models: kept a day, then refreshed in the background (no wait).
 cat > vercel.json <<'JSON'
 {
-  "regions": ["icn1"],
+  "regions": ["hkg1"],
   "functions": {
     "api/index.py": { "includeFiles": "api/_server/**", "maxDuration": 30 }
   },
@@ -107,4 +111,8 @@ du -sh public/tts public/models
 
 [ "$1" = "--build" ] && exit 0
 [ -d .vercel ] || vercel link --yes --project avtobus-khotoch
-vercel deploy --prod --yes
+if [ "$1" = "--preview" ]; then
+  vercel deploy --yes # a test link; promote it later with: vercel promote <url>
+else
+  vercel deploy --prod --yes
+fi
