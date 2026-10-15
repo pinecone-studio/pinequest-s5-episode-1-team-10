@@ -165,19 +165,23 @@ def _route_info(sign, lat, lon):
 
 
 def _direct_options(named, lat, lon):
-    """[(stops, sign, origin)]: every direct bus from the rider's nearby stops to the place, best first."""
-    origins = bus_api.nearest_stops(lat, lon, WALK_M, planner.ORIGIN_LIMIT)
-    bus_api.load_route_directions(rid for st in origins + named for rids in st["route_ids"].values() for rid in rids)
+    """[(stops, sign, origin)]: every direct bus from a stop within the walk to the place, best first the
+    way the planner picks (planner._best_direct): shortest walk in WALK_STEP_M steps, then fewest stops.
+    Every stop within the walk, like the planner: else "Үгүй" for the very bus the trip plan suggests."""
+    origins = planner._within(lat, lon, WALK_M)
+    to_place = {r for st in named for r in st["routes"]}
+    bus_api.load_route_directions(rid for st in origins + named for r, rids in st["route_ids"].items() if r in to_place
+                                  for rid in rids)
     best = {}
     for o in origins:
         for d in named:
-            for route in set(o["routes"]) & set(d["routes"]):
+            for route in sorted(set(o["routes"]) & set(d["routes"])):
                 n = bus_api.stops_between(o["route_ids"][route], o["stop_id"], d["stop_id"])
                 if n is not None:
                     sign = _sign(route)
-                    cost = n + o["distance_m"] / planner.WALK_COST_M
-                    if sign not in best or cost < best[sign][0]:
-                        best[sign] = (cost, n, o)
+                    rank = (o["distance_m"] // planner.WALK_STEP_M, n, n + o["distance_m"] / planner.WALK_COST_M)
+                    if sign not in best or rank < best[sign][0]:
+                        best[sign] = (rank, n, o)
     ranked = sorted(best.items(), key=lambda item: item[1][0])
     return [(n, sign, o) for sign, (_, n, o) in ranked]
 

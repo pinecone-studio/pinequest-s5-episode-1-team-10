@@ -87,3 +87,15 @@ def test_voice_question(monkeypatch):
     monkeypatch.setattr(stt, "transcribe", lambda audio: "Энд ямар автобус зогсдог вэ")
     r = client.post("/ask", params={"lat": HOME[0], "lon": HOME[1]}, content=b"RIFF....", headers={"Content-Type": "audio/wav"})
     assert r.json()["heard"] == "Энд ямар автобус зогсдог вэ" and "далан тав" in r.json()["answer"]
+
+
+def test_bus_from_a_stop_beyond_the_8_closest_agrees_with_the_plan(monkeypatch):
+    # The one bus to Зайсан leaves from the 10th-closest stop (500 m, within the walk): the trip plan boards
+    # it, so "does 23 go there?" is yes, and "which buses go there?" lists it.
+    from test_planner import add_stops
+
+    fillers = [(str(30 + i), "Filler", 47.9013, 106.8996 + 0.0001 * i, ["Х:9"]) for i in range(8)]
+    add_stops(monkeypatch, fillers + [("18", "Tenth", 47.9048, 106.9000, ["Ч:23"])], {"Ч:23": ["18", "13", "15"]})
+    assert ask("23 Зайсан руу явдаг уу?")["speech"] == ["Тийм. хорин гурав автобус Зайсан руу явдаг.", "Tenth зогсоолоос 2 зогсоол."]
+    which = ask("Зайсан руу ямар автобус явдаг вэ?")
+    assert which["speech"][:2] == ["Зайсан руу шууд явдаг автобус:", "хорин гурав 2 зогсоол."] and which["plan"]["route"] == "Ч:23"
