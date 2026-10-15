@@ -38,3 +38,6 @@ deploy/mp3cache/
 
 # Reader model build downloads (deploy/reader_models.py)
 deploy/reader_work/
+
+# local keys (Azure etc.), never committed
+.env*.local
