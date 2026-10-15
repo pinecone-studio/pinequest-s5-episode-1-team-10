@@ -17,7 +17,7 @@ MP3=$R/deploy/mp3cache # converted once, reused
 SP=$R/server/.venv/lib/python3.12/site-packages
 
 rm -rf "$D.tmp" && mkdir -p "$D.tmp" "$MP3"
-rsync -a --exclude node_modules --exclude .next --exclude public/test --exclude public/ort --exclude .vercel "$R/app/" "$D.tmp/"
+rsync -a --exclude node_modules --exclude .next --exclude public/test --exclude public/test-fixtures --exclude public/ort --exclude .vercel "$R/app/" "$D.tmp/"
 [ -d "$D/.vercel" ] && cp -R "$D/.vercel" "$D.tmp/.vercel" # keep the project link
 rm -rf "$D" && mv "$D.tmp" "$D"
 cd "$D"

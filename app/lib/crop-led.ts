@@ -150,18 +150,48 @@ function sized(canvas: HTMLCanvasElement, w: number, h: number): CanvasRendering
   return canvas.getContext("2d") as CanvasRenderingContext2D;
 }
 
+type Source = HTMLVideoElement | HTMLImageElement | HTMLCanvasElement;
+
+function cut(src: Source, box: Box, into: HTMLCanvasElement): LedCrop {
+  const scale = Math.min(MAX_SCALE, Math.max(1, MIN_SIDE / Math.min(box.w, box.h)));
+  const ctx = sized(into, roundUp(box.w * scale), roundUp(box.h * scale));
+  ctx.drawImage(src, box.x, box.y, box.w, box.h, 0, 0, into.width, into.height);
+  return { canvas: into, box: box, kind: "led" };
+}
+
+// The (up to MAX_CROPS) lit LED lines of a frame, cut from it at full resolution.
+function ledCrops(src: Source, vw: number, vh: number, small: HTMLCanvasElement, into: HTMLCanvasElement[]): LedCrop[] {
+  const sh = Math.max(1, Math.round((SMALL_W * vh) / vw));
+  const sctx = small.getContext("2d", { willReadFrequently: true }) as CanvasRenderingContext2D;
+  if (small.width !== SMALL_W || small.height !== sh) {
+    small.width = SMALL_W;
+    small.height = sh;
+  }
+  sctx.drawImage(src, 0, 0, SMALL_W, sh);
+  const found = ledBoxes(sctx.getImageData(0, 0, SMALL_W, sh).data, SMALL_W, sh).slice(0, MAX_CROPS);
+  const sx = vw / SMALL_W;
+  const sy = vh / sh;
+  return found.map(function (item, i) {
+    const x = Math.max(0, (item.x - item.w * PAD) * sx);
+    const y = Math.max(0, (item.y - item.h * PAD) * sy);
+    const right = Math.min(vw, (item.x + item.w * (1 + PAD)) * sx);
+    const bottom = Math.min(vh, (item.y + item.h * (1 + PAD)) * sy);
+    return cut(src, { x: x, y: y, w: right - x, h: bottom - y, score: item.score }, into[i]);
+  });
+}
+
+// For a still picture (the OCR bench, /debug/ocr-bench): its LED sign crops, on new canvases.
+export function ledCropsOf(src: HTMLImageElement | HTMLCanvasElement): LedCrop[] {
+  const w = src instanceof HTMLImageElement ? src.naturalWidth : src.width;
+  const h = src instanceof HTMLImageElement ? src.naturalHeight : src.height;
+  return w && h ? ledCrops(src, w, h, document.createElement("canvas"), [document.createElement("canvas"), document.createElement("canvas")]) : [];
+}
+
 export function createLedCropper(): LedCropper {
   const small = document.createElement("canvas");
   const crops = [document.createElement("canvas"), document.createElement("canvas")];
   const frame = document.createElement("canvas");
   let lastRoute: number | null = null; // last time a route number was read (or the last whole frame)
-
-  function cut(video: HTMLVideoElement, box: Box, into: HTMLCanvasElement): LedCrop {
-    const scale = Math.min(MAX_SCALE, Math.max(1, MIN_SIDE / Math.min(box.w, box.h)));
-    const ctx = sized(into, roundUp(box.w * scale), roundUp(box.h * scale));
-    ctx.drawImage(video, box.x, box.y, box.w, box.h, 0, 0, into.width, into.height);
-    return { canvas: into, box: box, kind: "led" };
-  }
 
   return {
     next: function (video: HTMLVideoElement, now: number): LedCrop[] {
@@ -179,26 +209,7 @@ export function createLedCropper(): LedCropper {
         ctx.drawImage(video, 0, 0, frame.width, frame.height);
         return [{ canvas: frame, box: { x: 0, y: 0, w: vw, h: vh, score: 0 }, kind: "frame" }];
       }
-      const sh = Math.max(1, Math.round((SMALL_W * vh) / vw));
-      const sctx = small.getContext("2d", { willReadFrequently: true }) as CanvasRenderingContext2D;
-      if (small.width !== SMALL_W || small.height !== sh) {
-        small.width = SMALL_W;
-        small.height = sh;
-      }
-      sctx.drawImage(video, 0, 0, SMALL_W, sh);
-      const found = ledBoxes(sctx.getImageData(0, 0, SMALL_W, sh).data, SMALL_W, sh).slice(0, MAX_CROPS);
-      if (found.length) {
-        const sx = vw / SMALL_W;
-        const sy = vh / sh;
-        return found.map(function (item, i) {
-          const x = Math.max(0, (item.x - item.w * PAD) * sx);
-          const y = Math.max(0, (item.y - item.h * PAD) * sy);
-          const right = Math.min(vw, (item.x + item.w * (1 + PAD)) * sx);
-          const bottom = Math.min(vh, (item.y + item.h * (1 + PAD)) * sy);
-          return cut(video, { x: x, y: y, w: right - x, h: bottom - y, score: item.score }, crops[i]);
-        });
-      }
-      return [];
+      return ledCrops(video, vw, vh, small, crops);
     },
     routeRead: function (now: number): void {
       lastRoute = now;

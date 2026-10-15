@@ -17,6 +17,7 @@ import { explainPermission } from "../lib/permissions";
 import { phrase, prepareInstant, type Earcon } from "../lib/speech";
 import { candidatesNear, loadRouteData, routeKey } from "../lib/candidates";
 import { matchSign as matchCandidates } from "../lib/signMatch";
+import { loadLocalOcr, localOcrState, readLocal } from "../lib/localSignOcr";
 import { cityNumbers, prefetchStopRoutes, routesFor } from "../lib/stopRoutes";
 import { latencyText, markDecided } from "../lib/latency";
 
@@ -68,7 +69,7 @@ function jpeg(canvas: HTMLCanvasElement, quality: number): Promise<Blob | null> 
 
 // The crop in grayscale on its own canvas (the cropper reuses its canvas on the next frame), as JPEG:
 // colour adds bytes and nothing for reading a sign.
-async function grayJpeg(crop: LedCrop): Promise<Blob | null> {
+async function grayCrop(crop: LedCrop): Promise<{ blob: Blob | null; gray: HTMLCanvasElement }> {
   const from = crop.canvas;
   const c = document.createElement("canvas");
   c.width = from.width;
@@ -85,7 +86,7 @@ async function grayJpeg(crop: LedCrop): Promise<Blob | null> {
   }
   ctx.putImageData(img, 0, 0);
   if (crop.kind === "frame") {
-    return jpeg(c, FRAME_QUALITY);
+    return { blob: await jpeg(c, FRAME_QUALITY), gray: c };
   }
   let blob: Blob | null = null;
   for (let i = 0; i < CROP_QUALITIES.length; i++) {
@@ -94,7 +95,14 @@ async function grayJpeg(crop: LedCrop): Promise<Blob | null> {
       break;
     }
   }
-  return blob;
+  return { blob, gray: c };
+}
+
+// One read of a crop in the race: on the phone (lib/localSignOcr.ts) or Azure.
+interface RaceRead {
+  source: "local" | "azure";
+  body: ReadSignResponse;
+  ms: number; // from sending to the answer
 }
 
 // What the scanner is doing (?debug=1 shows it; tests read window.__scan).
@@ -152,11 +160,13 @@ export default function BusScanner({ stopId, route, foundSpeech, onFound, onErro
       const stats: ScanStats = { stage: "starting", video: "", frames: 0, sent: 0, answers: 0, busy: 0, overBudget: 0, noise: 0, lastLines: "", azureMs: 0, roundTripMs: 0, lastKB: 0, timing: "", yesMs: 0, error: "" };
       const totals: number[] = [];
       const azures: number[] = [];
+      const localTimes: number[] = []; // on-device read, from sending to the answer
+      const raced = { total: 0, local: 0 }; // decisions, and how many the phone's read made
       (window as unknown as { __scan: ScanStats }).__scan = stats;
       const debugTimer = setInterval(function () {
         if (debugRef.current) {
           debugRef.current.textContent =
-            stats.stage + " · " + stats.video + " · frames " + stats.frames + " · sent " + stats.sent + " · answers " + stats.answers + " · dropped busy " + stats.busy + " / budget " + stats.overBudget + " / noise " + stats.noise + " · azure " + stats.azureMs + " ms · round trip " + stats.roundTripMs + " ms · last " + stats.lastKB + " KB" + (stats.timing ? " · " + stats.timing : "") + (stats.lastLines ? " «" + stats.lastLines + "»" : "") + (stats.yesMs ? " · yes " + stats.yesMs + " ms" : "") + (latencyText() ? " · " + latencyText() : "") + (stats.error ? " · ERROR " + stats.error : "");
+            stats.stage + " · " + stats.video + " · frames " + stats.frames + " · sent " + stats.sent + " · answers " + stats.answers + " · dropped busy " + stats.busy + " / budget " + stats.overBudget + " / noise " + stats.noise + " · azure " + stats.azureMs + " ms · round trip " + stats.roundTripMs + " ms · last " + stats.lastKB + " KB" + (stats.timing ? " · " + stats.timing : "") + (stats.lastLines ? " «" + stats.lastLines + "»" : "") + (stats.yesMs ? " · yes " + stats.yesMs + " ms" : "") + " · local " + localOcrState() + (localTimes.length ? " p50 " + percentile(localTimes, 50) + " ms" : "") + " · azure p50 " + percentile(totals, 50) + " ms · local wins " + raced.local + "/" + raced.total + (raced.total ? " (" + Math.round((100 * raced.local) / raced.total) + "%)" : "") + (latencyText() ? " · " + latencyText() : "") + (stats.error ? " · ERROR " + stats.error : "");
         }
       }, 500);
 
@@ -196,19 +206,29 @@ export default function BusScanner({ stopId, route, foundSpeech, onFound, onErro
         onError();
       }
 
+      // Fast path: the read clearly picks the rider's route among the routes near this stop
+      // (lib/signMatch.ts); else the sign parser's own rules (lib/parse-sign.ts).
+      function verdictOf(lines: string[]): { verdict: "yes" | "no" | "unsure"; route: string | null } {
+        const wantedKey = routeKey(route);
+        const pool = wantedKey ? candidatesNear(stopId) : null;
+        const quick = pool ? matchCandidates(lines.join(" "), wantedKey as string, pool.near, pool.all) : null;
+        const parsed = matchSign(lines, route, routeBook());
+        return quick && quick.verdict === "yes" ? { verdict: "yes", route: parsed.route ?? (wantedKey as string) } : parsed;
+      }
+
+      // A read that settles it (yes, or clearly another route): used at once, the other read stopped.
+      function conclusive(lines: string[]): boolean {
+        const m = verdictOf(lines);
+        return m.verdict !== "unsure" && m.route !== null;
+      }
+
       function decide(body: ReadSignResponse, crop: LedCrop, sentAt: number): void {
         const now = performance.now();
         stats.answers++;
         stats.lastLines = body.lines.join(" | ");
         stats.azureMs = body.azureMs;
         stats.roundTripMs = Math.round(now - sentAt);
-        // Fast path: the read clearly picks the rider's route among the routes near this stop
-        // (lib/signMatch.ts); else the sign parser's own rules (lib/parse-sign.ts).
-        const wantedKey = routeKey(route);
-        const pool = wantedKey ? candidatesNear(stopId) : null;
-        const quick = pool ? matchCandidates(body.lines.join(" "), wantedKey as string, pool.near, pool.all) : null;
-        const parsed = matchSign(body.lines, route, routeBook());
-        const match = quick && quick.verdict === "yes" ? { verdict: "yes" as const, route: parsed.route ?? (wantedKey as string) } : parsed;
+        const match = verdictOf(body.lines);
         if (match.route) {
           lastRouteAt = now;
           cropper.routeRead(now);
@@ -243,20 +263,20 @@ export default function BusScanner({ stopId, route, foundSpeech, onFound, onErro
         }
       }
 
-      async function answer(res: Response, crop: LedCrop, sentAt: number): Promise<void> {
+      async function azureBody(res: Response): Promise<ReadSignResponse | null> {
         if (stopped || found) {
-          return;
+          return null;
         }
         if (res.status === 429) {
           const wait = parseFloat(res.headers.get("retry-after") ?? "");
           budget.pauseUntil(performance.now() + (Number.isFinite(wait) ? wait : 10) * 1000);
           stats.error = "Azure rate limit";
-          return;
+          return null;
         }
         if (res.status === 503) {
           stats.error = "no Azure key on the server";
           giveUp();
-          return;
+          return null;
         }
         if (!res.ok) {
           stats.error = "read " + res.status;
@@ -264,14 +284,57 @@ export default function BusScanner({ stopId, route, foundSpeech, onFound, onErro
           if (failures >= FAILURES_GIVE_UP) {
             giveUp();
           }
-          return;
+          return null;
         }
         const body = (await res.json()) as ReadSignResponse;
         failures = 0;
-        waitingSince = 0;
-        if (!stopped && !found) {
-          decide(body, crop, sentAt);
-        }
+        return body;
+      }
+
+      // The race for one crop: whichever read arrives first and settles it is used, the other stopped;
+      // if the first doesn't settle it, the other is waited for (Azure's read preferred when both are in).
+      function race(azure: Promise<RaceRead | null>, local: Promise<RaceRead | null>, stopAzure: AbortController, stopLocal: AbortController, crop: LedCrop, sentAt: number): Promise<void> {
+        return new Promise<void>(function (resolve) {
+          let left = 2;
+          let used = false;
+          const pending: RaceRead[] = [];
+          function take(r: RaceRead, first: boolean): void {
+            used = true;
+            waitingSince = 0;
+            raced.total++;
+            if (r.source === "local") {
+              raced.local++;
+            }
+            console.info("[race] " + r.source + " " + (first ? "won" : "used") + " in " + r.ms + " ms: " + r.body.lines.join(" | ").slice(0, 60));
+            if (!stopped && !found) {
+              decide(r.body, crop, sentAt);
+            }
+          }
+          function settle(r: RaceRead | null): void {
+            left--;
+            if (!used && r) {
+              if (conclusive(r.body.lines)) {
+                take(r, true);
+                (r.source === "local" ? stopAzure : stopLocal).abort();
+              } else {
+                pending.push(r);
+              }
+            }
+            if (left === 0) {
+              if (!used && pending.length) {
+                take(
+                  pending.find(function (item) {
+                    return item.source === "azure";
+                  }) ?? pending[0],
+                  false,
+                );
+              }
+              resolve();
+            }
+          }
+          azure.then(settle);
+          local.then(settle);
+        });
       }
 
       // JPEG of the crop, then one read. The crop's canvas is copied by toBlob at once, so the next
@@ -282,29 +345,53 @@ export default function BusScanner({ stopId, route, foundSpeech, onFound, onErro
         if (!waitingSince) {
           waitingSince = now;
         }
-        grayJpeg(crop).then(function (blob) {
+        grayCrop(crop).then(function (prep) {
+          const blob = prep.blob;
           if (!blob || stopped) {
             inFlight--;
             return;
           }
           stats.lastKB = Math.round(blob.size / 102.4) / 10;
-          const controller = new AbortController();
+          const stopAzure = new AbortController();
+          const stopLocal = new AbortController();
           const timeout = setTimeout(function () {
-            controller.abort();
+            stopAzure.abort();
+            stopLocal.abort();
           }, READ_TIMEOUT_MS);
           const sentAt = performance.now();
-          fetch("/api/read-sign", { method: "POST", headers: { "Content-Type": "image/jpeg" }, body: blob, signal: controller.signal })
+          const azure = fetch("/api/read-sign", { method: "POST", headers: { "Content-Type": "image/jpeg" }, body: blob, signal: stopAzure.signal })
             .then(function (res) {
               timed(res, blob.size, sentAt, crop.kind);
-              return answer(res, crop, now);
+              return azureBody(res);
+            })
+            .then(function (body): RaceRead | null {
+              return body ? { source: "azure", body, ms: Math.round(performance.now() - sentAt) } : null;
             })
             .catch(function (e) {
-              stats.error = "read " + (e instanceof Error ? e.name : String(e)); // late or offline: no vote
-            })
-            .finally(function () {
-              clearTimeout(timeout);
-              inFlight--;
+              if (!stopAzure.signal.aborted) {
+                stats.error = "read " + (e instanceof Error ? e.name : String(e)); // late or offline: no vote
+              }
+              return null;
             });
+          // On the phone too (LED crops only: a whole frame needs a text detector), started together.
+          const local =
+            crop.kind === "led"
+              ? readLocal(prep.gray, stopLocal.signal).then(function (r): RaceRead | null {
+                  if (!r) {
+                    return null;
+                  }
+                  const ms = Math.round(performance.now() - sentAt);
+                  localTimes.push(ms);
+                  if (localTimes.length > TIMING_SAMPLES) {
+                    localTimes.shift();
+                  }
+                  return { source: "local", body: { lines: r.text ? [r.text] : [], azureMs: 0, serverMs: 0 }, ms };
+                })
+              : Promise.resolve(null);
+          race(azure, local, stopAzure, stopLocal, crop, sentAt).finally(function () {
+            clearTimeout(timeout);
+            inFlight--;
+          });
         });
       }
 
@@ -449,6 +536,7 @@ export default function BusScanner({ stopId, route, foundSpeech, onFound, onErro
           prefetchStopRoutes(stopId, [], ""); // the plan step already asked; in case it failed
         }
         loadRouteData(); // routes near this stop, for the fast match
+        loadLocalOcr(); // the on-device sign reader (lib/localSignOcr.ts), racing Azure on each LED crop
         announcer.preload([foundSpeech, phrase("not_your_bus"), phrase("not_sure")]);
         prepareInstant([foundSpeech, phrase("not_your_bus")]); // decoded into memory: no wait at the verdict
         const video = videoRef.current;
