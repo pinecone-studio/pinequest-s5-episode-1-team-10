@@ -387,8 +387,122 @@ export function sayPhrase(key: PhraseKey): Promise<void> {
   return say([phrase(key)]);
 }
 
+// A soft click about once a second, so a slow GPS fix or a slow server is not silence.
+// The first click is after one second: a fast answer never ticks.
+export function startWaitingTick(): () => void {
+  let stopped = false;
+  let timer = 0;
+  function click(): void {
+    if (stopped) {
+      return;
+    }
+    const c = audioContext();
+    if (c) {
+      if (c.state !== "running") {
+        c.resume().catch(function () {});
+      }
+      try {
+        const osc = c.createOscillator();
+        const gain = c.createGain();
+        gain.gain.value = 0.03;
+        osc.frequency.value = 520;
+        osc.connect(gain);
+        gain.connect(c.destination);
+        osc.start();
+        osc.stop(c.currentTime + 0.04);
+      } catch {
+        // no audio device: the status text still says what is happening
+      }
+    }
+    timer = window.setTimeout(click, 1000);
+  }
+  timer = window.setTimeout(click, 1000);
+  return function () {
+    stopped = true;
+    window.clearTimeout(timer);
+  };
+}
+
 export function vibrate(pattern: number[]): void {
-  if ("vibrate" in navigator) {
+  if (typeof navigator !== "undefined" && "vibrate" in navigator) {
     navigator.vibrate(pattern);
+    return;
+  }
+  const c = audioContext();
+  if (!c) {
+    return;
+  }
+  if (c.state !== "running") {
+    c.resume().catch(function () {});
+  }
+  let at = c.currentTime + 0.01;
+  pattern.forEach(function (item, i) {
+    if (i % 2 === 0) {
+      pulse(c, at, item);
+    }
+    at += item / 1000;
+  });
+}
+
+function pulse(c: AudioContext, at: number, ms: number): void {
+  const osc = c.createOscillator();
+  const gain = c.createGain();
+  let freq = 1800;
+  let level = 0.08;
+  let len = 0.012;
+  if (ms >= 400) {
+    freq = 520;
+    level = 0.3;
+    len = Math.min(ms, 600) / 1000;
+  } else if (ms >= 200) {
+    osc.type = "square"; // harsh on purpose: danger
+    freq = 1000;
+    level = 0.25;
+    len = ms / 1000;
+  } else if (ms >= 100) {
+    freq = 700;
+    level = 0.2;
+    len = ms / 1000;
+  } else if (ms >= 30) {
+    freq = 1200;
+    level = 0.12;
+    len = 0.03;
+  }
+  osc.frequency.value = freq;
+  gain.gain.setValueAtTime(0.0001, at);
+  gain.gain.exponentialRampToValueAtTime(level, at + 0.005);
+  gain.gain.setValueAtTime(level, at + Math.max(0.006, len - 0.01));
+  gain.gain.exponentialRampToValueAtTime(0.0001, at + len);
+  osc.connect(gain);
+  gain.connect(c.destination);
+  osc.start(at);
+  osc.stop(at + len + 0.02);
+}
+
+// iPhone Safari has no vibration. These two moments also play a short sound.
+export function cue(name: "bus" | "off", pattern: number[]): void {
+  vibrate(pattern);
+  const c = audioContext();
+  if (!c) {
+    return;
+  }
+  if (c.state !== "running") {
+    c.resume().catch(function () {});
+  }
+  const tones = name === "bus" ? [660, 880] : [440, 440, 330];
+  try {
+    tones.forEach(function (item, i) {
+      const osc = c.createOscillator();
+      const gain = c.createGain();
+      gain.gain.value = 0.08;
+      osc.frequency.value = item;
+      osc.connect(gain);
+      gain.connect(c.destination);
+      const at = c.currentTime + i * 0.18;
+      osc.start(at);
+      osc.stop(at + 0.12);
+    });
+  } catch {
+    // the spoken sentence is still the signal
   }
 }

@@ -8,12 +8,14 @@ import type { MenuItem } from "./VoiceMenu";
 
 interface Props {
   title: string;
+  stepId: string; // focus moves when the step changes, even if the heading text stays the same
   status: string;
+  live: boolean; // true: VoiceOver reads status changes. false: the app's own voice is reading them.
   actions: MenuItem[];
   children?: ReactNode; // camera view, ride progress
 }
 
-export default function SrScreen({ title, status, actions, children }: Props) {
+export default function SrScreen({ title, stepId, status, live, actions, children }: Props) {
   const heading = useRef<HTMLHeadingElement>(null);
 
   useEffect(
@@ -22,7 +24,7 @@ export default function SrScreen({ title, status, actions, children }: Props) {
         heading.current.focus();
       }
     },
-    [title],
+    [stepId],
   );
 
   return (
@@ -30,8 +32,8 @@ export default function SrScreen({ title, status, actions, children }: Props) {
       <h1 ref={heading} tabIndex={-1} className="title">
         {title}
       </h1>
-      {/* Always in the page (empty or not) so every new message is announced, not only new screens. */}
-      <p className="status" role="status" aria-live="polite" aria-atomic="true">
+      {/* A live region talks over the app's Mongolian clip. VoiceOver can still read this by swiping. */}
+      <p className="status" role={live ? "status" : undefined} aria-live={live ? "polite" : undefined} aria-atomic={live ? true : undefined}>
         {status}
       </p>
       {children}
