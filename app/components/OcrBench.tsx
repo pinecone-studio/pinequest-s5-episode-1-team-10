@@ -6,6 +6,8 @@
 // readers read the same crops; the texts go through the same matcher (lib/signMatch.ts) with the routes
 // near the stop. Per reader: right "yes" for the photo's route, wrong "yes" for any other route, p50 ms.
 // The photos are local only (bystanders): gitignored and not deployed.
+// ?azure=0: on-device only, no network call (scripts/match-report.mjs's OCR cache is made this way). Each
+// crop's own read is kept in window.__bench (localCrops / azureCrops) when done.
 import { useEffect, useRef, useState } from "react";
 import { candidatesNear, loadRouteData } from "../lib/candidates";
 import { ledCropsOf } from "../lib/crop-led";
@@ -33,6 +35,8 @@ interface Row {
   images: string[]; // the crops as sent, to see what the cropper cut
   local: Side;
   azure: Side;
+  localCrops: { text: string; conf: number }[]; // one per crop the phone's reader read
+  azureCrops: string[][]; // Azure's lines, one list per crop it read
 }
 
 function sleep(ms: number): Promise<void> {
@@ -113,6 +117,7 @@ export default function OcrBench() {
       return;
     }
     started.current = true;
+    const useAzure = new URLSearchParams(window.location.search).get("azure") !== "0";
     (async function () {
       const res = await fetch(FIXTURES + "labels.json");
       if (!res.ok) {
@@ -153,19 +158,26 @@ export default function OcrBench() {
         });
         const localTexts: string[] = [];
         const localMs: number[] = [];
+        const localCrops: { text: string; conf: number }[] = [];
         const azureTexts: string[] = [];
         const azureMs: number[] = [];
+        const azureCrops: string[][] = [];
         for (let k = 0; k < crops.length; k++) {
           const t = performance.now();
           const local = await readLocal(crops[k]);
           if (local) {
             localMs.push(Math.round(performance.now() - t));
             localTexts.push(local.text);
+            localCrops.push({ text: local.text, conf: local.conf });
+          }
+          if (!useAzure) {
+            continue;
           }
           const azure = await azureRead(crops[k]);
           if (azure) {
             azureMs.push(azure.ms);
             azureTexts.push(azure.lines.join(" "));
+            azureCrops.push(azure.lines);
           }
           await sleep(AZURE_GAP_MS);
         }
@@ -180,6 +192,8 @@ export default function OcrBench() {
           }),
           local: { text: localText, ms: median(localMs), yesFor: yesFor(localText.replace(/\|/g, " ")) },
           azure: { text: azureText, ms: median(azureMs), yesFor: yesFor(azureText.replace(/\|/g, " ")) },
+          localCrops,
+          azureCrops,
         });
         setRows(out.slice());
       }
