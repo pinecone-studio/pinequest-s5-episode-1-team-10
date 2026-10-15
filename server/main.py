@@ -15,11 +15,12 @@ import bus_api
 import fusion
 import ocr
 import planner
+import speechmatics
 import stt
 import tts
 from bus_api import get_eta_seconds
 import assistant
-from contract import (AskResponse, NearestStop, VerifyTextsRequest, PlanRequest, PlanResponse, RideResponse, VerifyRequest, VerifyResponse,
+from contract import (AskResponse, SpeechToken, NearestStop, VerifyTextsRequest, PlanRequest, PlanResponse, RideResponse, VerifyRequest, VerifyResponse,
                       VoiceLocateResponse, VoicePlanResponse)
 
 @asynccontextmanager

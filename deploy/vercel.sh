@@ -7,7 +7,7 @@
 #
 # Needs: the server venv (server/.venv, for the MP3 conversion and the vendored text normalizer),
 # the clips in server/tts_cache/female (server/make_speech.py), `vercel login`, and the
-# HAMUGA_API_KEY env var set once in the Vercel project (never in these files).
+# HAMUGA_API_KEY and SPEECHMATICS_API_KEY env vars set once in the Vercel project (never in these files).
 # On the phone: sign reading runs in the browser (lib/ocr.ts), speech recognition is the browser's.
 set -e
 R=$(cd "$(dirname "$0")/.." && pwd)
@@ -27,7 +27,7 @@ grep -rl '\.\./\.\./shared/' components lib app | xargs sed -i '' 's#\.\./\.\./s
 
 # /api/* = lite server
 mkdir -p api/_server/oron_tts api/_server/data/oron_mn_pinyin public/tts
-for f in lite planner bus_api numwords fusion assistant contract tts gpu; do cp "$R/server/$f.py" api/_server/; done
+for f in lite planner bus_api numwords fusion assistant contract tts gpu speechmatics; do cp "$R/server/$f.py" api/_server/; done
 cp -R "$R/server/hamuga_cache" api/_server/
 # Station + stop lists as of now (2 Hamuga calls here instead of 2 per new Vercel instance)
 (set -a && . "$R/.env" && set +a && cd "$R/server" && .venv/bin/python -c 'import sys, bus_api; bus_api.save_snapshot(sys.argv[1])' "$D/api/_server/stops_snapshot.json")

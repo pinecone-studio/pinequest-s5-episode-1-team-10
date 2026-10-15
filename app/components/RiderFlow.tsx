@@ -8,10 +8,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import type { AskResponse, BoardStop, PlanResponse, PlanStop, VoiceLocateResponse } from "../../shared/contract";
-import { askByText, askByVoice, locateBySpeech, locateByText, nearestStop, requestPlan, requestVoicePlan, serverCaps, wakeServer, type ServerCaps } from "../lib/api";
-import { canListenInMongolian, listenInBrowser, type Heard } from "../lib/listen";
+import { askByText, locateByText, nearestStop, requestPlan, serverCaps, wakeServer, type ServerCaps } from "../lib/api";
+import { canListen, enableSpeechmatics, listen, type Heard, type Listening } from "../lib/listen";
+import { warmSpeech } from "../lib/speechmatics";
 import { GPS_OK_M, locate, type Position } from "../lib/location";
-import { beep, record, type Recording } from "../lib/record";
 import { primeBeacon } from "../lib/beacon";
 import { familyNumber, openLink, saveFamilyNumber, smsUrl, sosMessage, telUrl } from "../lib/family";
 import { groupDigits, phoneDigits } from "../lib/phoneWords";
@@ -21,7 +21,7 @@ import { loadDetector } from "../lib/detector";
 import { loadDoorDetector } from "../lib/doorDetector";
 import { loadOcr } from "../lib/ocr";
 import type { DoorGuide } from "../lib/door";
-import { phrase, prefetch, rememberClips, say, stopSpeaking, unlockAudio, vibrate, type PhraseKey } from "../lib/speech";
+import { beep, phrase, prefetch, rememberClips, say, stopSpeaking, unlockAudio, vibrate, type PhraseKey } from "../lib/speech";
 import { onSpeedReport, showSpeed, speedCancel, speedMark, speedStart } from "../lib/speed";
 import BusCamera, { doorSpeech } from "./BusCamera";
 import RideGuide, { leftSpeech, type RideInfo } from "./RideGuide";
@@ -80,6 +80,14 @@ function legOf(plan: PlanResponse, leg: number): Leg {
 // "Сансар ШТС /Урд/" -> "Сансар ШТС." (the pre-made stop-name clip; same as planner.stop_name).
 function spokenStop(name: string): string {
   return name.replace(/\/[^/]*\/|\([^)]*\)/g, " ").split(/\s+/).filter(Boolean).join(" ") + ".";
+}
+
+// "Төв номын сан /Зүүн/" -> ["Төв номын сан.", "Зүүн тал."]: the two pre-made clips (planner.stop_pieces).
+const SIDES: Record<string, string> = { урд: "Урд тал.", хойд: "Хойд тал.", зүүн: "Зүүн тал.", баруун: "Баруун тал." };
+function stopPieces(name: string): string[] {
+  const m = /\/\s*(Урд|Хойд|Зүүн|Баруун)\s*\//i.exec(name);
+  const side = m ? SIDES[m[1].toLowerCase()] : "";
+  return [spokenStop(name)].concat(side ? [side] : []);
 }
 
 // ?lat=47.91&lon=106.92 overrides GPS, for testing away from the stop.
@@ -141,7 +149,10 @@ export default function RiderFlow() {
   function confirmPlace(name: string): void {
     setPlace(name);
     setStep("confirmPlace");
-    announce(["your_location_is", { text: name }, modeRef.current === "sr" ? "place_confirm_sr" : "place_confirm"]);
+    const pieces = stopPieces(name).map(function (item) {
+      return { text: item };
+    });
+    announce((["your_location_is"] as (PhraseKey | { text: string })[]).concat(pieces, modeRef.current === "sr" ? "place_confirm_sr" : "place_confirm"));
   }
   function placeConfirmed(): void {
     setStep("ask");
@@ -236,9 +247,11 @@ export default function RiderFlow() {
     serverCaps().then(function (c) {
       caps.current = c;
       setServerOcr(c.ocr);
-      if (!c.stt && !canListenInMongolian()) {
-        voiceBroken.current = true; // iPhone: typing whenever the rider chooses to say something
+      enableSpeechmatics(c.speech);
+      if (c.speech) {
+        warmSpeech(); // a key ready before the rider first speaks
       }
+      voiceBroken.current = !canListen(); // nothing can hear Mongolian here: typing instead
     });
     if (tutorialNeeded()) {
       setStep("learn");
@@ -273,17 +286,44 @@ export default function RiderFlow() {
     setStep("learn");
   }
 
-  // Free hosting has no Whisper: the browser recognises the speech, and the text goes to the server.
-  async function hearInBrowser(listeningStep: Step): Promise<Heard> {
+  // The microphone, for one thing the rider says (lib/listen.ts: Speechmatics, else the browser).
+  // It opens during the beep, so the rider can talk right after it, and stops by itself when they
+  // stop talking. The words so far are shown for a sighted helper (not in screen-reader mode: the
+  // screen reader would read them out into the microphone).
+  async function hearRider(listeningStep: Step): Promise<Heard> {
     stopSpeaking();
     setStep(listeningStep);
-    setMessage(phrase("listening")); // stops by itself when the rider stops talking
-    await beep();
-    const rec = listenInBrowser();
-    browserListening.current = rec;
+    await explainMicPrompt();
+    setMessage(phrase("listening"));
+    const rec = listen(showWords);
+    listening.current = rec;
+    beep();
     const heard = await rec.done;
-    browserListening.current = null;
+    listening.current = null;
+    warmSpeech(); // the next key, ahead of time
     return heard;
+  }
+  // The first time, the phone shows a permission box a blind rider can't see: say so before it opens.
+  const micExplained = useRef(false);
+  async function explainMicPrompt(): Promise<void> {
+    if (micExplained.current) {
+      return;
+    }
+    micExplained.current = true;
+    try {
+      const state = await navigator.permissions.query({ name: "microphone" as PermissionName });
+      if (state.state === "prompt") {
+        setMessage(phrase("mic_permission"));
+        await say([phrase("mic_permission")]);
+      }
+    } catch {
+      // older browsers can't tell: the phone just asks
+    }
+  }
+  function showWords(words: string): void {
+    if (modeRef.current === "voice") {
+      setMessage("“" + words + "”");
+    }
   }
 
   // Nothing came back from the browser's recognition: say why, and show the browser's reason for a
@@ -299,24 +339,6 @@ export default function RiderFlow() {
     setMessage(phrase(key) + (heard.error === "not-heard" ? "" : " (" + heard.code + ")"));
   }
 
-  // Beep, record until the rider stops talking (or double taps). null = nothing said; the caller
-  // says "not heard" unless the microphone itself is blocked, which is said here.
-  async function hear(listeningStep: Step, backStep: Step): Promise<Blob | null> {
-    stopSpeaking();
-    setStep(listeningStep);
-    setMessage(phrase("menu_stop_listening"));
-    await beep();
-    const rec = record();
-    recording.current = rec;
-    const wav = await rec.done;
-    recording.current = null;
-    if (!wav && rec.noMic()) {
-      setStep(backStep);
-      announce(["mic_failed"]);
-      throw new Error("no microphone");
-    }
-    return wav;
-  }
 
   function applyPlace(result: VoiceLocateResponse | null): void {
     if (!result) {
@@ -335,35 +357,18 @@ export default function RiderFlow() {
   }
 
   async function sayWhereIAm(): Promise<void> {
-    if (voiceBroken.current && !caps.current.stt) {
+    if (voiceBroken.current) {
       openTyping("where", "voice_unsupported_type");
       return;
     }
-    if (!caps.current.stt) {
-      const heard = await hearInBrowser("whereListening");
-      const text = heard.text;
-      if (!text) {
-        setStep("where");
-        notHeard(heard, "where");
-        return;
-      }
-      setStep("working");
-      applyPlace(await locateByText(text));
-      return;
-    }
-    const wav = await hear("whereListening", "where").catch(function () {
-      return undefined;
-    });
-    if (wav === undefined) {
-      return; // microphone blocked, already said
-    }
-    if (!wav) {
+    const heard = await hearRider("whereListening");
+    if (!heard.text) {
       setStep("where");
-      announce(["not_heard"]);
+      notHeard(heard, "where");
       return;
     }
     setStep("working");
-    applyPlace(await locateBySpeech(wav));
+    applyPlace(await locateByText(heard.text));
   }
 
   // Latest position: GPS is refreshed (the rider may have walked), a said place is kept.
@@ -401,46 +406,17 @@ export default function RiderFlow() {
   }
 
   async function sayDestination(): Promise<void> {
-    if (voiceBroken.current && !caps.current.stt) {
+    if (voiceBroken.current) {
       openTyping("dest", "voice_unsupported_type");
       return;
     }
-    if (!caps.current.stt) {
-      const heard = await hearInBrowser("listening");
-      const text = heard.text;
-      if (!text) {
-        setStep("ask");
-        notHeard(heard, "dest");
-        return;
-      }
-      planTrip(text);
-      return;
-    }
-    const positionNow = currentPosition(); // GPS refresh runs while the rider talks
-    const wav = await hear("listening", "ask").catch(function () {
-      return undefined;
-    });
-    if (wav === undefined) {
-      return; // microphone blocked, already said
-    }
-    if (!wav) {
+    const heard = await hearRider("listening");
+    if (!heard.text) {
       setStep("ask");
-      announce(["not_heard"]);
+      notHeard(heard, "dest");
       return;
     }
-    setStep("working");
-    const pos = await positionNow;
-    if (!pos) {
-      setStep("where");
-      announce(["ask_location"]);
-      return;
-    }
-    const result = await requestVoicePlan(wav, pos.lat, pos.lon);
-    if (result && result.plan) {
-      planOrAsk(result.plan, result.heard);
-    } else {
-      planFailed(result ? result.heard : "", result ? result.message : null);
-    }
+    planTrip(heard.text);
   }
 
   // ---- Family number for SOS: say it or type it, then hear it back digit by digit and confirm. ----
@@ -451,34 +427,20 @@ export default function RiderFlow() {
   }
 
   async function sayNumber(): Promise<void> {
-    if (voiceBroken.current && !caps.current.stt) {
+    if (voiceBroken.current) {
       openTyping("number", "voice_unsupported_type");
       return;
     }
     setStep("numberListening");
     setMessage(phrase("number_say_now"));
     await say([phrase("number_say_now")]);
-    let text = "";
-    if (!caps.current.stt) {
-      const heard = await hearInBrowser("numberListening");
-      if (!heard.text) {
-        setStep("number");
-        notHeard(heard, "number");
-        return;
-      }
-      text = heard.text;
-    } else {
-      const wav = await hear("numberListening", "number").catch(function () {
-        return undefined;
-      });
-      if (wav === undefined) {
-        return; // microphone blocked, already said
-      }
-      // The server's speech recognition, via the "where am I" endpoint: only its "heard" text is used.
-      const result = wav ? await locateBySpeech(wav) : null;
-      text = result ? result.heard : "";
+    const heard = await hearRider("numberListening");
+    if (!heard.text) {
+      setStep("number");
+      notHeard(heard, "number");
+      return;
     }
-    gotNumber(text);
+    gotNumber(heard.text);
   }
 
   function gotNumber(text: string): void {
@@ -599,11 +561,8 @@ export default function RiderFlow() {
     announce(["help"]);
   }
   function stopRecording(): void {
-    if (recording.current) {
-      recording.current.stop();
-    }
-    if (browserListening.current) {
-      browserListening.current.stop();
+    if (listening.current) {
+      listening.current.stop();
     }
   }
   function retryGps(): void {

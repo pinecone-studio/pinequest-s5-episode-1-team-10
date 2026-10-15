@@ -525,3 +525,12 @@ def test_plan_says_when_the_destination_is_only_a_sound_alike():
     assert guess["alight_stop"]["stop_id"] == "3"
     assert guess["sure"] is False
     assert "Сансар ШТС" not in guess["alternatives"]  # never offers the chosen stop again
+
+
+def test_plan_asks_about_the_closest_stop_instead_of_not_found():
+    # Speech recognition dropped a letter ("Сансар ШТС" -> "ансар штс"): the strict search finds
+    # nothing, so the closest-sounding stop is offered as a question, never used as is.
+    guess = plan("ансар штс").json()
+    assert guess["alight_stop"]["stop_id"] == "3"
+    assert guess["sure"] is False
+    assert plan("цаг агаар ямар байна").status_code == 404  # nothing like a stop: still "not found"

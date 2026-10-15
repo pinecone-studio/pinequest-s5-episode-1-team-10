@@ -1,5 +1,5 @@
 // Calls to the FastAPI server, proxied under /api (next.config.ts).
-import type { AskResponse, NearestStop, PlanResponse, VerifyRequest, VerifyResponse, VoiceLocateResponse, VoicePlanResponse } from "../../shared/contract";
+import type { AskResponse, NearestStop, PlanResponse, VerifyRequest, VerifyResponse, VoiceLocateResponse } from "../../shared/contract";
 import { VERIFY_TIMEOUT_MS } from "../../shared/contract";
 
 export type PlanResult = { ok: true; plan: PlanResponse } | { ok: false; message: string };
@@ -26,20 +26,6 @@ export async function requestPlan(text: string, lat: number, lon: number): Promi
   return { ok: false, message: res.status === 404 && typeof body.detail === "string" ? body.detail : "" };
 }
 
-// Speech recognition + plan in one round trip. null = server unreachable or down.
-export async function requestVoicePlan(wav: Blob, lat: number, lon: number): Promise<VoicePlanResponse | null> {
-  try {
-    const res = await fetch("/api/plan/voice?lat=" + lat + "&lon=" + lon, {
-      method: "POST",
-      headers: { "Content-Type": "audio/wav" },
-      body: wav,
-    });
-    return res.ok ? ((await res.json()) as VoicePlanResponse) : null;
-  } catch {
-    return null;
-  }
-}
-
 // Voice assistant: a spoken (WAV) or typed bus question; null if the server can't be reached.
 // context: the trip in progress (current bus, where to get off), so "my bus" / "open the camera" make sense.
 export interface AskContext {
@@ -55,19 +41,6 @@ function askQuery(lat: number, lon: number, context: AskContext): string {
   return "lat=" + lat + "&lon=" + lon + "&step=" + encodeURIComponent(context.step) + "&route=" +
     encodeURIComponent(context.route) + "&alight=" + encodeURIComponent(context.alight) +
     "&board=" + encodeURIComponent(context.board) + walk;
-}
-
-export async function askByVoice(wav: Blob, lat: number, lon: number, context: AskContext): Promise<AskResponse | null> {
-  try {
-    const res = await fetch("/api/ask?" + askQuery(lat, lon, context), {
-      method: "POST",
-      headers: { "Content-Type": "audio/wav" },
-      body: wav,
-    });
-    return res.ok ? ((await res.json()) as AskResponse) : null;
-  } catch {
-    return null;
-  }
 }
 
 export async function askByText(text: string, lat: number, lon: number, context: AskContext): Promise<AskResponse | null> {
@@ -87,15 +60,16 @@ export function wakeServer(): void {
 
 // What the server can do: a free host has no Whisper (speech is recognised in the browser) and no OCR.
 export interface ServerCaps {
-  stt: boolean;
-  ocr: boolean;
+  stt: boolean; // this server runs Whisper (the Mac); the app itself listens with lib/listen.ts
+  ocr: boolean; // false: the phone reads the signs (lib/ocr.ts)
+  speech: boolean; // Speechmatics keys from /api/stt/token: every phone can talk, iPhone included
 }
 
 export async function serverCaps(): Promise<ServerCaps> {
   try {
     const res = await fetch("/api/health");
-    const body = (await res.json()) as { stt?: boolean; ocr?: boolean };
-    return { stt: body.stt !== false, ocr: body.ocr !== false };
+    const body = (await res.json()) as { stt?: boolean; ocr?: boolean; speech?: boolean };
+    return { stt: body.stt !== false, ocr: body.ocr !== false, speech: body.speech === true };
   } catch {
     // Health didn't answer. A free host has no Whisper and no sign reader, so stay on the phone.
     return { stt: false, ocr: false };
@@ -107,16 +81,6 @@ export async function nearestStop(lat: number, lon: number): Promise<NearestStop
   try {
     const res = await fetch("/api/stops/nearest?lat=" + lat + "&lon=" + lon);
     return res.ok ? ((await res.json()) as NearestStop) : null;
-  } catch {
-    return null;
-  }
-}
-
-// Where the rider says they are (WAV) or types it. null = server unreachable or down.
-export async function locateBySpeech(wav: Blob): Promise<VoiceLocateResponse | null> {
-  try {
-    const res = await fetch("/api/locate/voice", { method: "POST", headers: { "Content-Type": "audio/wav" }, body: wav });
-    return res.ok ? ((await res.json()) as VoiceLocateResponse) : null;
   } catch {
     return null;
   }
