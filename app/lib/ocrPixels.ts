@@ -24,16 +24,26 @@ export interface OcrRunner {
   keys: string[];
 }
 
-function canvasOf(width: number, height: number): OffscreenCanvasRenderingContext2D {
-  const canvas = new OffscreenCanvas(width, height);
-  return canvas.getContext("2d", { willReadFrequently: true }) as OffscreenCanvasRenderingContext2D;
+// Two canvases, only ever grown. A new canvas per word (several per read, several reads a second)
+// ran iPhone Safari over its canvas memory limit, and it reloads the page then.
+let srcCanvas: OffscreenCanvas | null = null;
+let dstCanvas: OffscreenCanvas | null = null;
+
+function grown(current: OffscreenCanvas | null, w: number, h: number): OffscreenCanvas {
+  if (current && current.width >= w && current.height >= h) {
+    return current;
+  }
+  return new OffscreenCanvas(Math.max(w, current ? current.width : 0), Math.max(h, current ? current.height : 0));
 }
 
 function scale(px: Uint8ClampedArray, sw: number, sh: number, w: number, h: number): Uint8ClampedArray {
-  const src = canvasOf(sw, sh);
+  srcCanvas = grown(srcCanvas, sw, sh);
+  dstCanvas = grown(dstCanvas, w, h);
+  const src = srcCanvas.getContext("2d", { willReadFrequently: true }) as OffscreenCanvasRenderingContext2D;
+  const dst = dstCanvas.getContext("2d", { willReadFrequently: true }) as OffscreenCanvasRenderingContext2D;
   src.putImageData(new ImageData(new Uint8ClampedArray(px), sw, sh), 0, 0);
-  const dst = canvasOf(w, h);
-  dst.drawImage(src.canvas, 0, 0, w, h);
+  dst.clearRect(0, 0, w, h);
+  dst.drawImage(srcCanvas, 0, 0, sw, sh, 0, 0, w, h);
   return dst.getImageData(0, 0, w, h).data;
 }
 

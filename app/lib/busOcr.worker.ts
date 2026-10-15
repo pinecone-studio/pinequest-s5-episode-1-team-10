@@ -1,5 +1,6 @@
 // Sign reading off the camera thread. Detection never waits for this.
 // A plain file at /bus-ocr-worker.js (scripts/build-bus-ocr-worker.mjs): Safari drops a bundler's worker URL.
+import { isIOS } from "./device";
 import { recognize } from "./ocrPixels";
 
 interface OrtLike {
@@ -23,6 +24,10 @@ let ort: OrtLike | null = null;
 let chain: Promise<void> = Promise.resolve();
 
 function threads(): number {
+  // iPhone: one thread. Each extra thread is another copy of the runtime, and Safari reloads the page.
+  if (isIOS()) {
+    return 1;
+  }
   return typeof self !== "undefined" && self.crossOriginIsolated ? Math.min(navigator.hardwareConcurrency || 1, 4) : 1;
 }
 
@@ -35,13 +40,17 @@ async function model(url: string): Promise<Uint8Array> {
 }
 
 async function load(): Promise<void> {
+  if (isIOS()) {
+    // Same cap as the detector: the runtime otherwise tries to reserve 4 GB and Safari reloads the page.
+    (globalThis as { ortMaxPages?: number }).ortMaxPages = 8192;
+  }
   const o = (await import(/* turbopackIgnore: true */ /* webpackIgnore: true */ "/ort/ort.wasm.min.mjs" as string)) as OrtLike;
   o.env.wasm.wasmPaths = "/ort/";
   o.env.wasm.numThreads = threads();
   ort = o;
   const [detBytes, recBytes, text] = await Promise.all([
-    model("/models/ocr_det.onnx"),
-    model("/models/ocr_rec.onnx"),
+    model("/models/ocr_det_int8.onnx"),
+    model("/models/ocr_rec_int8.onnx"),
     fetch("/models/ocr_keys.txt").then(function (item) {
       return item.text();
     }),

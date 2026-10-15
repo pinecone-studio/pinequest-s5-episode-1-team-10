@@ -56,16 +56,17 @@ export async function modelBytes(url: string): Promise<Uint8Array> {
   return new Uint8Array(await response.arrayBuffer());
 }
 
-// WebGPU wherever the phone has it, including iPhone. The warmup run below must return real numbers;
-// if it doesn't, the caller uses WASM. ?cpu forces WASM (testing).
+// WebGPU where it is proven. iPhone stays on WASM: a WebGPU session there has built and then returned
+// nothing (no bus, ever), and that runtime is the larger build that made Safari reload the page.
+// ?cpu forces WASM anywhere (testing).
 function webgpuWanted(): boolean {
-  return "gpu" in navigator && !new URLSearchParams(window.location.search).has("cpu");
+  return !isIOS() && "gpu" in navigator && !new URLSearchParams(window.location.search).has("cpu");
 }
 
 function wasmThreads(o: OrtModule): number {
-  // Threaded WASM needs cross-origin isolation (next.config.ts sends COOP + COEP). Without it, one
-  // thread: asking for more crashes the runtime.
-  const threads = typeof self !== "undefined" && self.crossOriginIsolated ? Math.min(navigator.hardwareConcurrency || 1, 4) : 1;
+  // iPhone: one thread. Each extra thread is another copy of the runtime, and Safari reloads the page.
+  // Elsewhere, threaded WASM needs cross-origin isolation (next.config.ts sends COOP + COEP).
+  const threads = isIOS() || typeof self === "undefined" || !self.crossOriginIsolated ? 1 : Math.min(navigator.hardwareConcurrency || 1, 4);
   o.env.wasm.numThreads = threads;
   return threads;
 }

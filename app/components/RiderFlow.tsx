@@ -251,7 +251,7 @@ export default function RiderFlow() {
     // read out, but don't start a second copy of the model on this thread.
     const reading = caps.current.ocr
       ? Promise.resolve()
-      : Promise.all(["/models/ocr_det.onnx", "/models/ocr_rec.onnx", "/models/ocr_keys.txt"].map(function (item) {
+      : Promise.all(["/models/ocr_det_int8.onnx", "/models/ocr_rec_int8.onnx", "/models/ocr_keys.txt"].map(function (item) {
           return fetch(item);
         }));
     Promise.all([detecting, reading])
