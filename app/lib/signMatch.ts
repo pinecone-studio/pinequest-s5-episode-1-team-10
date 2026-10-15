@@ -22,6 +22,12 @@ export const MARGIN = 0.2;
 export const MIN_SCORE = 0.3; // below: nothing on the sign looks like any candidate
 const LOOKALIKE_COST = 0.3;
 const MIN_DEST_TOKEN = 4; // shorter words ("ЭЦ") say nothing about a destination
+// Measured on 36 real night photos at Сүхбаатарын талбай (2026-10-16), Azure whole-frame reads: these
+// three rules removed 4 wrong "yes" (a fleet number "3-077" -> Ч:37, a stray "72" -> Ч:72, advert words
+// "ЗУНЫ" ~ "Зунжин" -> М:2) without losing a right one.
+const ID_ONLY_CAP = 0.25; // a number without its prefix (Ч/М/Х...) alone never decides: plates, fleet numbers
+const STRONG_DEST = 0.85; // a destination word this close decides alone; weaker ones need some number too
+const DEST_NEEDS_ROUTE = 0.3; // ...a number at least this similar (prefix or not)
 
 // Pairs that OCR confuses on LED signs (both directions).
 const LOOKALIKES: [string, string][] = [
@@ -86,7 +92,8 @@ function tokens(text: string): string[] {
       return item.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}:.]+$/gu, "");
     })
     .filter(function (item) {
-      return item !== "" && /[\p{L}\p{N}]/u.test(item);
+      // fleet numbers painted on buses ("3-077", "5-272") and phone numbers ("7004-4040") are never routes
+      return item !== "" && /[\p{L}\p{N}]/u.test(item) && !/^\d+[-–]\d+$/.test(item);
     });
 }
 
@@ -95,22 +102,26 @@ function parts(key: string): { prefix: string; id: string } {
   return { prefix: clean(key.slice(0, at)), id: clean(key.slice(at + 1)) };
 }
 
-// Best similarity of any token to the route: "Ч:29Б" / "Ч29Б" / "29Б" (prefix or ":" may be missing).
-function routeScore(toks: string[], key: string): number {
+// Similarity of the best token to the route: with its prefix ("Ч29Б", ":" may be missing) and without
+// ("29Б"). The second is kept apart: alone it is capped (ID_ONLY_CAP).
+function routeScore(toks: string[], key: string): { prefixed: number; bare: number } {
   const { prefix, id } = parts(key);
-  let best = 0;
+  let prefixed = 0;
+  let bare = 0;
   toks.forEach(function (item) {
     const t = item.replace(/[:.]/g, "");
     if (!/\p{N}/u.test(t) && !/^[4ЧМХДҮШ]/u.test(t)) {
       return; // a word with no digit is a destination, not a route number
     }
-    best = Math.max(best, similarity(t, prefix + id), similarity(t, id));
+    prefixed = Math.max(prefixed, similarity(t, prefix + id));
+    bare = Math.max(bare, similarity(t, id));
   });
-  return best;
+  return { prefixed, bare };
 }
 
-// Best similarity of an OCR word to a word of either terminal; a word cut short ("ВОКЗ") is compared
-// with the same length of the terminal word, scaled by how much of it was seen.
+// Best similarity of an OCR word to a terminal: whole words, or (scrolling LED signs cut words at both
+// ends: "АЛДВАР" of "ХАЛДВАРТЫН") the same-length stretch anywhere in a terminal word, scaled by how
+// much of the word was seen.
 function destinationScore(toks: string[], terminals: [string, string] | null): number {
   if (!terminals) {
     return 0;
@@ -124,8 +135,14 @@ function destinationScore(toks: string[], terminals: [string, string] | null): n
       return;
     }
     words.forEach(function (word) {
-      const sim = item.length < word.length ? similarity(item, word.slice(0, item.length)) * Math.min(1, item.length / 5) : similarity(item, word);
-      best = Math.max(best, sim);
+      if (item.length >= word.length) {
+        best = Math.max(best, similarity(item, word));
+        return;
+      }
+      const seen = Math.min(1, item.length / 6);
+      for (let at = 0; at + item.length <= word.length; at++) {
+        best = Math.max(best, similarity(item, word.slice(at, at + item.length)) * seen);
+      }
     });
   });
   return best;
@@ -133,8 +150,12 @@ function destinationScore(toks: string[], terminals: [string, string] | null): n
 
 export function scoreCandidate(text: string, candidate: Candidate): number {
   const toks = tokens(text);
-  const r = routeScore(toks, candidate.key);
-  const d = destinationScore(toks, candidate.terminals);
+  const { prefixed, bare } = routeScore(toks, candidate.key);
+  const r = Math.max(prefixed, Math.min(bare, ID_ONLY_CAP));
+  let d = destinationScore(toks, candidate.terminals);
+  if (d < STRONG_DEST && Math.max(prefixed, bare) < DEST_NEEDS_ROUTE) {
+    d = 0; // a weak destination look-alike with no number: an advert or shop word
+  }
   return Math.max(r, d, 1 - (1 - r) * (1 - d));
 }
 
