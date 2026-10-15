@@ -306,3 +306,49 @@ input {
     animation: none !important;
   }
 }
+
+/* Reader (/read): camera while aiming, then the page's text, big, the sentence being read in yellow */
+.reader-pad {
+  overflow: hidden;
+}
+
+.reader-video {
+  max-height: 60dvh;
+  object-fit: cover;
+}
+
+.reader-video-hidden {
+  display: none;
+}
+
+.reader-text {
+  flex: 1;
+  max-height: 62dvh;
+  overflow-y: auto;
+  font-size: 1.6rem;
+  line-height: 1.5;
+}
+
+.reader-text p {
+  margin: 0;
+}
+
+.reader-current {
+  background: var(--accent);
+  color: #000;
+}
+
+.reader-unsure {
+  text-decoration: underline dotted;
+}
+
+.reader-progress {
+  margin: 0;
+  font-size: 1.1rem;
+  color: var(--muted);
+}
+
+.reader-wait {
+  font-size: 2rem;
+  color: var(--muted);
+}

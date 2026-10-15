@@ -19,6 +19,7 @@ server/models/*.pt
 node_modules/
 .next/
 app/public/ort/
+app/public/reader-worker.js
 app/public/test/
 # Voice clips: built into deploy/out by deploy/vercel.sh; a local copy is only for testing sw.js
 app/public/tts/
@@ -33,3 +34,6 @@ server/mobileclip*
 deploy/out/
 deploy/out.tmp/
 deploy/mp3cache/
+
+# Reader model build downloads (deploy/reader_models.py)
+deploy/reader_work/

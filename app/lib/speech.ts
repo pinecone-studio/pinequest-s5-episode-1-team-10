@@ -125,6 +125,33 @@ if (typeof window !== "undefined") {
     .catch(function () {});
 }
 
+// The reader's own fixed sentences, rendered into the app itself (public/reader-clips, made by
+// scripts/render-reader-clips.mjs): text -> file. They play with no network and no voice model.
+const localClips = new Map<string, string>();
+if (typeof window !== "undefined") {
+  fetch("/reader-clips/index.json")
+    .then(function (res) {
+      return res.ok ? res.json() : {};
+    })
+    .then(function (index: Record<string, string>) {
+      Object.keys(index).forEach(function (item) {
+        localClips.set(item, "/reader-clips/" + index[item] + ".m4a");
+      });
+    })
+    .catch(function () {});
+}
+
+// The reader (lib/reader/player.ts) plays a fixed sentence from its pre-made clip when there is one.
+export function hasClip(text: string): boolean {
+  return localClips.has(text) || clipNames.has(text);
+}
+
+// The one audio element, for the reader's sentences too: on iPhones it is the element the first touch
+// unlocked, and the reader is opened from the bus screens without a new touch.
+export function sharedAudio(): HTMLAudioElement | null {
+  return audio;
+}
+
 export function rememberClips(texts: string[], names: (string | null)[] | undefined): void {
   (names ?? []).forEach(function (item, i) {
     if (item && texts[i]) {
@@ -138,6 +165,10 @@ function apiUrl(text: string): string {
 }
 
 function clipUrl(text: string): string {
+  const local = localClips.get(text);
+  if (local) {
+    return local;
+  }
   const name = clipNames.get(text);
   return name ? "/tts/" + name + ".mp3" : apiUrl(text);
 }
@@ -169,6 +200,12 @@ function getAudio(url: string): Promise<Blob | null> {
 
 function fetchClip(text: string): Promise<string | null> {
   const url = clipUrl(text);
+  if (localClips.has(text)) {
+    // the reader's own clip: if it can't be had, silence (never the phone's Russian voice)
+    return getAudio(url).then(function (found) {
+      return found ? URL.createObjectURL(found) : null;
+    });
+  }
   const blob = url === apiUrl(text) ? getAudio(url) : getAudio(url).then(function (direct) {
     return direct ?? getAudio(apiUrl(text)); // a stale name never makes a sentence silent
   });
@@ -209,6 +246,7 @@ function play(url: string): Promise<void> {
     player.onended = done;
     player.onerror = done;
     player.src = url;
+    player.playbackRate = 1; // the reader may have left it faster
     player.play().catch(function () {
       // Refused (iPhone without a recent touch on this element): the same clip through Web Audio.
       clearTimeout(timer);
@@ -303,7 +341,7 @@ async function playClips(texts: string[], clips: Promise<string | null>[], mine:
     if (url) {
       await play(url);
       URL.revokeObjectURL(url);
-    } else if (texts[i].trim()) {
+    } else if (texts[i].trim() && !localClips.has(texts[i])) {
       await speakWithPhone(texts[i]); // no clip (free hosting: not pre-made): never silent
     }
   }

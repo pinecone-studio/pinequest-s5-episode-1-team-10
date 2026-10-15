@@ -5,6 +5,7 @@
 // is spoken in Mongolian: its message, then its options (VoiceMenu), so a blind rider always knows
 // what they can do. Anything the rider can say can also be typed (iPhone has no Mongolian speech
 // recognition), and a phone number is always read back digit by digit to confirm.
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
 import type { AskResponse, BoardStop, PlanResponse, PlanStop, VoiceLocateResponse } from "../../shared/contract";
@@ -25,6 +26,7 @@ import { loadOcr } from "../lib/ocr";
 import type { DoorGuide } from "../lib/door";
 import { beep, phrase, prefetch, rememberClips, say, startWaitingTick, stopSpeaking, unlockAudio, vibrate, type PhraseKey } from "../lib/speech";
 import { onSpeedReport, showSpeed, speedCancel, speedMark, speedStart } from "../lib/speed";
+import { wantsReader } from "../lib/reader/commands";
 import BusCamera, { doorSpeech } from "./BusCamera";
 import RideGuide, { leftSpeech, type RideInfo } from "./RideGuide";
 import Tutorial, { tutorialNeeded } from "./Tutorial";
@@ -101,6 +103,7 @@ function testPosition(): Position | null {
 }
 
 export default function RiderFlow() {
+  const router = useRouter();
   const [step, setStepState] = useState<Step>("start");
   const stepRef = useRef<Step>("start");
   // A new step in screen-reader mode: the app's clip waits until VoiceOver has read the short title.
@@ -683,15 +686,11 @@ export default function RiderFlow() {
   // Voice assistant: press and hold anywhere, on any screen, and talk; release when done. It records in
   // place, so the camera or ride keeps running; the server answers from our bus data only and may name
   // an action ("plan", "open_camera", "door"...), done here like the menu option would.
-  // #1 Screen stays on while the camera looks for the bus and during the ride (iPhone auto-locks after
-  // 30 s - 1 min and a locked phone pauses the page).
-  useEffect(
-    function () {
-      keepScreenOn(step === "camera" || step === "ride");
-    },
-    [step],
-  );
+  // #1 Screen stays on the whole time the app is open, not only on the camera and ride screens: a
+  // blind rider holds the phone and listens, so a screen that never gets touched locked after 30 s -
+  // 1 min, the locked page was dropped and the app started again from the beginning.
   useEffect(function () {
+    keepScreenOn(true);
     return function () {
       keepScreenOn(false);
     };
@@ -790,6 +789,11 @@ export default function RiderFlow() {
         }
         return;
       }
+      if (wantsReader(heard.text)) {
+        speedCancel();
+        openReader(); // "энийг уншаад өг", "ном унших": the reader, not the bus assistant
+        return;
+      }
       sayWaitIfSlow();
       const result: AskResponse | null = await askByText(heard.text, pos.lat, pos.lon, context);
       clearTimeout(waitTimer);
@@ -808,6 +812,12 @@ export default function RiderFlow() {
     if (talk.current) {
       talk.current.stop();
     }
+  }
+
+  // The reader (/read): same tab, so sound stays unlocked and it starts at once.
+  function openReader(): void {
+    stopSpeaking();
+    router.push("/read?from=app");
   }
 
   function doAction(result: AskResponse): void {
@@ -934,6 +944,7 @@ export default function RiderFlow() {
       { ...label("say-dest", "menu_say_destination"), onActivate: sayDestination },
       { ...label("type-dest", "menu_type_destination"), onActivate: typeDestination },
       { ...label("sos-number", "menu_sos_number"), onActivate: changeNumber },
+      { ...label("read", "menu_read"), onActivate: openReader },
     ];
   } else if (step === "number") {
     title = "Яаралтай тусламжийн дугаар";

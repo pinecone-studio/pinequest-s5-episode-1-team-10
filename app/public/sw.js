@@ -5,12 +5,22 @@
 //   /tts/index.json                network-first, cached copy when offline (lib/speech.ts needs it)
 // On install, every clip listed in /tts/index.json is cached in the background (deployed site only).
 // Bump VERSION to drop the old cache on the next visit.
+//
+// The reader (/read) is kept offline by the same worker (one worker per scope), in its own cache:
+//   /read (the page)               network-first (3 s), kept copy when offline
+//   /_next/static/*                cache-first (file names change with their content)
+//   /reader-clips/*                cache-first (the reader's fixed sentences, named by their hash)
+//   /ort/*, /reader-worker.js      kept copy at once, refreshed in the background
+// The page tells which files it used ("keep" message), models are kept by the reader itself
+// (lib/reader/modelStore.ts). Bump READER to drop its old cache.
 const VERSION = "v1";
 const CACHE = "voice-" + VERSION;
 const INDEX = "/tts/index.json";
+const READER = "reader-app-v4";
 
 self.addEventListener("install", function (event) {
   self.skipWaiting();
+  event.waitUntil(readerInstall());
   // ~185 clips (~2 MB) inside waitUntil, or the browser may stop the worker halfway. The page works
   // normally meanwhile (no worker yet = plain network); one failed clip never fails the install.
   event.waitUntil(
@@ -70,7 +80,7 @@ self.addEventListener("activate", function (event) {
         return Promise.all(
           keys
             .filter(function (item) {
-              return item.startsWith("voice-") && item !== CACHE;
+              return (item.startsWith("voice-") && item !== CACHE) || (item.startsWith("reader-app-") && item !== READER);
             })
             .map(function (item) {
               return caches.delete(item);
@@ -134,6 +144,120 @@ function networkFirst(request) {
     });
 }
 
+// ---- the reader (/read) -------------------------------------------------------------------------
+
+// The page and the reader's own fixed sentences (small), so the aiming directions work offline.
+function readerInstall() {
+  return caches.open(READER).then(function (cache) {
+    const clips = fetch("/reader-clips/index.json")
+      .then(function (res) {
+        return res.json();
+      })
+      .then(function (index) {
+        const names = Object.keys(index).map(function (item) {
+          return "/reader-clips/" + index[item] + ".m4a";
+        });
+        return cache.addAll(["/reader-clips/index.json"].concat(names));
+      })
+      .catch(function () {});
+    return Promise.all([cache.add("/read").catch(function () {}), clips]);
+  });
+}
+
+function readerCacheFirst(request) {
+  return caches.open(READER).then(function (cache) {
+    return cache.match(request).then(function (hit) {
+      if (hit) {
+        return hit;
+      }
+      return fetch(request).then(function (res) {
+        if (res.ok) {
+          cache.put(request, res.clone());
+        }
+        return res;
+      });
+    });
+  });
+}
+
+// The kept copy at once, refreshed in the background (onnxruntime's file names stay the same across
+// its releases, so it must not be kept forever).
+function readerStaleWhileRevalidate(event) {
+  const request = event.request;
+  return caches.open(READER).then(function (cache) {
+    return cache.match(request).then(function (hit) {
+      const network = fetch(request).then(function (res) {
+        if (res.ok) {
+          cache.put(request, res.clone());
+        }
+        return res;
+      });
+      if (hit) {
+        event.waitUntil(network.catch(function () {}));
+        return hit;
+      }
+      return network;
+    });
+  });
+}
+
+// The page itself: the newest when online (3 s at most), the kept copy when not.
+function readerPage(request) {
+  return caches.open(READER).then(function (cache) {
+    const network = fetch(request).then(function (res) {
+      if (res.ok) {
+        cache.put("/read", res.clone());
+      }
+      return res;
+    });
+    const timeout = new Promise(function (resolve) {
+      setTimeout(resolve, 3000);
+    });
+    return Promise.race([network, timeout])
+      .then(function (res) {
+        return (
+          res ||
+          cache.match("/read").then(function (hit) {
+            return hit || network;
+          })
+        );
+      })
+      .catch(function () {
+        return cache.match("/read").then(function (hit) {
+          return hit || Response.error();
+        });
+      });
+  });
+}
+
+// The page and its workers say which files they used (Reader.tsx, engine.ts): kept, so the next visit
+// works offline even if the first one loaded them before this worker was running.
+self.addEventListener("message", function (event) {
+  const data = event.data || {};
+  if (data.type !== "keep" || !Array.isArray(data.urls)) {
+    return;
+  }
+  event.waitUntil(
+    caches.open(READER).then(function (cache) {
+      return Promise.all(
+        data.urls
+          .filter(function (item) {
+            const url = new URL(item, self.location.origin);
+            return (
+              url.origin === self.location.origin &&
+              (url.pathname.startsWith("/_next/static/") || url.pathname.startsWith("/ort/") || url.pathname === "/reader-worker.js")
+            );
+          })
+          .map(function (item) {
+            return cache.match(item).then(function (hit) {
+              return hit ? undefined : cache.add(item).catch(function () {});
+            });
+          }),
+      );
+    }),
+  );
+});
+
 self.addEventListener("fetch", function (event) {
   const request = event.request;
   if (request.method !== "GET" || request.headers.has("range")) {
@@ -143,7 +267,13 @@ self.addEventListener("fetch", function (event) {
   if (url.origin !== self.location.origin) {
     return;
   }
-  if (isClip(url)) {
+  if (request.mode === "navigate" && url.pathname.startsWith("/read")) {
+    event.respondWith(readerPage(request));
+  } else if (url.pathname.startsWith("/_next/static/") || url.pathname.startsWith("/reader-clips/")) {
+    event.respondWith(readerCacheFirst(request));
+  } else if (url.pathname.startsWith("/ort/") || url.pathname === "/reader-worker.js") {
+    event.respondWith(readerStaleWhileRevalidate(event));
+  } else if (isClip(url)) {
     event.respondWith(cacheFirst(request));
   } else if (url.pathname === INDEX) {
     event.respondWith(networkFirst(request));
