@@ -602,7 +602,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
 
   return (
     <div className="camera">
-      <video ref={videoRef} playsInline muted className="camera-video" />
+      <video ref={videoRef} playsInline muted className="camera-video" aria-hidden="true" />
       <canvas ref={overlayRef} className="camera-overlay" aria-hidden="true" />
       {typeof window !== "undefined" && new URLSearchParams(window.location.search).has("debug") && <p ref={debugRef} className="camera-debug" />}
     </div>
