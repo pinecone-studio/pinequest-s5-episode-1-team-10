@@ -13,6 +13,7 @@ import { serverCaps } from "../lib/api";
 import { canListen, enableSpeechmatics, listen as listenToRider } from "../lib/listen";
 import { savedMode, saveMode, type Mode } from "../lib/mode";
 import { beep, hasClip, phrase, vibrate, type PhraseKey } from "../lib/speech";
+import { keepScreenOn } from "../lib/wake";
 import { advise, openCamera, quality, type Advice, type Camera } from "../lib/reader/aim";
 import { readerCommand, type ReaderCommand } from "../lib/reader/commands";
 import { startRemoteLog } from "../lib/reader/remoteLog";
@@ -62,11 +63,6 @@ interface Menu {
   items: MenuEntry[];
   at: number; // -1: nothing chosen yet (only the list was read)
   wasPlaying: boolean; // the reading goes on when the menu closes
-}
-
-interface WakeLock {
-  release: () => Promise<void>;
-  addEventListener: (type: "release", fn: () => void) => void;
 }
 
 interface Session {
@@ -172,26 +168,6 @@ export default function Reader() {
     return prompt(phrase(key), when);
   }
 
-  // The screen stays on while the reader is open: a locked iPhone stops the page, so the reading would
-  // end ~30 s into a page nobody touches. Asked again when the page comes back (a lock ends on hiding).
-  async function keepAwake(): Promise<void> {
-    const wake = (navigator as unknown as { wakeLock?: { request: (type: "screen") => Promise<WakeLock> } }).wakeLock;
-    if (!wake || awake.current || document.visibilityState !== "visible") {
-      return;
-    }
-    try {
-      const lock = await wake.request("screen");
-      awake.current = lock;
-      lock.addEventListener("release", function () {
-        if (awake.current === lock) {
-          awake.current = null;
-        }
-      });
-    } catch {
-      // not allowed (low battery mode, older phone): the phone's auto-lock applies
-    }
-  }
-
   // Leaving the page: camera off, reading stopped (the worker and its models stay for next time).
   function shutdown(): void {
     aimRun.current++;
@@ -199,10 +175,7 @@ export default function Reader() {
     endReading();
     stopPlayer();
     releasePlayer();
-    if (awake.current) {
-      awake.current.release().catch(function () {});
-      awake.current = null;
-    }
+    keepScreenOn(false);
     if (camera.current) {
       camera.current.stop();
       camera.current = null;
@@ -232,19 +205,12 @@ export default function Reader() {
         say("read_failed");
       }
     });
-    function visible(): void {
-      if (document.visibilityState === "visible" && phaseRef.current !== "start") {
-        keepAwake();
-      }
-    }
-    document.addEventListener("visibilitychange", visible);
     // Coming from the bus screens (a tap already unlocked sound): start at once.
     if (new URLSearchParams(window.location.search).get("from") === "app") {
       begin();
     }
     return function () {
       stop();
-      document.removeEventListener("visibilitychange", visible);
       shutdown();
     };
     // begin/shutdown only use refs and state setters

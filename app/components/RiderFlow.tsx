@@ -686,15 +686,11 @@ export default function RiderFlow() {
   // Voice assistant: press and hold anywhere, on any screen, and talk; release when done. It records in
   // place, so the camera or ride keeps running; the server answers from our bus data only and may name
   // an action ("plan", "open_camera", "door"...), done here like the menu option would.
-  // #1 Screen stays on while the camera looks for the bus and during the ride (iPhone auto-locks after
-  // 30 s - 1 min and a locked phone pauses the page).
-  useEffect(
-    function () {
-      keepScreenOn(step === "camera" || step === "ride");
-    },
-    [step],
-  );
+  // #1 Screen stays on the whole time the app is open, not only on the camera and ride screens: a
+  // blind rider holds the phone and listens, so a screen that never gets touched locked after 30 s -
+  // 1 min, the locked page was dropped and the app started again from the beginning.
   useEffect(function () {
+    keepScreenOn(true);
     return function () {
       keepScreenOn(false);
     };
