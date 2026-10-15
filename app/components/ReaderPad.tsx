@@ -46,6 +46,15 @@ export default function ReaderPad({ onTouch, onDoubleTap, onSwipe, onTap, onHold
   }
 
   function onPointerDown(e: PointerEvent): void {
+    // Keep the finger even if it slides off the pad (iPhone drops the gesture otherwise, so a hold never ends).
+    const el = e.currentTarget;
+    if (el instanceof HTMLElement) {
+      try {
+        el.setPointerCapture(e.pointerId);
+      } catch {
+        // the gesture still works while the finger stays on the pad
+      }
+    }
     unlockAudio();
     onTouch();
     down.current = { x: e.clientX, y: e.clientY };

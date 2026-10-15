@@ -4,13 +4,14 @@
 // phone at the page; the app says where to move it (and ticks higher as the page comes into view),
 // takes the photo itself, then reads sentence by sentence in a Mongolian voice while the rest of the
 // page is still being recognised. Everything runs on the phone: free, and offline after the first visit.
-//   double tap: photo now / pause / play / next page     swipe: next / previous sentence
-//   one tap: where am I     press and hold: say a command (iPhone: a spoken menu)     screen-reader mode: plain buttons
+//   both modes, same buttons: one big action, up to three more, then Буцах and Дахин сонсох
+//   voice mode also: double tap = that big action, swipe = next / previous sentence, one tap = hear it again
+//   press and hold: a spoken menu (new page, speed)     iPhone: the finger can slide and the hold still ends
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { serverCaps } from "../lib/api";
 import { canListen, enableSpeechmatics, listen as listenToRider } from "../lib/listen";
-import { savedMode, savedReader, type Mode } from "../lib/mode";
+import { savedMode, saveMode, type Mode } from "../lib/mode";
 import { beep, hasClip, phrase, vibrate, type PhraseKey } from "../lib/speech";
 import { advise, openCamera, quality, type Advice, type Camera } from "../lib/reader/aim";
 import { readerCommand, type ReaderCommand } from "../lib/reader/commands";
@@ -19,9 +20,8 @@ import { analyze, isReady, keepOffline, listen, loadModels, lowMemoryPhone, read
 import { AIM_DET } from "../lib/reader/pageOcr";
 import { errorTone, loadingSound, pageEndChime, playStream, prompt, releasePlayer, shutter, stopPlayer, tick, unlockPlayer, unsureTone, waitForVoice, type Playing } from "../lib/reader/player";
 import { SentenceBuilder, UNCLEAR, type Sentence } from "../lib/reader/sentences";
-import { numberWords, spokenText } from "../lib/reader/speechText";
+import { spokenText } from "../lib/reader/speechText";
 import ReaderPad from "./ReaderPad";
-import SrScreen from "./SrScreen";
 import type { MenuItem } from "./VoiceMenu";
 
 type Phase = "start" | "aim" | "reading" | "pageEnd";
@@ -76,6 +76,7 @@ interface Session {
   lines: number; // lines on the page
   unclear: number; // lines that couldn't be read
   index: number; // sentence being read
+  voiceWarned: boolean; // the "voice failed" line is said once, not on every retry
   run: number; // bumped on every jump: an older reading loop stops
   paused: boolean;
   playing: Playing | null;
@@ -116,7 +117,9 @@ export default function Reader() {
   const [paused, setPaused] = useState(false);
   const [speed, setSpeedState] = useState(1);
   const [voiceLoad, setVoiceLoad] = useState<number | null>(null); // % of the voice model downloaded
+  const [appReading, setAppReading] = useState(true); // false: the Mongolian voice failed, so a screen reader may read the sentence
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
   const currentRef = useRef<HTMLSpanElement>(null);
   const phaseRef = useRef<Phase>("start");
   const modeRef = useRef<Mode>("voice");
@@ -128,6 +131,9 @@ export default function Reader() {
   const lightOn = useRef(false);
   const menu = useRef<Menu | null>(null);
   const awake = useRef<WakeLock | null>(null);
+  const lastSaidKey = useRef<PhraseKey>("read_aim_hint");
+  const controlsSaid = useRef(false);
+  const introducing = useRef(false);
 
   // The <video> element is replaced when the screen changes (start -> aiming): whichever one is on
   // the page shows the camera.
@@ -161,6 +167,7 @@ export default function Reader() {
 
   // "now": only useful right away (aiming hints): skipped while the Mongolian voice is still loading.
   function say(key: PhraseKey, when?: "wait" | "now"): Promise<void> {
+    lastSaidKey.current = key;
     setStatus(phrase(key));
     return prompt(phrase(key), when);
   }
@@ -244,6 +251,16 @@ export default function Reader() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // A new screen moves focus to its heading, so VoiceOver / TalkBack says where the rider is.
+  useEffect(
+    function () {
+      if (mode === "sr" && phase !== "start" && headingRef.current) {
+        headingRef.current.focus();
+      }
+    },
+    [phase, mode],
+  );
+
   // Keep the sentence being read on screen (for anyone helping, or low vision).
   useEffect(
     function () {
@@ -254,15 +271,16 @@ export default function Reader() {
     [at],
   );
 
-  async function begin(): Promise<void> {
+  async function begin(chosen?: Mode): Promise<void> {
     if (phaseRef.current !== "start") {
       return;
     }
     unlockPlayer();
     keepAwake();
-    const m = savedMode() ?? "voice";
+    const m = chosen ?? savedMode() ?? "voice";
     modeRef.current = m;
     setMode(m);
+    saveMode(m);
     setSpeed(savedSpeed());
     // An iPhone gets the page reader first: aiming needs only that (its directions are pre-made
     // sentences), and the voice's ~300 MB is loaded when a page has been photographed.
@@ -353,6 +371,12 @@ export default function Reader() {
         needWelcome = false;
         quiet = true;
         say(modeRef.current === "sr" ? "read_welcome_sr" : "read_welcome", "now").then(function () {
+          // Voice mode has no screen reader, so the big button is named once. Screen-reader mode
+          // already hears it from the welcome, then finds the button by swiping.
+          if (modeRef.current === "voice" && aimRun.current === run) {
+            return prompt(phrase("read_btn_capture"), "now");
+          }
+        }).then(function () {
           quiet = false;
         });
       }
@@ -458,6 +482,7 @@ export default function Reader() {
       lines: 0,
       unclear: 0,
       index: 0,
+      voiceWarned: false,
       run: 0,
       paused: false,
       playing: null,
@@ -474,7 +499,7 @@ export default function Reader() {
     // The shutter and a vibration say the photo was taken; "Уншиж байна" only if the first sentence
     // takes a while (a slow phone), so reading starts the moment it can.
     setTimeout(function () {
-      if (session.current === s && s.index === 0 && !s.playing && !s.paused) {
+      if (session.current === s && s.index === 0 && !s.playing && !s.paused && !introducing.current) {
         prompt(phrase("read_reading"), "now");
       }
     }, 1500);
@@ -562,6 +587,9 @@ export default function Reader() {
         return;
       }
       const sentence = s.sentences[s.index];
+      const shown = sentence.text || phrase("read_unclear_line");
+      // Written before the voice starts, so a missed sentence can be swiped to.
+      setStatus(shown);
       // Never the phone's own (Russian) voice: wait for the Mongolian one, with a loading sound.
       if (!isReady("voice")) {
         if (hasClip(phrase("read_voice_wait"))) {
@@ -574,12 +602,43 @@ export default function Reader() {
           return;
         }
         if (!ok) {
-          errorTone();
-          if (hasClip(phrase("read_voice_failed"))) {
-            await prompt(phrase("read_voice_failed"));
+          setAppReading(false);
+          setStatus(shown);
+          if (!s.voiceWarned) {
+            s.voiceWarned = true;
+            errorTone();
+            if (hasClip(phrase("read_voice_failed"))) {
+              await prompt(phrase("read_voice_failed"));
+            }
+            setStatus(shown);
           }
+          await sleep(3000);
+        } else {
+          setAppReading(true);
         }
-        continue; // it's asked to load again; wait again
+        if (!ok) {
+          continue; // the model is asked to load again
+        }
+      }
+      setAppReading(true);
+      // Once, before the first sentence: name the buttons. Clips only, so an iPhone never uses its Russian voice.
+      if (modeRef.current === "voice" && !controlsSaid.current && s.index === 0) {
+        controlsSaid.current = true;
+        const names: PhraseKey[] = ["read_btn_pause", "read_btn_prev", "read_btn_next", "read_btn_back"];
+        introducing.current = true;
+        try {
+          for (let i = 0; i < names.length; i++) {
+            if (!alive()) {
+              return;
+            }
+            const line = phrase(names[i]);
+            if (hasClip(line)) {
+              await prompt(line, "now");
+            }
+          }
+        } finally {
+          introducing.current = false;
+        }
       }
       // This one first, then the next two are made while it plays.
       const stream = sentence.text ? audioFor(s, s.index, true) : null;
@@ -628,7 +687,7 @@ export default function Reader() {
       return;
     }
     if (s.unclear > 0.3 * s.lines) {
-      say("read_retake");
+      say(modeRef.current === "sr" ? "read_retake_sr" : "read_retake");
     } else {
       say(modeRef.current === "sr" ? "read_page_end_sr" : "read_page_end");
     }
@@ -656,9 +715,11 @@ export default function Reader() {
       if (s.playing) {
         s.playing.pause();
       }
-      setStatus(phrase("read_paused"));
+      const current = s.sentences[Math.min(s.index, s.sentences.length - 1)];
+      setStatus((current && current.text) || phrase("read_paused"));
     } else {
-      setStatus("");
+      const current = s.sentences[Math.min(s.index, s.sentences.length - 1)];
+      setStatus((current && current.text) || "");
       if (s.playing) {
         s.playing.resume();
       } else if (s.wake) {
@@ -682,18 +743,21 @@ export default function Reader() {
     readFrom(s, target);
   }
 
-  async function where(): Promise<void> {
+  // Missed it. While a sentence is playing, say that sentence again. Otherwise repeat the last instruction.
+  function hearAgain(): void {
+    unlockPlayer();
     const s = session.current;
-    if (phaseRef.current === "aim" || !s) {
-      say("read_aim_hint");
+    if (phaseRef.current === "reading" && s && s.index < s.sentences.length) {
+      s.paused = false;
+      setPaused(false);
+      readFrom(s, s.index);
       return;
     }
-    const n = Math.min(s.index + 1, Math.max(1, s.sentences.length));
-    const text = numberWords(n, false) + " дахь өгүүлбэр, нийт " + numberWords(Math.max(n, s.sentences.length), false) + (s.done ? "." : ", үргэлжилж байна.");
-    setStatus(text);
-    pauseForPrompt(function () {
-      return prompt(text);
-    });
+    say(lastSaidKey.current);
+  }
+
+  async function where(): Promise<void> {
+    hearAgain();
   }
 
   // Says something over the reading: the sentence pauses, then goes on.
@@ -974,7 +1038,7 @@ export default function Reader() {
     ) : null;
 
   const text = reading ? (
-    <div className="reader-text" aria-live="off">
+    <div className="reader-text" aria-hidden="true">
       {sentences.length === 0 && <p className="reader-wait">…</p>}
       <p>
         {sentences.map(function (item, i) {
@@ -990,67 +1054,130 @@ export default function Reader() {
     </div>
   ) : null;
 
-  const view = (
-    <>
-      <video ref={videoNode} playsInline muted className={phase === "aim" ? "camera-video reader-video" : "reader-video-hidden"} />
-      {progress}
-      {text}
-    </>
-  );
-
   if (phase === "start") {
-    // One big button: a screen reader finds it, anyone else taps anywhere.
+    // Same two halves as the bus app. The screen-reader choice is first, so the first swipe lands there.
     return (
       <main className="flow start-screen">
-        {view}
-        <button className="big start" onClick={begin}>
-          {phrase("read_btn_start")}
-          <span className="hint">{phrase("read_start")}</span>
+        <button
+          type="button"
+          className="start-half"
+          onClick={function () {
+            begin("sr");
+          }}
+        >
+          Дэлгэц уншигчтай (VoiceOver, TalkBack)
+        </button>
+        <button
+          type="button"
+          className="start-half"
+          onClick={function () {
+            begin("voice");
+          }}
+        >
+          Дэлгэц уншигчгүй
         </button>
       </main>
     );
   }
 
-  if (mode === "sr") {
-    let actions: MenuItem[] = [];
-    if (phase === "aim") {
-      actions = [{ id: "capture", label: phrase("read_btn_capture"), onActivate: capture }];
-    } else {
-      actions = [
-        { id: "pause", label: phrase(paused ? "read_btn_resume" : "read_btn_pause"), onActivate: phase === "pageEnd" ? newPage : togglePause },
-        { id: "prev", label: phrase("read_btn_prev"), onActivate: function () { step(-1); } },
-        { id: "next", label: phrase("read_btn_next"), onActivate: function () { step(1); } },
-        { id: "page", label: phrase("read_btn_page"), onActivate: newPage },
-        { id: "speed", label: phrase("read_btn_speed") + " " + speed + "×", onActivate: cycleSpeed },
-      ];
-    }
-    actions = actions.concat(
-      { id: "help", label: phrase("read_btn_help"), onActivate: help },
-      { id: "back", label: phrase("read_btn_back"), onActivate: back },
-    );
-    return (
-      <main className="flow reader">
-        <SrScreen title={title} stepId={phase} status={status} live={savedReader() === "screen"} actions={actions}>
-          {view}
-        </SrScreen>
-      </main>
-    );
+  const backItem: MenuItem = { id: "back", label: phrase("read_btn_back"), onActivate: back };
+  const againItem: MenuItem = { id: "again", label: phrase("menu_hear_again"), onActivate: hearAgain };
+  let main: MenuItem[] = [];
+  if (phase === "aim") {
+    main = [{ id: "capture", label: phrase("read_btn_capture"), onActivate: capture }];
+  } else if (phase === "pageEnd") {
+    main = [
+      { id: "page", label: phrase("read_btn_page"), onActivate: newPage },
+      { id: "from", label: phrase("read_btn_from_start"), onActivate: function () { act("fromStart"); } },
+    ];
+  } else {
+    main = [
+      { id: "pause", label: phrase(paused ? "read_btn_resume" : "read_btn_pause"), onActivate: togglePause },
+      { id: "prev", label: phrase("read_btn_prev"), onActivate: function () { step(-1); } },
+      { id: "next", label: phrase("read_btn_next"), onActivate: function () { step(1); } },
+      { id: "speed", label: phrase("read_btn_speed") + " " + speed + "×", onActivate: cycleSpeed },
+    ];
   }
+  const bar = [backItem, againItem];
+  // The Mongolian voice is reading the sentence. A live region would say it again, in the phone's voice.
+  const live = phase === "reading" && !appReading;
+  const view = (
+    <>
+      <video
+        ref={videoNode}
+        playsInline
+        muted
+        aria-hidden="true"
+        className={phase === "aim" ? "camera-video reader-video" : "reader-video-hidden"}
+      />
+      {progress}
+      {text}
+    </>
+  );
 
   return (
-    <main className="flow reader">
-      <h1 className="title" aria-hidden="true">
+    <main className={"flow reader" + (phase === "aim" ? " reader-aim" : "")}>
+      <h1 ref={headingRef} tabIndex={-1} className="title">
         {title}
       </h1>
-      <p className="status" aria-live="polite">
+      <p className="status" role={live ? "status" : undefined} aria-live={live ? "polite" : undefined}>
         {status}
       </p>
-      <ReaderPad onTouch={unlockPlayer} onDoubleTap={doubleTap} onSwipe={swipe} onTap={tap} onHoldStart={holdStart} onHoldEnd={holdEnd}>
-        {view}
-      </ReaderPad>
-      <button className="helper-link" onClick={back}>
-        {phrase("read_btn_back")}
-      </button>
+      {mode === "voice" ? (
+        <ReaderPad onTouch={unlockPlayer} onDoubleTap={doubleTap} onSwipe={swipe} onTap={tap} onHoldStart={holdStart} onHoldEnd={holdEnd}>
+          {view}
+        </ReaderPad>
+      ) : (
+        view
+      )}
+      <div className="actions">
+        <button
+          type="button"
+          className="action reader-primary"
+          onClick={function () {
+            unlockPlayer();
+            main[0].onActivate();
+          }}
+        >
+          {main[0].label}
+        </button>
+        {main.length > 1 && (
+          <div className="reader-row">
+            {main.slice(1).map(function (item) {
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  className="action"
+                  onClick={function () {
+                    unlockPlayer();
+                    item.onActivate();
+                  }}
+                >
+                  {item.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+      <div className="reader-bar">
+        {bar.map(function (item) {
+          return (
+            <button
+              key={item.id}
+              type="button"
+              className="action"
+              onClick={function () {
+                unlockPlayer();
+                item.onActivate();
+              }}
+            >
+              {item.label}
+            </button>
+          );
+        })}
+      </div>
     </main>
   );
 }
