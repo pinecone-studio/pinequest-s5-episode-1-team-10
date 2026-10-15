@@ -1,0 +1,16 @@
+{
+  "_todo": "TODO (owner): confirm how each route letter is spoken. Values are the plain letter for now; \"\" = don't say it. Read by app/lib/route.ts (routeSpeech) and server/numwords.py (route_words). After a change: regenerate test-fixtures/speech/routes.expected.json (see its README) and remake the route clips (server/make_speech.py).",
+  "prefix": {
+    "М": "М",
+    "Ч": "Ч",
+    "Ү": "Ү",
+    "Х": "Х",
+    "Д": "Д",
+    "ШҮ": "ШҮ"
+  },
+  "suffix": {
+    "А": "А",
+    "Б": "Б",
+    "ӨВ": "ӨВ"
+  }
+}
