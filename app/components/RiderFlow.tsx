@@ -246,6 +246,14 @@ export default function RiderFlow() {
     serverCaps().then(function (c) {
       caps.current = c;
       setServerOcr(c.ocr);
+      // Camera models download now, in parallel (first visit ~25 MB: ~25 s on a slow connection), so
+      // they're ready by the time the rider opens the camera; later visits come from the browser cache.
+      loadDetector().catch(function () {
+        // the camera step loads (and reports) it again
+      });
+      if (!c.ocr) {
+        loadOcr();
+      }
       enableSpeechmatics(c.speech);
       if (c.speech) {
         warmSpeech(); // a key ready before the rider first speaks
