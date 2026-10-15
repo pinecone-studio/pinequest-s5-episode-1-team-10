@@ -803,6 +803,7 @@ export default function Reader() {
     sayNewSpeed(next ?? SPEED_STEPS[0]);
   }
 
+  // To the app's home ("Автобус" / "Ном унших"): the mode is saved by now, so "/" opens there.
   function back(): void {
     shutdown();
     router.push("/");
@@ -1075,6 +1076,7 @@ export default function Reader() {
 
   if (phase === "start") {
     // Same two halves as the bus app. The screen-reader choice is first, so the first swipe lands there.
+    // "Буцах" after them: opened directly (/read), the rider can still get to the app's home.
     return (
       <main className="flow start-screen">
         <button
@@ -1094,6 +1096,9 @@ export default function Reader() {
           }}
         >
           Дэлгэц уншигчгүй
+        </button>
+        <button type="button" className="action" onClick={back}>
+          {phrase("menu_back")}
         </button>
       </main>
     );
