@@ -48,6 +48,7 @@ type Step =
   | "number" // family phone number for SOS: say it or type it?
   | "numberListening"
   | "numberConfirm" // read back digit by digit: correct?
+  | "confirmDest" // the destination was a sound-alike of what was heard: "is it X?" before the trip
   | "typing" // typing instead of speaking (see typeFor)
   | "settings"; // helper / screen-reader settings: mode, family number, typed destination
 
@@ -74,6 +75,11 @@ function legOf(plan: PlanResponse, leg: number): Leg {
   return leg === 1 && t
     ? { route: t.route, board: t.board_stop, alight: t.alight_stop, foundSpeech: t.found_speech }
     : { route: plan.route, board: plan.board_stop, alight: plan.alight_stop, foundSpeech: plan.found_speech };
+}
+
+// "Сансар ШТС /Урд/" -> "Сансар ШТС." (the pre-made stop-name clip; same as planner.stop_name).
+function spokenStop(name: string): string {
+  return name.replace(/\/[^/]*\/|\([^)]*\)/g, " ").split(/\s+/).filter(Boolean).join(" ") + ".";
 }
 
 // ?lat=47.91&lon=106.92 overrides GPS, for testing away from the stop.
@@ -112,6 +118,7 @@ export default function RiderFlow() {
   const [typeFor, setTypeFor] = useState<TypeFor>("dest");
   const typeField = useRef<HTMLInputElement>(null);
   const [pendingNumber, setPendingNumber] = useState(""); // said or typed, waiting for "correct?"
+  const [guess, setGuess] = useState<PlanResponse | null>(null); // trip to a stop we're not sure was meant
   const numberNext = useRef<"find" | "ask">("find"); // where the number setup goes when done
   const numberLater = useRef(false); // "Дараа нь": not asked again until the app is opened again
   const voiceBroken = useRef(false); // this browser can't recognise Mongolian: typing from now on
@@ -162,6 +169,39 @@ export default function RiderFlow() {
       .catch(function () {
         // the camera step loads (and reports) it again
       });
+  }
+
+  // Never guess where the rider wants to go: a stop that only sounds like what was heard is asked
+  // about first ("Бүрэн ойлгосонгүй. Та энэ газар руу явах уу: Сансар. Зөв үү?"), with the other
+  // stops that sound alike as buttons, and "say it again".
+  function planOrAsk(found: PlanResponse, heard: string): void {
+    if (found.sure !== false) {
+      showPlan(found);
+      return;
+    }
+    setGuess(found);
+    setStep("confirmDest");
+    const name = spokenStop(found.destination.name);
+    setMessage((heard ? "“" + heard + "” — " : "") + phrase("dest_unsure") + " " + name + " " + phrase("number_check"));
+    say([phrase("dest_unsure"), name, phrase("number_check")]);
+  }
+  // The other stops that sound alike (the server sends at most 2): planned by their exact name.
+  function pickAlternative(i: number): void {
+    const name = guess && guess.alternatives ? guess.alternatives[i] : "";
+    if (name) {
+      planTrip(name);
+    }
+  }
+  function pickFirstAlternative(): void {
+    pickAlternative(0);
+  }
+  function pickSecondAlternative(): void {
+    pickAlternative(1);
+  }
+  function destRight(): void {
+    if (guess) {
+      showPlan(guess);
+    }
   }
 
   // GPS if it's precise enough; otherwise the rider is asked to say where they are.
@@ -354,7 +394,7 @@ export default function RiderFlow() {
     announce(["searching"]);
     const result = await requestPlan(text, pos.lat, pos.lon);
     if (result.ok) {
-      showPlan(result.plan);
+      planOrAsk(result.plan, text);
     } else {
       planFailed(text, result.message || null);
     }
@@ -397,7 +437,7 @@ export default function RiderFlow() {
     }
     const result = await requestVoicePlan(wav, pos.lat, pos.lon);
     if (result && result.plan) {
-      showPlan(result.plan);
+      planOrAsk(result.plan, result.heard);
     } else {
       planFailed(result ? result.heard : "", result ? result.message : null);
     }
@@ -712,7 +752,9 @@ export default function RiderFlow() {
 
   function doAction(result: AskResponse): void {
     const a = result.action;
-    if (a === "plan" && result.plan) {
+    if (a === "plan" && result.plan && result.plan.sure === false) {
+      planOrAsk(result.plan, result.heard);
+    } else if (a === "plan" && result.plan) {
       showPlan(result.plan);
       say(result.speech.concat(phrase("open_camera")));
     } else if (a === "open_camera") {
@@ -839,6 +881,18 @@ export default function RiderFlow() {
       { ...label("number-type", "menu_number_type"), onActivate: typeNumber },
       { ...label("number-later", "menu_later"), onActivate: numberPutOff },
     ];
+  } else if (step === "confirmDest" && guess) {
+    title = spokenStop(guess.destination.name).replace(/\.$/, "") + " — зөв үү?";
+    actions = [{ ...label("dest-yes", "menu_yes_correct"), onActivate: destRight }];
+    const alts = guess.alternatives ?? [];
+    // The stop-name clip is the name with a full stop.
+    if (alts[0]) {
+      actions = actions.concat({ id: "dest-alt-0", label: alts[0], speech: [alts[0] + "."], onActivate: pickFirstAlternative });
+    }
+    if (alts[1]) {
+      actions = actions.concat({ id: "dest-alt-1", label: alts[1], speech: [alts[1] + "."], onActivate: pickSecondAlternative });
+    }
+    actions = actions.concat({ ...label("dest-again", "menu_say_again"), onActivate: sayDestination });
   } else if (step === "numberConfirm") {
     title = groupDigits(pendingNumber) + " — зөв үү?";
     actions = [
