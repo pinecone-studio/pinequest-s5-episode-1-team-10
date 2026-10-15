@@ -257,7 +257,7 @@ export default function RiderFlow() {
     setLeg(0);
     setStep("planned");
     setMessage(found.speech.join(" "));
-    // The first sentence ("34-р автобусанд суугаарай.") is pre-made, so it plays at once.
+    // The first sentence ("Ч гучин дөрөв автобусанд суугаарай.") is pre-made, so it plays at once.
     say(found.speech.concat(cameraAsk()));
     if (azureScanner()) {
       return; // no models on the phone: BusScanner reads the sign with Azure
