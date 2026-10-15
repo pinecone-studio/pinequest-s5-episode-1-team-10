@@ -119,6 +119,12 @@ export default function RiderFlow() {
   function welcome(): PhraseKey {
     return modeRef.current === "sr" ? "welcome_sr" : "welcome";
   }
+  function locationAsk(): PhraseKey {
+    return modeRef.current === "sr" ? "ask_location_sr" : "ask_location";
+  }
+  function cameraAsk(): string {
+    return phrase(modeRef.current === "sr" ? "open_camera_sr" : "open_camera");
+  }
   const [place, setPlace] = useState(""); // the stop the app thinks the rider is at, for the confirm screen
   const [message, setMessage] = useState("");
   const [plan, setPlan] = useState<PlanResponse | null>(null);
@@ -221,7 +227,7 @@ export default function RiderFlow() {
     setStep("planned");
     setMessage(found.speech.join(" "));
     // The first sentence ("34-р автобусанд суугаарай.") is pre-made, so it plays at once.
-    say(found.speech.concat(phrase("open_camera")));
+    say(found.speech.concat(cameraAsk()));
     // Camera models download while the route is read out and the rider walks to the stop (first visit
     // ~25 MB; later from the browser cache), bus detector and sign reader at the same time. Not earlier:
     // on a slow line, downloading from the start made a trip plan take 17 s instead of 1 s.
@@ -278,7 +284,7 @@ export default function RiderFlow() {
     const pos = await gps;
     if (!pos || pos.accuracy > GPS_OK_M) {
       setStep("where");
-      announce(["ask_location"]);
+      announce([locationAsk()]);
       return;
     }
     position.current = pos;
@@ -389,7 +395,8 @@ export default function RiderFlow() {
       openTyping(typeInstead, "voice_unsupported_type", heard.code);
       return;
     }
-    const key = heard.error === "no-mic" ? "mic_failed" : heard.error === "network" ? "voice_network" : "not_heard";
+    const missed = typeInstead === "where" && modeRef.current === "sr" ? "not_heard_where_sr" : "not_heard";
+    const key = heard.error === "no-mic" ? "mic_failed" : heard.error === "network" ? "voice_network" : missed;
     say([phrase(key)]);
     setMessage(phrase(key) + (heard.error === "not-heard" ? "" : " (" + heard.code + ")"));
   }
@@ -407,7 +414,7 @@ export default function RiderFlow() {
     } else {
       setStep("where");
       setMessage((result.heard ? "“" + result.heard + "” — " : "") + result.message);
-      say([result.message ?? phrase("not_heard")]);
+      say([result.message ?? phrase(modeRef.current === "sr" ? "not_heard_where_sr" : "not_heard")]);
     }
   }
 
@@ -448,7 +455,7 @@ export default function RiderFlow() {
     const pos = await currentPosition();
     if (!pos) {
       setStep("where");
-      announce(["ask_location"]);
+      announce([locationAsk()]);
       return;
     }
     announce(["searching"]);
@@ -577,7 +584,7 @@ export default function RiderFlow() {
       startNumberSetup(numberNext.current);
     } else {
       setStep(typeFor === "dest" ? "ask" : "where");
-      announce([typeFor === "dest" ? welcome() : "ask_location"]);
+      announce([typeFor === "dest" ? welcome() : locationAsk()]);
     }
   }
 
@@ -596,7 +603,7 @@ export default function RiderFlow() {
       setLeg(1);
       setFound(false);
       setStep("planned");
-      const texts = [phrase("transfer_arrived")].concat(p.transfer.speech, phrase("open_camera"));
+      const texts = [phrase("transfer_arrived")].concat(p.transfer.speech, cameraAsk());
       setMessage(texts.join(" "));
       say(texts);
       return;
@@ -632,7 +639,7 @@ export default function RiderFlow() {
   }
   function whereIsDoor(): void {
     const g = doorGuide.current;
-    voice(g ? doorSpeech(g) : [phrase("door_lost")]);
+    voice(g ? doorSpeech(g, modeRef.current === "sr") : [phrase("door_lost")]);
   }
   function boarded(): void {
     stopSpeaking();
@@ -663,7 +670,7 @@ export default function RiderFlow() {
       return;
     }
     const speech = legRef.current === 1 && p.transfer ? p.transfer.speech : p.speech;
-    voice(speech.concat(phrase("open_camera")));
+    voice(speech.concat(cameraAsk()));
   }
   function startOver(): void {
     setPlan(null);
@@ -691,7 +698,7 @@ export default function RiderFlow() {
     stopSpeaking();
     const pos = position.current;
     if (!pos) {
-      announce(["ask_location"]);
+      announce([locationAsk()]);
       return;
     }
     speedStart();
@@ -762,7 +769,7 @@ export default function RiderFlow() {
       planOrAsk(result.plan, result.heard);
     } else if (a === "plan" && result.plan) {
       showPlan(result.plan);
-      say(result.speech.concat(phrase("open_camera")));
+      say(result.speech.concat(cameraAsk()));
     } else if (a === "open_camera") {
       openCamera();
     } else if (a === "door") {
@@ -798,7 +805,8 @@ export default function RiderFlow() {
     vibrate([500, 200, 500, 200, 500]);
     setSos({ mode, body });
     setMessage(body);
-    say([phrase(mode === "sms" ? "sos_confirm" : "sos_call_confirm")]);
+    const sosKey = mode === "sms" ? (modeRef.current === "sr" ? "sos_confirm_sr" : "sos_confirm") : modeRef.current === "sr" ? "sos_call_confirm_sr" : "sos_call_confirm";
+    say([phrase(sosKey)]);
   }
   function sosSend(): void {
     if (sos) {
@@ -1038,6 +1046,7 @@ export default function RiderFlow() {
           guide={doorGuide}
           phoneOcr={!serverOcr}
           onAnnounce={voice}
+          screenReader={mode === "sr"}
         />
       )}
       {step === "ride" && cur && (

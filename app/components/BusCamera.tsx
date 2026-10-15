@@ -25,6 +25,7 @@ interface Props {
   guide: MutableRefObject<DoorGuide | null>; // latest door guidance, for the "where is the door?" option
   phoneOcr: boolean; // the server has no OCR (free hosting): read the sign on the phone, send only the texts
   onAnnounce: (texts: string[]) => Promise<void>; // status text and speech, so a hint is never only spoken
+  screenReader: boolean; // door-close sentence names the button instead of a double tap
 }
 
 const GUIDE_EVERY_MS = 4000; // repeat "door at 2 o'clock, 9 steps" this often
@@ -34,9 +35,9 @@ const DOOR_EVERY_MS = 150; // door model runs at most this often (it's 4x the bu
 const DOOR_KEEP_MS = 2000; // a door seen this recently still counts (it moves with the bus box)
 
 // "Хаалга 2 цагийн зүгт. 9 алхам." from pre-made clips.
-export function doorSpeech(g: DoorGuide): string[] {
+export function doorSpeech(g: DoorGuide, screenReader?: boolean): string[] {
   if (g.close) {
-    return [phrase("door_close")];
+    return [phrase(screenReader ? "door_close_sr" : "door_close")];
   }
   if (g.ahead) {
     return [phrase("door_ahead"), phrase(("steps_" + g.steps) as PhraseKey)];
@@ -145,7 +146,7 @@ interface CamStats {
   error: string;
 }
 
-export default function BusCamera({ stopId, route, foundSpeech, onFound, onError, guide, phoneOcr, onAnnounce }: Props) {
+export default function BusCamera({ stopId, route, foundSpeech, onFound, onError, guide, phoneOcr, onAnnounce, screenReader }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const debugRef = useRef<HTMLParagraphElement>(null);
@@ -271,10 +272,10 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         if (g.close && !closeSaid) {
           closeSaid = true;
           vibrate([300, 100, 300]);
-          speak(doorSpeech(g));
+          speak(doorSpeech(g, screenReader));
         } else if (!talking && now - lastGuideSpoken > GUIDE_EVERY_MS) {
           lastGuideSpoken = now;
-          speak(doorSpeech(g));
+          speak(doorSpeech(g, screenReader));
         }
         if (g.ahead && now - lastAheadBuzz > 1000) {
           lastAheadBuzz = now;
@@ -583,7 +584,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         }
       };
     },
-    [stopId, route, foundSpeech, onFound, onError, guide, phoneOcr],
+    [stopId, route, foundSpeech, onFound, onError, guide, phoneOcr, screenReader],
   );
 
   return (
