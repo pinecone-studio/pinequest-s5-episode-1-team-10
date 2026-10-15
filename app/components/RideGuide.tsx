@@ -3,10 +3,10 @@
 // On the bus: follows the rider's GPS along the route's real stop list (Hamuga) and says each stop as
 // it comes up, how many are left, "get ready" one stop before, and "get off now" at theirs.
 // simulate: the bus drives the real stops at demo speed (pitch stage, desk testing).
-import { useEffect, useState, type MutableRefObject } from "react";
+import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import type { RideResponse, RideStop } from "../../shared/contract";
 import { metres } from "../lib/geo";
-import { phrase, say, vibrate, type PhraseKey } from "../lib/speech";
+import { cue, phrase, vibrate, type PhraseKey } from "../lib/speech";
 
 export interface RideInfo {
   left: number; // stops still to ride
@@ -20,6 +20,7 @@ interface Props {
   simulate: boolean;
   info: MutableRefObject<RideInfo | null>;
   onArrived: () => void;
+  onAnnounce: (texts: string[]) => Promise<void>; // written on the status line as well as spoken
 }
 
 const REACH_M = 60; // within this of a stop = the bus is at it
@@ -34,7 +35,11 @@ export function leftSpeech(left: number): string {
   return left >= 1 && left <= 20 ? phrase(("left_" + left) as PhraseKey) : "";
 }
 
-export default function RideGuide({ route, board, alight, simulate, info, onArrived }: Props) {
+export default function RideGuide({ route, board, alight, simulate, info, onArrived, onAnnounce }: Props) {
+  const announceRef = useRef(onAnnounce);
+  useEffect(function () {
+    announceRef.current = onAnnounce;
+  });
   const [stops, setStops] = useState<RideStop[]>([]);
   const [reached, setReached] = useState(0);
   const [error, setError] = useState("");
@@ -76,7 +81,7 @@ export default function RideGuide({ route, board, alight, simulate, info, onArri
           clearTimeout(lostTimer);
         }
         lostTimer = setTimeout(function () {
-          say([phrase("ride_lost")]);
+          announceRef.current([phrase("ride_lost")]);
         }, LOST_MS);
         const last = list.length - 1;
         // Reached: the farthest stop ahead within REACH_M (stops without coordinates are passed implicitly).
@@ -94,12 +99,12 @@ export default function RideGuide({ route, board, alight, simulate, info, onArri
           if (!preparedSaid && at === last - 1 && leftPrev) {
             preparedSaid = true;
             vibrate([150, 100, 150]);
-            say([phrase("prepare_off")]);
+            announceRef.current([phrase("prepare_off")]);
           }
           if (!offSaid && target.lat !== null && target.lon !== null && metres(lat, lon, target.lat, target.lon) < OFF_M) {
             offSaid = true;
-            vibrate([600, 150, 600, 150, 600]);
-            say([phrase("get_off_now")]);
+            cue("off", [600, 150, 600, 150, 600]);
+            announceRef.current([phrase("get_off_now")]);
           }
           if (at === last && offSaid && !arrived) {
             arrived = true;
@@ -113,7 +118,7 @@ export default function RideGuide({ route, board, alight, simulate, info, onArri
           const s = list[next];
           if (metres(lat, lon, s.lat as number, s.lon as number) < ANNOUNCE_M) {
             announced = next;
-            say(s.speech.concat(leftSpeech(last - next)).filter(Boolean));
+            announceRef.current(s.speech.concat(leftSpeech(last - next)).filter(Boolean));
           }
         }
         update();
@@ -161,7 +166,7 @@ export default function RideGuide({ route, board, alight, simulate, info, onArri
             return;
           }
           setError(phrase("server_down"));
-          say([phrase("server_down")]);
+          announceRef.current([phrase("server_down")]);
           return;
         }
         if (stopped) {
@@ -177,7 +182,7 @@ export default function RideGuide({ route, board, alight, simulate, info, onArri
         }
         update();
         setStops(list);
-        say([phrase("ride_start")]);
+        announceRef.current([phrase("ride_start")]);
         if (simulate) {
           simulateDrive();
         } else {

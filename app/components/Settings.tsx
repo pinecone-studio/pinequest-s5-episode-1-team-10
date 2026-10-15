@@ -3,18 +3,20 @@
 // The one settings page (for the rider with a screen reader, or a sighted helper): how the app is
 // used, the family number for SOS, typing a destination, the tutorial again. Plain form controls.
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import type { Mode } from "../lib/mode";
+import type { Mode, Reader } from "../lib/mode";
 import FamilyContact from "./FamilyContact";
 
 interface Props {
   mode: Mode;
+  reader: Reader;
   onMode: (mode: Mode) => void;
+  onReader: (reader: Reader) => void;
   onDestination: (text: string) => void;
   onTutorial: () => void;
   onBack: () => void;
 }
 
-export default function Settings({ mode, onMode, onDestination, onTutorial, onBack }: Props) {
+export default function Settings({ mode, reader, onMode, onReader, onDestination, onTutorial, onBack }: Props) {
   const [typed, setTyped] = useState("");
   const heading = useRef<HTMLHeadingElement>(null);
 
@@ -56,6 +58,28 @@ export default function Settings({ mode, onMode, onDestination, onTutorial, onBa
           }}
         >
           Апп уншина (дэлгэц уншигчгүй)
+        </button>
+      </fieldset>
+
+      <fieldset className="field">
+        <legend>Мэдээг хэн унших вэ</legend>
+        <button
+          className="action"
+          aria-pressed={reader === "app"}
+          onClick={function () {
+            onReader("app");
+          }}
+        >
+          Апп
+        </button>
+        <button
+          className="action"
+          aria-pressed={reader === "screen"}
+          onClick={function () {
+            onReader("screen");
+          }}
+        >
+          Дэлгэц уншигч
         </button>
       </fieldset>
 
