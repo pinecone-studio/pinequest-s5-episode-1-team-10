@@ -1,5 +1,6 @@
 // Mongolian speech from the server's OronTTS (/api/tts). Each sentence is its own cached clip.
 import phrases from "../../shared/phrases.json";
+import { speedAudio } from "./speed";
 
 export type PhraseKey = keyof typeof phrases;
 
@@ -27,15 +28,50 @@ export function unlockAudio(): void {
   });
 }
 
+// Text -> name of its pre-made clip (free hosting), played straight from /tts/<name>.mp3 instead of
+// asking /api/tts first (~1 s per sentence on a cold server). Fixed phrases: /tts/index.json, made by
+// deploy/vercel.sh. Answers: the server sends the names (AskResponse.clips), because only it can
+// normalize the text exactly the way the clip was made. Not listed -> /api/tts, as before.
+const clipNames = new Map<string, string>();
+if (typeof window !== "undefined") {
+  fetch("/tts/index.json")
+    .then(function (res) {
+      return res.ok ? res.json() : {};
+    })
+    .then(function (index: Record<string, string>) {
+      Object.keys(index).forEach(function (item) {
+        clipNames.set(item, index[item]);
+      });
+    })
+    .catch(function () {});
+}
+
+export function rememberClips(texts: string[], names: (string | null)[] | undefined): void {
+  (names ?? []).forEach(function (item, i) {
+    if (item && texts[i]) {
+      clipNames.set(texts[i], item);
+    }
+  });
+}
+
+function apiUrl(text: string): string {
+  return "/api/tts?text=" + encodeURIComponent(text);
+}
+
+function clipUrl(text: string): string {
+  const name = clipNames.get(text);
+  return name ? "/tts/" + name + ".mp3" : apiUrl(text);
+}
+
 // One retry: the dev proxy can hit a keep-alive socket the server just closed (ECONNRESET -> 500),
 // and a skipped line ("50 метр.") is worse than a 150 ms delay.
-function fetchClip(text: string): Promise<string | null> {
-  return fetch("/api/tts?text=" + encodeURIComponent(text))
+function getAudio(url: string): Promise<Blob | null> {
+  return fetch(url)
     .then(function (res) {
       if (!res.ok && res.status >= 500) {
         return new Promise<Blob | null>(function (resolve) {
           setTimeout(function () {
-            fetch("/api/tts?text=" + encodeURIComponent(text))
+            fetch(url)
               .then(function (again) {
                 resolve(again.ok ? again.blob() : null);
               })
@@ -47,18 +83,25 @@ function fetchClip(text: string): Promise<string | null> {
       }
       return res.ok ? res.blob() : null;
     })
-    .then(function (blob) {
-      return blob ? URL.createObjectURL(blob) : null;
-    })
     .catch(function () {
       return null;
     });
 }
 
+function fetchClip(text: string): Promise<string | null> {
+  const url = clipUrl(text);
+  const blob = url === apiUrl(text) ? getAudio(url) : getAudio(url).then(function (direct) {
+    return direct ?? getAudio(apiUrl(text)); // a stale name never makes a sentence silent
+  });
+  return blob.then(function (found) {
+    return found ? URL.createObjectURL(found) : null;
+  });
+}
+
 // Ask the server to make clips now so they play at once later (e.g. the rider's stop name).
 export function prefetch(texts: string[]): void {
   texts.forEach(function (item) {
-    fetch("/api/tts?text=" + encodeURIComponent(item)).catch(function () {});
+    fetch(clipUrl(item)).catch(function () {});
   });
 }
 
@@ -83,6 +126,7 @@ function play(url: string): Promise<void> {
         timer = setTimeout(done, player.duration * 1000 + 1500);
       }
     };
+    player.onplaying = speedAudio;
     player.onended = done;
     player.onerror = done;
     player.src = url;
@@ -146,6 +190,7 @@ function speakWithPhone(text: string): Promise<void> {
       u.lang = "mn-MN";
     }
     const timer = setTimeout(resolve, 1500 + text.length * 120);
+    u.onstart = speedAudio;
     u.onend = u.onerror = function () {
       clearTimeout(timer);
       resolve();

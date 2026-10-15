@@ -114,6 +114,8 @@ class AskResponse(BaseModel):
                              "start_over", "tutorial", "sos", "call_family"]] = Field(
         default=None, description='What the app should do. "sos": text the family (speech[1:] = where the rider is)')
     plan: Optional["PlanResponse"] = Field(default=None, description='The trip, when action is "plan"')
+    clips: list[Optional[str]] = Field(default=[], description="Pre-made clip name per speech sentence (play "
+                                                               "/tts/<name>.mp3 directly); null or missing = use /tts")
 
 
 class VoicePlanResponse(BaseModel):

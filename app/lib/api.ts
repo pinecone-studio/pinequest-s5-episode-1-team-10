@@ -75,6 +75,12 @@ export async function askByText(text: string, lat: number, lon: number, context:
   }
 }
 
+// A free server function sleeps after a few idle minutes and takes seconds to start: wake it while the
+// rider is still talking, so the question itself doesn't wait for the start-up.
+export function wakeServer(): void {
+  fetch("/api/health", { cache: "no-store" }).catch(function () {});
+}
+
 // What the server can do: a free host has no Whisper (speech is recognised in the browser) and no OCR.
 export interface ServerCaps {
   stt: boolean;

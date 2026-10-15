@@ -45,12 +45,18 @@ from lite import app  # noqa: E402,F401  (Vercel serves this ASGI app)
 PY
 printf 'fastapi==0.128.8\npydantic==2.13.5\nhttpx==0.28.1\n' > requirements.txt
 # icn1 (Seoul): nearest Vercel region to the Hamuga API in Ulaanbaatar (US East added ~2 s per new stop)
+# Clips are named by their content hash, so they never change: the phone keeps them for a year and
+# never asks again. Models: kept a day, then refreshed in the background (no wait).
 cat > vercel.json <<'JSON'
 {
   "regions": ["icn1"],
   "functions": {
     "api/index.py": { "includeFiles": "api/_server/**", "maxDuration": 30 }
-  }
+  },
+  "headers": [
+    { "source": "/tts/(.*)\\.mp3", "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }] },
+    { "source": "/models/(.*)", "headers": [{ "key": "Cache-Control", "value": "public, max-age=86400, stale-while-revalidate=604800" }] }
+  ]
 }
 JSON
 printf 'node_modules\n.next\npublic/ort\n.env*\n' > .vercelignore
@@ -85,6 +91,18 @@ Path("api/_server/tts_manifest.json").write_text(json.dumps(keys))
 print(len(keys), "voice clips")
 PY
 for k in $(python3 -c 'import json; print(" ".join(json.load(open("api/_server/tts_manifest.json"))))'); do cp "$MP3/$k.mp3" public/tts/; done
+# Fixed phrase text -> clip name, so the app plays them without asking /api/tts first (lib/speech.ts)
+(cd "$R/server" && .venv/bin/python - "$D" <<'PY'
+import json, sys
+from pathlib import Path
+import tts
+out = Path(sys.argv[1])
+made = set(json.loads((out / "api/_server/tts_manifest.json").read_text()))
+index = {t: tts.clip_key(t) for t in tts.fixed_phrases() if tts.clip_key(t) in made}
+(out / "public/tts/index.json").write_text(json.dumps(index, ensure_ascii=False))
+print(len(index), "of", len(tts.fixed_phrases()), "fixed phrases indexed")
+PY
+)
 du -sh public/tts public/models
 
 [ "$1" = "--build" ] && exit 0

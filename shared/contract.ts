@@ -72,6 +72,7 @@ export interface AskResponse {
   speech: string[]; // Mongolian sentences to speak in order; fetch each from /tts
   action: AskAction | null; // what the app should do (speak `speech` too)
   plan: PlanResponse | null; // the trip, when action is "plan"
+  clips?: (string | null)[]; // pre-made clip name per speech sentence: play /tts/<name>.mp3 directly; null/missing = use /tts
 }
 export type AskAction =
   | "plan"
