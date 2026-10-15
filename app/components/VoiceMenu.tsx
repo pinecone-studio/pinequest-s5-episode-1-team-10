@@ -28,6 +28,8 @@ interface Props {
   onHoldStart?: () => void; // finger held still HOLD_MS: start listening
   onHoldEnd?: () => void; // finger lifted after a hold: stop listening
   intro?: boolean; // read the options out when the screen (or menu) opens, after its message
+  title?: string; // heading on screen, included when the rider asks to hear it again
+  status?: string; // the line under the heading
   children?: ReactNode; // shown inside the touch surface (plan card, camera)
 }
 
@@ -48,7 +50,31 @@ function ordinal(i: number): string[] {
   return i < NUMBERED ? [phrase(("button_" + (i + 1)) as PhraseKey)] : [];
 }
 
-export default function VoiceMenu({ items, primary, menuId, onHoldStart, onHoldEnd, intro, children }: Props) {
+function withHearAgain(list: MenuItem[], again: () => void): MenuItem[] {
+  if (!list.length) {
+    return list;
+  }
+  return list.concat({ id: "hear-again", label: phrase("menu_hear_again"), onActivate: again });
+}
+
+// Heading, status, then every button. The opening reading and "Дэлгэцийг дахин сонсох" use this
+// same script, so a missed announcement is not a different list.
+export function screenSpeech(title: string, status: string, list: MenuItem[], primary?: number): string[] {
+  const head = [title, status].filter(function (item, i, all) {
+    return item.trim() !== "" && all.indexOf(item) === i;
+  });
+  let texts = head;
+  if (list.length > 0 && list.length <= NUMBERED) {
+    texts = texts.concat(phrase(("buttons_" + list.length) as PhraseKey));
+  }
+  list.forEach(function (item, i) {
+    texts = texts.concat(ordinal(i), spoken(item));
+  });
+  const now = primary !== undefined ? list[primary] : undefined;
+  return texts.concat(now ? [phrase("double_tap_now")].concat(spoken(now)) : list.length ? [phrase("swipe_first")] : []);
+}
+
+export default function VoiceMenu({ items, primary, menuId, onHoldStart, onHoldEnd, intro, title, status, children }: Props) {
   const [index, setIndexState] = useState(-1); // -1: nothing reached yet
   // Fast swipes arrive before React re-renders, so the live position is kept in a ref too.
   const at = useRef(-1);
@@ -70,34 +96,35 @@ export default function VoiceMenu({ items, primary, menuId, onHoldStart, onHoldE
     };
   }, []);
 
-  // Everything on the screen is spoken: after the screen's own message, what can be done here.
-  const labels = items
+  // Reads the heading, the status, and every button, including this one. Called only from a tap,
+  // so it does not run on each render.
+  function hearAgain(): void {
+    say(screenSpeech(title ?? "", status ?? "", withHearAgain(items, hearAgain), primary));
+  }
+  // Last option while the rider can listen. Hidden during the microphone, locating, and waiting.
+  const shown = intro !== false ? withHearAgain(items, hearAgain) : items;
+  const labels = shown
     .map(function (item) {
-      return item.label;
+      return (item.speech ?? [item.label]).join("\n");
     })
     .join("|");
+  const speechKey = (menuId ?? "") + "|" + (title ?? "") + "|" + labels + "|" + String(primary ?? "");
+  const openingSpeech = screenSpeech(title ?? "", "", shown, primary);
   const introduced = useRef(""); // React may run the effect twice (dev): say the options once
   useEffect(
     function () {
-      if (!intro || !labels || introduced.current === menuId + labels) {
+      if (!intro || !labels || introduced.current === speechKey) {
         return;
       }
-      introduced.current = menuId + labels;
-      let texts = items.length <= NUMBERED ? [phrase(("buttons_" + items.length) as PhraseKey)] : [];
-      items.forEach(function (item, i) {
-        texts = texts.concat(ordinal(i), spoken(item));
-      });
-      const now = primary !== undefined ? items[primary] : undefined;
-      texts = texts.concat(now ? [phrase("double_tap_now")].concat(spoken(now)) : [phrase("swipe_first")]);
+      introduced.current = speechKey;
+      const texts = openingSpeech.slice();
       if (hintsLeft > 0) {
         hintsLeft--;
         texts.push(phrase("options_hint"));
       }
-      sayAfter(texts);
+      sayAfter(texts); // after the screen's own message, not instead of it
     },
-    // once per screen (VoiceMenu is keyed by step) and per menu on it (SOS); not on every render
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [menuId, intro],
+    [intro, labels, speechKey, openingSpeech],
   );
 
   // A new menu on the same screen (the screen itself, e.g. the camera, keeps running): the next
@@ -111,17 +138,17 @@ export default function VoiceMenu({ items, primary, menuId, onHoldStart, onHoldE
   }
 
   function speak(i: number): void {
-    say(ordinal(i).concat(spoken(items[i]), phrase("double_tap_to_choose")));
+    say(ordinal(i).concat(spoken(shown[i]), phrase("double_tap_to_choose")));
   }
 
   function move(step: number): void {
     syncMenu();
-    if (!items.length) {
+    if (!shown.length) {
       say([phrase("wait")]);
       return;
     }
     // Stops at the ends like VoiceOver; a double vibration says "no more options".
-    const next = Math.min(items.length - 1, Math.max(0, at.current + step));
+    const next = Math.min(shown.length - 1, Math.max(0, at.current + step));
     if (next === at.current) {
       vibrate([20, 60, 20]);
       speak(next);
@@ -135,20 +162,20 @@ export default function VoiceMenu({ items, primary, menuId, onHoldStart, onHoldE
   function activate(): void {
     syncMenu();
     const i = at.current >= 0 ? at.current : primary;
-    if (i === undefined || !items[i]) {
-      say([phrase(items.length ? "choose_hint" : "wait")]);
+    if (i === undefined || !shown[i]) {
+      say([phrase(shown.length ? "choose_hint" : "wait")]);
       return;
     }
     vibrate([40]);
-    items[i].onActivate();
+    shown[i].onActivate();
   }
 
   function repeat(): void {
     syncMenu();
-    if (at.current >= 0 && items[at.current]) {
+    if (at.current >= 0 && shown[at.current]) {
       speak(at.current);
     } else {
-      say([phrase(items.length ? "choose_hint" : "wait")]);
+      say([phrase(shown.length ? "choose_hint" : "wait")]);
     }
   }
 
@@ -161,6 +188,14 @@ export default function VoiceMenu({ items, primary, menuId, onHoldStart, onHoldE
 
   function onPointerDown(e: PointerEvent): void {
     unlockAudio();
+    // Keep the finger's lift even if it slides off this surface, or a hold never stops listening.
+    if (e.currentTarget instanceof HTMLElement) {
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        // the lift still ends the hold when it lands on this surface
+      }
+    }
     down.current = { x: e.clientX, y: e.clientY };
     cancelHold();
     if (onHoldStart) {
@@ -241,7 +276,7 @@ export default function VoiceMenu({ items, primary, menuId, onHoldStart, onHoldE
     }
   }
 
-  const current = index >= 0 ? items[index] : undefined;
+  const current = index >= 0 ? shown[index] : undefined;
   return (
     <div
       className="voice-menu"
@@ -256,15 +291,19 @@ export default function VoiceMenu({ items, primary, menuId, onHoldStart, onHoldE
     >
       {children}
       <p className="voice-current" aria-hidden="true">
-        {current ? current.label : items.length ? "→ шудрах · 2× товших · дараад барих = асуух" : "…"}
+        {current ? current.label : shown.length ? "→ шудрах · 2× товших · дараад барих = асуух" : "…"}
+      </p>
+      <p id="voice-activate-hint" className="sr-only">
+        {phrase("double_tap_to_choose")}
       </p>
       <ul className="voice-items">
-        {items.map(function (item, i) {
+        {shown.map(function (item, i) {
           return (
             <li key={item.id}>
               <button
                 className={i === index ? "voice-item focused" : "voice-item"}
                 aria-label={item.label}
+                aria-describedby="voice-activate-hint"
                 tabIndex={-1}
                 // Only clicks from a screen reader or keyboard (detail 0) choose directly; finger taps
                 // are handled by the surface so one tap reads, two taps choose.

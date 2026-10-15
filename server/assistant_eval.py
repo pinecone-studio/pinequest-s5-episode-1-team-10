@@ -46,7 +46,7 @@ def kind(r):
     if s.startswith(("Энэ зогсоол дээр", "Төв номын сан зогсоол дээр")): return "buses_here"
     if "хооронд явдаг" in s: return "route_info"
     if s.startswith(("Тийм.", "Үгүй.")): return "goes_to"
-    if s.startswith("Хамгийн ойрын"): return "nearest"
+    if s.startswith("Хамгийн ойрын") or s.startswith("Суух зогсоол:"): return "nearest"
     if s.startswith("Автобус хэзээ"): return "eta"
     if s.startswith("Би автобусны талаар"): return "help"
     if s.startswith("Мэдэхгүй"): return "unknown"
@@ -83,7 +83,7 @@ WORDINGS += [  # written later as a held-out check, then tuned on
  ("Автобус удах уу", "eta", 0), ("55 хэдэн минутын дараа ирэх вэ", "eta", 0),
  ("Камер асаагаад өгөөч", "open_camera", 1), ("Хаалга аль талд байна", "door", 1), ("Хэдэн зогсоолын дараа буух вэ", "stops_left", 1),
  ("Би автобусанд орлоо", "boarded", 1), ("Одоо бууж байна", "got_off", 1), ("Би өөр газар явъя", "start_over", 1),
- ("Зогсоол руу дагуулаад өгөөч", "not_found", 1),  # walking guidance was removed: a safe "not found" ("Сансар эндээс хол уу", "how_far", 0),
+ ("Зогсоол руу дагуулаад өгөөч", "nearest", 1),  # no compass: say which stop and how far
  ("Аюултай байна туслаарай", "emergency", 0),
  ("Чамайг хэн бүтээсэн бэ", "unknown", 0), ("Өнөөдөр хэдэн сарын хэдэн бэ", "unknown", 0), ("Дуу тоглуулаач", "unknown", 0), ("Сайн байна уу", "unknown", 0),
 ]

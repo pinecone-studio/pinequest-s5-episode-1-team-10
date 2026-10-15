@@ -101,7 +101,7 @@ function testPosition(): Position | null {
 export default function RiderFlow() {
   const [step, setStep] = useState<Step>("start");
   const [mode, setMode] = useState<Mode>("voice");
-  const [serverOcr, setServerOcr] = useState(true); // false on free hosting: the phone reads the signs
+  const [serverOcr, setServerOcr] = useState(false); // true only after /health says this server reads signs itself
   const modeRef = useRef<Mode>("voice"); // for callbacks
   // "Swipe right / double tap" only make sense without a screen reader.
   function welcome(): PhraseKey {
@@ -115,8 +115,9 @@ export default function RiderFlow() {
   const legRef = useRef(0);
   const position = useRef<Position | null>(null);
   const fromGps = useRef(false); // GPS positions are refreshed on each request; a said place is kept
-  const caps = useRef<ServerCaps>({ stt: true, ocr: true, speech: false });
-  const listening = useRef<Listening | null>(null); // the microphone is on
+  const recording = useRef<Recording | null>(null);
+  const caps = useRef<ServerCaps>({ stt: false, ocr: false });
+  const browserListening = useRef<{ stop: () => void } | null>(null);
   const [found, setFound] = useState(false); // the camera confirmed the rider's bus: now guiding to its door
   const doorGuide = useRef<DoorGuide | null>(null);
   const rideInfo = useRef<RideInfo | null>(null);
@@ -609,14 +610,26 @@ export default function RiderFlow() {
   // place, so the camera or ride keeps running; the server answers from our bus data only and may name
   // an action ("plan", "open_camera", "door"...), done here like the menu option would.
   const talk = useRef<{ stop: () => void } | null>(null);
+  const [talking, setTalking] = useState(false);
   const [speedLine, setSpeedLine] = useState("");
   useEffect(function () {
     if (showSpeed()) {
       onSpeedReport(setSpeedLine);
     }
   }, []);
+  function askContext() {
+    const legNow = plan ? legOf(plan, legRef.current) : null;
+    return {
+      step: step,
+      route: legNow ? legNow.route : "",
+      alight: legNow ? legNow.alight.name : "",
+      board: legNow ? legNow.board.name : "",
+      walkM: legNow ? legNow.board.distance_m : null,
+    };
+  }
   function startTalk(): void {
     if (talk.current) {
+      endTalk(); // a second press (screen reader) stops listening
       return;
     }
     stopSpeaking();
@@ -627,8 +640,7 @@ export default function RiderFlow() {
     }
     speedStart();
     wakeServer(); // a sleeping free server starts up while the rider is still talking
-    const legNow = plan ? legOf(plan, legRef.current) : null;
-    const context = { step, route: legNow ? legNow.route : "", alight: legNow ? legNow.alight.name : "" };
+    const context = askContext();
     setMessage(phrase("listening"));
     let released = false; // the finger may lift before the microphone is on
     const session = {
@@ -637,6 +649,7 @@ export default function RiderFlow() {
       },
     };
     talk.current = session;
+    setTalking(true);
     // "Түр хүлээнэ үү" only if the answer is slow; a fast answer would just cut it off mid-word.
     let waitTimer: ReturnType<typeof setTimeout> | undefined;
     function sayWaitIfSlow(): void {
@@ -645,40 +658,65 @@ export default function RiderFlow() {
       }, 700);
     }
     (async function () {
-      await explainMicPrompt();
-      // The microphone opens while the beep plays, so the rider can talk right after it.
-      const rec = listen(showWords);
-      session.stop = rec.stop;
-      if (released) {
-        rec.stop();
-      }
-      beep();
-      const heard = await rec.done;
-      talk.current = null;
-      warmSpeech();
-      if (!heard.text) {
-        speedCancel();
-        if (heard.error === "unsupported") {
-          // Asking by voice isn't possible here; every menu (and typing) still is.
-          voiceBroken.current = true;
-          announce(["voice_unsupported"]);
+      try {
+        let result: AskResponse | null;
+        if (!caps.current.stt) {
+          // The microphone opens while the beep plays, so the rider can talk right after it.
+          const rec = listenInBrowser();
+          session.stop = rec.stop;
+          if (released) {
+            rec.stop();
+          }
+          beep();
+          const heard = await rec.done;
+          const text = heard.text;
+          talk.current = null;
+          if (!text) {
+            speedCancel();
+            if (heard.error === "unsupported") {
+              // Asking by voice isn't possible in this browser; every menu (and typing) still is.
+              voiceBroken.current = true;
+              announce(["voice_unsupported"]);
+            } else {
+              notHeard(heard, "dest");
+            }
+            return;
+          }
+          sayWaitIfSlow();
+          result = await askByText(text, pos.lat, pos.lon, context);
         } else {
-          notHeard(heard, "dest");
+          await beep();
+          const rec = record();
+          recording.current = rec;
+          session.stop = rec.stop;
+          if (released) {
+            rec.stop();
+          }
+          const wav = await rec.done;
+          recording.current = null;
+          talk.current = null;
+          if (!wav) {
+            speedCancel();
+            announce([rec.noMic() ? "mic_failed" : "not_heard"]);
+            return;
+          }
+          speedMark("recorded");
+          sayWaitIfSlow(); // a new sentence's voice is made live (~8 s); fixed ones play at once
+          result = await askByVoice(wav, pos.lat, pos.lon, context);
         }
-        return;
+        if (!result) {
+          speedCancel();
+          announce(["server_down"]);
+          return;
+        }
+        speedMark("answer");
+        rememberClips(result.speech, result.clips);
+        setMessage(result.heard && result.answer ? "“" + result.heard + "” — " + result.answer : result.answer || "“" + result.heard + "”");
+        doAction(result);
+      } finally {
+        clearTimeout(waitTimer);
+        setTalking(false);
       }
-      sayWaitIfSlow();
-      const result: AskResponse | null = await askByText(heard.text, pos.lat, pos.lon, context);
-      clearTimeout(waitTimer);
-      if (!result) {
-        speedCancel();
-        announce(["server_down"]);
-        return;
-      }
-      speedMark("answer");
-      rememberClips(result.speech, result.clips);
-      setMessage(result.heard && result.answer ? "“" + result.heard + "” — " + result.answer : result.answer || "“" + result.heard + "”");
-      doAction(result);
     })();
   }
   function endTalk(): void {
@@ -752,7 +790,7 @@ export default function RiderFlow() {
   async function sosButton(): Promise<void> {
     stopSpeaking();
     const pos = position.current;
-    const r = pos ? await askByText("Тусламж хэрэгтэй", pos.lat, pos.lon, { step, route: "", alight: "" }) : null;
+    const r = pos ? await askByText("Тусламж хэрэгтэй", pos.lat, pos.lon, askContext()) : null;
     startSos("sms", r ?? { heard: "", answer: "", speech: [""], action: "sos", plan: null });
   }
   function openSettings(): void {
@@ -766,6 +804,10 @@ export default function RiderFlow() {
   }
   function typedDestination(text: string): void {
     planTrip(text);
+  }
+  function typedPlace(text: string): void {
+    setStep("working");
+    locateByText(text).then(applyPlace);
   }
   function typeDestination(): void {
     openTyping("dest");
@@ -887,12 +929,23 @@ export default function RiderFlow() {
   const setupNow = step === "number" || step === "numberConfirm" || step === "typing";
   if (mode === "sr" && !sos && !listeningNow && !setupNow && step !== "locating" && step !== "working") {
     actions = actions.concat(
-      { id: "talk", label: "Дуугаар асуух", onActivate: startTalk },
+      talking
+        ? { id: "talk", label: "Сонсохоо болих", onActivate: endTalk }
+        : { id: "talk", label: "Дуугаар асуух", onActivate: startTalk },
       { id: "sos", label: "Яаралтай тусламж", onActivate: sosButton },
     );
     if (step === "ask" || step === "where") {
       actions = actions.concat({ id: "settings", label: "Тохиргоо", onActivate: openSettings });
     }
+  }
+
+  function readStartScreen(): void {
+    unlockAudio();
+    say([
+      "Дэлгэц уншигчтай эхлэх. TalkBack, VoiceOver.",
+      phrase("menu_hear_again"),
+      "Эхлэх. Дэлгэц уншигчгүй бол хаана ч хамаагүй товшино уу.",
+    ]);
   }
 
   if (step === "start") {
@@ -906,6 +959,9 @@ export default function RiderFlow() {
           }}
         >
           Дэлгэц уншигчтай эхлэх (TalkBack, VoiceOver)
+        </button>
+        <button type="button" className="action" onClick={readStartScreen}>
+          {phrase("menu_hear_again")}
         </button>
         <button
           className="big start"
@@ -936,7 +992,7 @@ export default function RiderFlow() {
   if (step === "settings") {
     return (
       <main className="flow">
-        <Settings mode={mode} onMode={chooseMode} onDestination={typedDestination} onTutorial={replayTutorial} onBack={startOver} />
+        <Settings mode={mode} onMode={chooseMode} onDestination={typedDestination} onPlace={typedPlace} onTutorial={replayTutorial} onBack={startOver} />
       </main>
     );
   }
@@ -999,7 +1055,9 @@ export default function RiderFlow() {
         items={actions}
         primary={primary}
         menuId={sos ? "sos" : "main"}
-        intro={!listeningNow && step !== "camera" && step !== "locating" && step !== "working"}
+        title={title}
+        status={message}
+        intro={!listeningNow && step !== "locating" && step !== "working"}
         onHoldStart={startTalk}
         onHoldEnd={endTalk}
       >

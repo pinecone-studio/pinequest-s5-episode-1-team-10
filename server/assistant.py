@@ -204,6 +204,15 @@ def _nearest(lat, lon):
     return ["Хамгийн ойрын зогсоол:"] + planner.stop_pieces(st["name"]) + [planner.walk_piece(st["distance_m"])]
 
 
+def _walk_to_stop(context, lat, lon):
+    """How far to walk to the boarding stop. Compass guidance was removed; the distance is still true."""
+    board = (context.get("board") or "").strip()
+    metres = context.get("walk_m")
+    if board and isinstance(metres, int):
+        return ["Суух зогсоол:"] + planner.stop_pieces(board) + [planner.walk_piece(metres)]
+    return _nearest(lat, lon)
+
+
 def _where(lat, lon):
     """['Та Төв номын сан зогсоолоос 20 метр зайд байна.'] -- also the SOS message's location line."""
     st = _nearest_stop(lat, lon)
@@ -330,6 +339,8 @@ def reply(text, lat, lon, context=None):
             return say(plan["speech"], "plan", plan)
         except planner.PlanError as e:
             return say([str(e)])
+    if _has(t, "дагуул", "хөтл", "хөлөөр"):
+        return say(_walk_to_stop(context, lat, lon))
     if _has(t, "буудал хаана", "зогсоол хаана") and not bus_number:
         return say(_nearest(lat, lon))  # "Автобусны буудал хаана байна": no place named = the nearest one
     if words & PLACE_MARKERS or _has(t, "хүргээч", "хүргэж өг", "очихын тулд"):

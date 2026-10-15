@@ -2,6 +2,7 @@ import base64
 import binascii
 import os
 from contextlib import asynccontextmanager
+from typing import Optional
 
 import httpx
 import cv2
@@ -45,18 +46,7 @@ app = FastAPI(title="Bus Boarding Guide", lifespan=lifespan)
 
 @app.get("/health")
 def health():
-    # "speech": the phones recognise speech with Speechmatics (/stt/token); this server's Whisper stays
-    # for the older voice endpoints.
-    return {"ok": True, "speech": speechmatics.configured()}
-
-
-@app.post("/stt/token", response_model=SpeechToken)
-def speech_token():
-    """A 60 s Speechmatics key for one phone (the account key stays here)."""
-    try:
-        return speechmatics.temporary_key()
-    except (httpx.HTTPError, RuntimeError):
-        raise HTTPException(status_code=503, detail="Speech recognition unavailable")
+    return {"ok": True, "stt": True, "ocr": True}
 
 
 @app.get("/stops/nearest", response_model=NearestStop)
@@ -153,26 +143,29 @@ def _ask(heard, lat, lon, context):
     return AskResponse(heard=heard, answer=" ".join(r["speech"]), **r)
 
 
-def _context(step, route, alight):
-    return {"step": step, "route": route, "alight": alight}
+def _context(step, route, alight, board, walk_m):
+    return {"step": step, "route": route, "alight": alight, "board": board, "walk_m": walk_m}
 
 
 @app.post("/ask", response_model=AskResponse)
 async def ask_voice(request: Request, lat: float = Query(ge=-90, le=90), lon: float = Query(ge=-180, le=180),
-                    step: str = "", route: str = "", alight: str = ""):
+                    step: str = "", route: str = "", alight: str = "", board: str = "",
+                    walk_m: Optional[int] = Query(default=None, ge=0, le=20000)):
     """What the rider said (WAV body, like /plan/voice) -> answer or app action, from our bus data only.
-    step/route/alight: the trip in progress (current bus and where to get off), if any."""
+    step/route/alight: the trip in progress (current bus and where to get off), if any.
+    board/walk_m: the boarding stop and how far it is, for "guide me to the stop"."""
     heard = await _hear(request)
     if not heard:
         return AskResponse(heard="", answer=NOT_HEARD, speech=[NOT_HEARD])
-    return await run_in_threadpool(_ask, heard, lat, lon, _context(step, route, alight))
+    return await run_in_threadpool(_ask, heard, lat, lon, _context(step, route, alight, board, walk_m))
 
 
 @app.get("/ask", response_model=AskResponse)
 def ask_text(text: str = Query(min_length=1, max_length=200), lat: float = Query(ge=-90, le=90),
-             lon: float = Query(ge=-180, le=180), step: str = "", route: str = "", alight: str = ""):
+             lon: float = Query(ge=-180, le=180), step: str = "", route: str = "", alight: str = "", board: str = "",
+             walk_m: Optional[int] = Query(default=None, ge=0, le=20000)):
     """Typed (or browser-recognised) version of POST /ask."""
-    return _ask(text, lat, lon, _context(step, route, alight))
+    return _ask(text, lat, lon, _context(step, route, alight, board, walk_m))
 
 
 @app.get("/ride", response_model=RideResponse)

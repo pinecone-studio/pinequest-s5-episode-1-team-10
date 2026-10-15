@@ -65,6 +65,12 @@ def test_commands_need_a_trip_and_then_act():
     assert ask("Шинээр эхлэх")["action"] == "start_over" and ask("Заавар сонсох")["action"] == "tutorial"
 
 
+def test_guide_to_the_stop_says_the_distance():
+    assert ask("Зогсоол руу дагуулаад өгөөч")["speech"][0] == "Хамгийн ойрын зогсоол:"
+    guided = ask("Зогсоол руу хөтлөөд өгөөч", route="Ч:75", board="Home /Урд/", walk_m=120)
+    assert guided["speech"][0] == "Суух зогсоол:" and guided["speech"][-1] == "Зогсоол руу 120 метр алхана."
+
+
 def test_arrival_time_help_thanks_and_emergency():
     assert ask("Автобус хэзээ ирэх вэ?")["speech"] == assistant.NO_ETA
     assert ask("Юу хийж чадах вэ?")["speech"] == assistant.HELP
