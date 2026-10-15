@@ -596,3 +596,13 @@ def test_a_cheaper_direct_bus_still_beats_a_transfer(monkeypatch):
     body = plan("Зайсан").json()
     assert body["transfer"] is None
     assert body["board_stop"]["stop_id"] == "1" and body["route"] == "Ч:20" and body["stops_to_ride"] == 10
+
+
+def test_direct_bus_from_a_stop_beyond_the_8_closest_within_the_walk(monkeypatch):
+    # Eight stops ~110 m away have only Х:9; the one bus to Зайсан leaves from a stop ~500 m away, the
+    # 10th closest. Before, only the 8 closest stops were tried: "no bus goes there".
+    fillers = [(str(30 + i), "Filler", 47.9013, 106.8996 + 0.0001 * i, ["Х:9"]) for i in range(8)]
+    add_stops(monkeypatch, fillers + [("18", "Tenth", 47.9048, 106.9000, ["Ч:23"])], {"Ч:23": ["18", "13", "15"]})
+    body = plan("Зайсан").json()
+    assert body["board_stop"]["stop_id"] == "18" and body["route"] == "Ч:23"
+    assert body["board_stop"]["distance_m"] == 500

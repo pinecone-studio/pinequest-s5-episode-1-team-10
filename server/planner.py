@@ -669,12 +669,18 @@ def _suggest_to(words, named, nearby, lat, lon):
     # Every route through the origins and the destination: the transfer search needs their stop orders
     # (one Hamuga call per route variant the first time, then kept on disk).
     bus_api.load_route_directions(rid for st in origins + named + nearby for rids in st["route_ids"].values() for rid in rids)
+    # A direct bus may leave from any stop within the walk, not only the ORIGIN_LIMIT closest (those feed
+    # the transfer search, which tries every stop of every route). Only routes that also stop at the
+    # destination are loaded for them.
+    walkable = _within(lat, lon, WALK_MAX_M)
+    to_dest = {r for st in named + nearby for r in st["routes"]}
+    bus_api.load_route_directions(rid for st in walkable for r in st["routes"] if r in to_dest for rid in st["route_ids"][r])
 
     # Get off at the stop the rider named (direct or with one transfer); a neighbouring stop only if
     # nothing reaches the named one. A transfer only when it is cheaper than every direct bus (it costs
     # TRANSFER_PENALTY stops); of the direct buses, the shortest walk, then the fewest stops.
     for dests, exact in ((named, True), (nearby, False)):
-        trips = [t for t in (_best_direct(origins, dests), _best_transfer(origins, dests)) if t]
+        trips = [t for t in (_best_direct(walkable, dests), _best_transfer(origins, dests)) if t]
         if not trips:
             continue
         trip = min(trips, key=lambda t: t[0])
