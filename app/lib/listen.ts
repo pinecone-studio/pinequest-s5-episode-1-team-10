@@ -3,7 +3,7 @@
 import { speedMark } from "./speed";
 
 interface RecognitionResultEvent {
-  results: { [index: number]: { [index: number]: { transcript: string } } };
+  results: { length: number; [index: number]: { isFinal: boolean; [index: number]: { transcript: string } } };
 }
 
 interface Recognition {
@@ -20,6 +20,13 @@ interface Recognition {
 }
 
 type RecognitionClass = new () => Recognition;
+
+// Chrome on Android often keeps listening long after a Mongolian sentence ends, so the rider would
+// have to double tap to stop it. Instead the app watches the words as they come: this long without a
+// new word after the rider has spoken = they are done, and Chrome is asked for its final text.
+const SILENCE_MS = 1200;
+const NO_SPEECH_MS = 7000; // nothing said at all -> "not heard"
+const MAX_MS = 12000;
 
 // Why nothing came back, so the rider hears what to do instead of "not heard" again and again:
 //   no-mic       microphone blocked or missing
@@ -80,8 +87,24 @@ export function listenInBrowser(): { done: Promise<Heard>; stop: () => void } {
   const done = new Promise<Heard>(function (resolve) {
     let heard = "";
     let code = "";
+    let silence: ReturnType<typeof setTimeout> | undefined;
+    const noSpeech = setTimeout(stopNow, NO_SPEECH_MS);
+    const max = setTimeout(stopNow, MAX_MS);
+    function stopNow(): void {
+      try {
+        rec.stop();
+      } catch {
+        // already stopped
+      }
+    }
+    function finish(result: Heard): void {
+      clearTimeout(silence);
+      clearTimeout(noSpeech);
+      clearTimeout(max);
+      resolve(result);
+    }
     rec.lang = "mn-MN";
-    rec.interimResults = false;
+    rec.interimResults = true;
     rec.maxAlternatives = 1;
     rec.onaudiostart = function () {
       speedMark("listening");
@@ -89,29 +112,43 @@ export function listenInBrowser(): { done: Promise<Heard>; stop: () => void } {
     rec.onspeechend = function () {
       speedMark("speech end");
     };
-    // interimResults is off, so a result is the final one: answer now instead of waiting for onend
-    // (the recognizer still closes the microphone after it).
+    // A final result is answered at once, without waiting for onend (the recognizer still closes the
+    // microphone after it). Words still coming in only restart the silence wait.
     rec.onresult = function (e) {
-      heard = e.results[0][0].transcript.trim();
-      if (heard) {
-        speedMark("text");
-        resolve({ text: heard, error: "", code: "" });
+      let text = "";
+      let final = true;
+      for (let i = 0; i < e.results.length; i++) {
+        text += e.results[i][0].transcript;
+        final = final && e.results[i].isFinal;
       }
+      heard = text.trim();
+      if (!heard) {
+        return;
+      }
+      clearTimeout(noSpeech);
+      clearTimeout(silence);
+      if (final) {
+        speedMark("text");
+        finish({ text: heard, error: "", code: "" });
+        return;
+      }
+      silence = setTimeout(stopNow, SILENCE_MS);
     };
     rec.onerror = function (e) {
       code = e.error;
     };
+    // Ended without a final result: the last words heard still count.
     rec.onend = function () {
       if (heard) {
-        resolve({ text: heard, error: "", code: "" });
+        finish({ text: heard, error: "", code: "" });
       } else {
-        resolve({ text: "", error: kind(code || "no-speech"), code: code || "no-speech" });
+        finish({ text: "", error: kind(code || "no-speech"), code: code || "no-speech" });
       }
     };
     try {
       rec.start();
     } catch (e) {
-      resolve({ text: "", error: "unsupported", code: e instanceof Error ? e.name : "start-failed" });
+      finish({ text: "", error: "unsupported", code: e instanceof Error ? e.name : "start-failed" });
     }
   });
   return {
