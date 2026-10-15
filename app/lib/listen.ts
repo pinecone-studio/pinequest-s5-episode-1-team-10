@@ -1,5 +1,6 @@
 // The browser's own speech recognition ("mn-MN"), used when the server has no Whisper
 // (free hosting: /api/health says "stt": false). Chrome / Android; not iPhone Safari.
+import { speedMark } from "./speed";
 
 interface RecognitionResultEvent {
   results: { [index: number]: { [index: number]: { transcript: string } } };
@@ -12,6 +13,8 @@ interface Recognition {
   onresult: ((e: RecognitionResultEvent) => void) | null;
   onerror: ((e: { error: string }) => void) | null;
   onend: (() => void) | null;
+  onaudiostart: (() => void) | null;
+  onspeechend: (() => void) | null;
   start(): void;
   stop(): void;
 }
@@ -70,8 +73,20 @@ export function listenInBrowser(): { done: Promise<Heard>; stop: () => void } {
     rec.lang = "mn-MN";
     rec.interimResults = false;
     rec.maxAlternatives = 1;
+    rec.onaudiostart = function () {
+      speedMark("listening");
+    };
+    rec.onspeechend = function () {
+      speedMark("speech end");
+    };
+    // interimResults is off, so a result is the final one: answer now instead of waiting for onend
+    // (the recognizer still closes the microphone after it).
     rec.onresult = function (e) {
       heard = e.results[0][0].transcript.trim();
+      if (heard) {
+        speedMark("text");
+        resolve({ text: heard, error: "", code: "" });
+      }
     };
     rec.onerror = function (e) {
       code = e.error;

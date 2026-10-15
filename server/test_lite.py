@@ -47,6 +47,18 @@ def test_tts_redirects_to_premade_clip_or_404(monkeypatch):
     assert client.get("/api/tts", params={"text": "Шинэ өгүүлбэр"}).status_code == 404
 
 
+def test_ask_names_the_premade_clip_of_each_sentence(monkeypatch):
+    # Same name /api/tts would redirect to; null for a sentence without a clip (the app asks /api/tts).
+    params = {"text": "75 хаагуур явдаг вэ?", "lat": 47.9003, "lon": 106.9}
+    speech = client.get("/api/ask", params=params).json()["speech"]
+    first = hashlib.sha1(tts.speakable(speech[0]).encode()).hexdigest()[:20]
+    monkeypatch.setattr(lite, "CLIPS", {first})
+    body = client.get("/api/ask", params=params).json()
+    assert body["clips"] == [first] + [None] * (len(speech) - 1)
+    r = client.get("/api/tts", params={"text": speech[0]}, follow_redirects=False)
+    assert r.headers["location"] == f"/tts/{first}.mp3"
+
+
 def test_no_sign_reading_means_unsure_and_no_voice_endpoints():
     r = client.post("/api/verify", json={"sign_crop": "aGk=", "stop_id": "1", "wanted_route": "Ч:75"})
     assert r.json()["verdict"] == "unsure"

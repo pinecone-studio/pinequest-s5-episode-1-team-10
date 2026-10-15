@@ -65,8 +65,17 @@ def speakable(text):
         return _normalizer().normalize(text)
 
 
+def _key(spoken):
+    return hashlib.sha1(spoken.encode()).hexdigest()[:20]
+
+
+def clip_key(text):
+    """Cache name of text's clip (the WAV here, the MP3 on free hosting). ValueError if unspeakable."""
+    return _key(speakable(text))
+
+
 def _path(spoken):
-    return CACHE_DIR / VOICE / (hashlib.sha1(spoken.encode()).hexdigest()[:20] + ".wav")
+    return CACHE_DIR / VOICE / (_key(spoken) + ".wav")
 
 
 def is_cached(text):

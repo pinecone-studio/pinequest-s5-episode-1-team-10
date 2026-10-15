@@ -3,9 +3,9 @@
 // Rider journey: start -> where am I (GPS, or say it) -> say destination -> one suggested bus ->
 // camera -> "this is your bus". Every screen is a VoiceMenu: swipe to hear the options, double tap
 // to choose, all spoken in Mongolian, so a blind rider always knows what they can do.
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { AskResponse, BoardStop, PlanResponse, PlanStop, VoiceLocateResponse } from "../../shared/contract";
-import { askByText, askByVoice, locateBySpeech, locateByText, nearestStop, requestPlan, requestVoicePlan, serverCaps, type ServerCaps } from "../lib/api";
+import { askByText, askByVoice, locateBySpeech, locateByText, nearestStop, requestPlan, requestVoicePlan, serverCaps, wakeServer, type ServerCaps } from "../lib/api";
 import { listenInBrowser, type Heard } from "../lib/listen";
 import { GPS_OK_M, locate, type Position } from "../lib/location";
 import { beep, record, type Recording } from "../lib/record";
@@ -17,7 +17,8 @@ import { loadDetector } from "../lib/detector";
 import { loadDoorDetector } from "../lib/doorDetector";
 import { loadOcr } from "../lib/ocr";
 import type { DoorGuide } from "../lib/door";
-import { phrase, prefetch, say, stopSpeaking, unlockAudio, vibrate, type PhraseKey } from "../lib/speech";
+import { phrase, prefetch, rememberClips, say, stopSpeaking, unlockAudio, vibrate, type PhraseKey } from "../lib/speech";
+import { onSpeedReport, showSpeed, speedCancel, speedMark, speedStart } from "../lib/speed";
 import BusCamera, { doorSpeech } from "./BusCamera";
 import RideGuide, { leftSpeech, type RideInfo } from "./RideGuide";
 import Tutorial, { tutorialNeeded } from "./Tutorial";
@@ -426,6 +427,12 @@ export default function RiderFlow() {
   // place, so the camera or ride keeps running; the server answers from our bus data only and may name
   // an action ("plan", "open_camera", "door"...), done here like the menu option would.
   const talk = useRef<{ stop: () => void } | null>(null);
+  const [speedLine, setSpeedLine] = useState("");
+  useEffect(function () {
+    if (showSpeed()) {
+      onSpeedReport(setSpeedLine);
+    }
+  }, []);
   function startTalk(): void {
     if (talk.current) {
       return;
@@ -436,6 +443,8 @@ export default function RiderFlow() {
       announce(["ask_location"]);
       return;
     }
+    speedStart();
+    wakeServer(); // a sleeping free server starts up while the rider is still talking
     const legNow = plan ? legOf(plan, legRef.current) : null;
     const context = { step, route: legNow ? legNow.route : "", alight: legNow ? legNow.alight.name : "" };
     setMessage(phrase("listening"));
@@ -446,25 +455,35 @@ export default function RiderFlow() {
       },
     };
     talk.current = session;
+    // "Түр хүлээнэ үү" only if the answer is slow; a fast answer would just cut it off mid-word.
+    let waitTimer: ReturnType<typeof setTimeout> | undefined;
+    function sayWaitIfSlow(): void {
+      waitTimer = setTimeout(function () {
+        say([phrase("wait")]);
+      }, 700);
+    }
     (async function () {
-      await beep();
       let result: AskResponse | null;
       if (!caps.current.stt) {
+        // The microphone opens while the beep plays, so the rider can talk right after it.
         const rec = listenInBrowser();
         session.stop = rec.stop;
         if (released) {
           rec.stop();
         }
+        beep();
         const heard = await rec.done;
         const text = heard.text;
         talk.current = null;
         if (!text) {
+          speedCancel();
           notHeard(heard);
           return;
         }
-        say([phrase("wait")]);
+        sayWaitIfSlow();
         result = await askByText(text, pos.lat, pos.lon, context);
       } else {
+        await beep();
         const rec = record();
         recording.current = rec;
         session.stop = rec.stop;
@@ -475,16 +494,22 @@ export default function RiderFlow() {
         recording.current = null;
         talk.current = null;
         if (!wav) {
+          speedCancel();
           announce([rec.noMic() ? "mic_failed" : "not_heard"]);
           return;
         }
-        say([phrase("wait")]); // a new sentence's voice is made live (~8 s); fixed ones play at once
+        speedMark("recorded");
+        sayWaitIfSlow(); // a new sentence's voice is made live (~8 s); fixed ones play at once
         result = await askByVoice(wav, pos.lat, pos.lon, context);
       }
+      clearTimeout(waitTimer);
       if (!result) {
+        speedCancel();
         announce(["server_down"]);
         return;
       }
+      speedMark("answer");
+      rememberClips(result.speech, result.clips);
       setMessage(result.heard && result.answer ? "“" + result.heard + "” — " + result.answer : result.answer || "“" + result.heard + "”");
       doAction(result);
     })();
@@ -714,7 +739,7 @@ export default function RiderFlow() {
   if (mode === "sr") {
     return (
       <main className="flow">
-        <SrScreen title={title} status={message} actions={actions}>
+        <SrScreen title={title} status={speedLine ? message + " [" + speedLine + "]" : message} actions={actions}>
           {view}
         </SrScreen>
       </main>
@@ -729,6 +754,7 @@ export default function RiderFlow() {
       <p className="status" aria-live="polite">
         {message}
       </p>
+      {speedLine && <p className="status">{speedLine}</p>}
       <VoiceMenu
         key={step}
         items={actions}

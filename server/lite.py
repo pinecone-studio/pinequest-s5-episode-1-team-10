@@ -6,7 +6,6 @@ speech recognition in the browser (/health "stt": false) and sign reading with P
 browser ("ocr": false -> the app reads the sign and sends only the texts to /api/verify/texts).
 Routes carry the /api prefix because Vercel passes the original path through.
 """
-import hashlib
 import json
 from pathlib import Path
 
@@ -72,7 +71,7 @@ def ask(text: str = Query(min_length=1, max_length=200), lat: float = Query(ge=-
         r = assistant.reply(text, lat, lon, {"step": step, "route": route, "alight": alight})
     except (httpx.HTTPError, RuntimeError):
         raise HTTPException(status_code=503, detail=UNAVAILABLE)
-    return AskResponse(heard=text, answer=" ".join(r["speech"]), **r)
+    return AskResponse(heard=text, answer=" ".join(r["speech"]), clips=[clip_name(s) for s in r["speech"]], **r)
 
 
 @app.get("/api/ride", response_model=RideResponse)
@@ -89,14 +88,22 @@ def ride(route: str = Query(min_length=1, max_length=16), board: str = Query(min
     return {"route": route, "stops": stops}
 
 
+def clip_name(text):
+    """Name of the pre-made clip for text (static /tts/<name>.mp3), None if there is none."""
+    try:
+        key = tts.clip_key(text)
+    except ValueError:
+        return None
+    return key if key in CLIPS else None
+
+
 @app.get("/api/tts")
 def speak(text: str = Query(min_length=1, max_length=tts.MAX_CHARS)):
     """Redirect to the pre-made clip (a static, cached file); 404 = shown as text only."""
     try:
-        spoken = tts.speakable(text)
+        key = tts.clip_key(text)
     except ValueError:
         raise HTTPException(status_code=422, detail="Can't speak this text")
-    key = hashlib.sha1(spoken.encode()).hexdigest()[:20]
     if key not in CLIPS:
         raise HTTPException(status_code=404, detail="No pre-made clip for this text")
     return RedirectResponse(f"/tts/{key}.mp3", status_code=302, headers={"Cache-Control": "public, max-age=86400"})
