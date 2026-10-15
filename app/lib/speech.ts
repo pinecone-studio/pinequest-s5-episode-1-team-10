@@ -2,6 +2,7 @@
 import phrases from "../../shared/phrases.json";
 import { speedAudio } from "./speed";
 import { soundScheduled, soundStarted } from "./latency";
+import { spokenText } from "./reader/speechText";
 
 export type PhraseKey = keyof typeof phrases;
 
@@ -376,6 +377,8 @@ async function playClips(texts: string[], clips: Promise<string | null>[], mine:
 
 // The phone's own voice for a sentence without a Mongolian clip: a Mongolian voice if the phone has
 // one, else Russian (reads Cyrillic), else the default. Never waits past the sentence's length.
+// Numbers go to it as Mongolian words ("460 метр" -> "дөрвөн зуун жаран метр"): a Russian voice would
+// read digits in Russian. Only this fallback: clip keys stay the server's text.
 function speakWithPhone(text: string): Promise<void> {
   return new Promise(function (resolve) {
     const synth = typeof window === "undefined" ? null : window.speechSynthesis;
@@ -383,7 +386,8 @@ function speakWithPhone(text: string): Promise<void> {
       resolve();
       return;
     }
-    const u = new SpeechSynthesisUtterance(text);
+    const spoken = spokenText(text);
+    const u = new SpeechSynthesisUtterance(spoken);
     const voices = synth.getVoices();
     const voice =
       voices.find(function (item) {
@@ -398,7 +402,7 @@ function speakWithPhone(text: string): Promise<void> {
     } else {
       u.lang = "mn-MN";
     }
-    const timer = setTimeout(resolve, 1500 + text.length * 120);
+    const timer = setTimeout(resolve, 1500 + spoken.length * 120);
     u.onstart = speedAudio;
     u.onend = u.onerror = function () {
       clearTimeout(timer);

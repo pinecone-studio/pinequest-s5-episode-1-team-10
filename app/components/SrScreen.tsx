@@ -8,6 +8,7 @@ import type { MenuItem } from "./VoiceMenu";
 
 interface Props {
   title: string;
+  spokenTitle?: string; // what the screen reader says instead, when the title has a route code ("Ч:29Б")
   stepId: string; // focus moves when the step changes, even if the heading text stays the same
   status: string;
   live: boolean; // true: VoiceOver reads status changes. false: the app's own voice is reading them.
@@ -15,7 +16,7 @@ interface Props {
   children?: ReactNode; // camera view, ride progress
 }
 
-export default function SrScreen({ title, stepId, status, live, actions, children }: Props) {
+export default function SrScreen({ title, spokenTitle, stepId, status, live, actions, children }: Props) {
   const heading = useRef<HTMLHeadingElement>(null);
 
   useEffect(
@@ -29,8 +30,16 @@ export default function SrScreen({ title, stepId, status, live, actions, childre
 
   return (
     <section className="screen">
+      {/* With a spoken form, the heading's name is only the hidden words: read once, digits never. */}
       <h1 ref={heading} tabIndex={-1} className="title">
-        {title}
+        {spokenTitle ? (
+          <>
+            <span aria-hidden="true">{title}</span>
+            <span className="sr-only">{spokenTitle}</span>
+          </>
+        ) : (
+          title
+        )}
       </h1>
       {/* A live region talks over the app's Mongolian clip. VoiceOver can still read this by swiping. */}
       <p className="status" role={live ? "status" : undefined} aria-live={live ? "polite" : undefined} aria-atomic={live ? true : undefined}>

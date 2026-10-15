@@ -20,7 +20,7 @@ import { familyNumber, openLink, saveFamilyNumber, smsUrl, sosMessage, telUrl } 
 import { callFamily, isCallFamilySpeech, isHelpSpeech } from "../lib/sos";
 import { groupDigits, phoneDigits } from "../lib/phoneWords";
 import { currentSavedReader, saveMode, setCurrentReader, subscribeReader, type Mode, type Reader } from "../lib/mode";
-import { routeLabel } from "../lib/route";
+import { routeLabel, routeSpeech } from "../lib/route";
 import { loadDetector } from "../lib/detector";
 import { prefetchStopRoutes } from "../lib/stopRoutes";
 import { loadDoorDetector } from "../lib/doorDetector";
@@ -1032,9 +1032,12 @@ export default function RiderFlow() {
   // Each screen: a heading saying where you are, and at most three things to do. Everything else is
   // by voice (press and hold, or "Дуугаар асуух" with a screen reader).
   let title = "";
+  // What VoiceOver / TalkBack read instead of a title with a route code in it ("Ч:29Б" -> "Ч хорин ес Б").
+  let spokenTitle = "";
   let actions: MenuItem[] = [];
   let primary: number | undefined = 0;
   const cur = plan ? legOf(plan, leg) : null; // the bus the rider is taking now
+  const routeWords = cur ? routeSpeech(cur.route) : ""; // "" when it has no route number: the title as shown
   if (step === "locating" || step === "working") {
     title = step === "locating" ? "Байршил тогтоож байна" : "Түр хүлээнэ үү";
   } else if (step === "confirmPlace") {
@@ -1101,17 +1104,21 @@ export default function RiderFlow() {
     actions = [{ ...label(mode === "sr" ? asked : "stop", "menu_stop_listening"), onActivate: stopRecording }];
   } else if (step === "planned" && cur) {
     title = routeLabel(cur.route) + " автобус";
+    spokenTitle = routeWords && routeWords + " автобус";
     actions = [{ ...label("camera", "menu_open_camera"), onActivate: openCamera }];
   } else if (step === "camera" && cur && !found) {
     title = routeLabel(cur.route) + " автобус хайж байна";
+    spokenTitle = routeWords && routeWords + " автобус хайж байна";
     primary = undefined; // an accidental double tap mustn't close the camera
     actions = [{ ...label("back", "menu_back"), onActivate: backToPlan }];
   } else if (step === "camera" && cur) {
     title = routeLabel(cur.route) + " ирлээ: хаалга руу";
+    spokenTitle = routeWords && routeWords + " ирлээ: хаалга руу";
     primary = 1; // "after you sit down, double tap" (door_close) -> "I'm on the bus"
     actions = [{ ...label("door", "menu_door"), onActivate: whereIsDoor }, { ...label("boarded", "menu_boarded"), onActivate: boarded }];
   } else if (step === "ride" && cur) {
     title = routeLabel(cur.route) + " автобусанд явж байна";
+    spokenTitle = routeWords && routeWords + " автобусанд явж байна";
     actions = [{ ...label("left", "menu_stops_left"), onActivate: stopsLeft }, { ...label("off", "menu_got_off"), onActivate: gotOff }];
   } else if (step === "arrived" && plan) {
     title = (plan.transfer ? plan.transfer.alight_stop : plan.alight_stop).name.replace(/\s*\/[^/]*\//g, "") + ": ирлээ";
@@ -1120,6 +1127,7 @@ export default function RiderFlow() {
   }
   if (sos) {
     title = "Яаралтай тусламж";
+    spokenTitle = "";
     primary = sos.mode === "sms" ? 0 : 1;
     actions = [
       { ...label("sos-send", "menu_sos_send"), onActivate: sosSend },
@@ -1245,6 +1253,7 @@ export default function RiderFlow() {
       <main className="flow">
         <SrScreen
           title={title}
+          spokenTitle={spokenTitle}
           stepId={sos ? "sos" : step}
           status={speedLine ? message + " [" + speedLine + "]" : message}
           live={reader === "screen"}
