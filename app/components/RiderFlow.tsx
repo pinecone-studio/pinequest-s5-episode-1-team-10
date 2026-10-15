@@ -15,7 +15,7 @@ import { GPS_OK_M, locate, type Position } from "../lib/location";
 import { primeBeacon } from "../lib/beacon";
 import { familyNumber, openLink, saveFamilyNumber, smsUrl, sosMessage, telUrl } from "../lib/family";
 import { groupDigits, phoneDigits } from "../lib/phoneWords";
-import { saveMode, type Mode } from "../lib/mode";
+import { savedReader, saveMode, saveReader, type Mode, type Reader } from "../lib/mode";
 import { routeLabel } from "../lib/route";
 import { loadDetector } from "../lib/detector";
 import { loadDoorDetector } from "../lib/doorDetector";
@@ -99,8 +99,20 @@ function testPosition(): Position | null {
 }
 
 export default function RiderFlow() {
-  const [step, setStep] = useState<Step>("start");
+  const [step, setStepState] = useState<Step>("start");
+  const stepRef = useRef<Step>("start");
+  // A new step in screen-reader mode: the app's clip waits until VoiceOver has read the short title.
+  const delaySpeech = useRef(false);
+  function setStep(next: Step): void {
+    if (next !== stepRef.current) {
+      delaySpeech.current = true;
+      stepRef.current = next;
+    }
+    setStepState(next);
+  }
   const [mode, setMode] = useState<Mode>("voice");
+  const [reader, setReader] = useState<Reader>("app");
+  const readerRef = useRef<Reader>("app");
   const [serverOcr, setServerOcr] = useState(true); // false on free hosting: the phone reads the signs
   const modeRef = useRef<Mode>("voice"); // for callbacks
   // "Swipe right / double tap" only make sense without a screen reader.
@@ -130,13 +142,56 @@ export default function RiderFlow() {
   const numberLater = useRef(false); // "Дараа нь": not asked again until the app is opened again
   const voiceBroken = useRef(false); // this browser can't recognise Mongolian: typing from now on
 
+  useEffect(function () {
+    const saved = savedReader();
+    readerRef.current = saved;
+    setReader(saved);
+  }, []);
+
+  function chooseReader(next: Reader): void {
+    readerRef.current = next;
+    setReader(next);
+    saveReader(next);
+    if (next === "screen") {
+      stopSpeaking();
+    }
+  }
+
+  // The app's Mongolian voice, unless Settings says the screen reader should read the status.
+  // On a new screen-reader step the clip starts 600 ms after the heading takes focus.
+  function voice(texts: string[]): Promise<void> {
+    const joined = texts
+      .filter(function (item) {
+        return item.trim() !== "";
+      })
+      .join(" ");
+    if (joined) {
+      setMessage(joined);
+    }
+    if (modeRef.current === "sr" && readerRef.current === "screen") {
+      stopSpeaking();
+      delaySpeech.current = false;
+      return Promise.resolve();
+    }
+    const wait = delaySpeech.current && modeRef.current === "sr" && readerRef.current === "app";
+    delaySpeech.current = false;
+    if (wait) {
+      return new Promise(function (resolve) {
+        window.setTimeout(function () {
+          resolve(say(texts));
+        }, 600);
+      });
+    }
+    return say(texts);
+  }
+
   // Show and speak: keys are pre-made clips (instant), plain strings are made live.
   function announce(parts: (PhraseKey | { text: string })[]): Promise<void> {
-    const texts = parts.map(function (item) {
-      return typeof item === "string" ? phrase(item) : item.text;
-    });
-    setMessage(texts.join(" "));
-    return say(texts);
+    return voice(
+      parts.map(function (item) {
+        return typeof item === "string" ? phrase(item) : item.text;
+      }),
+    );
   }
 
   function setPlaceName(name: string): void {
@@ -934,7 +989,15 @@ export default function RiderFlow() {
   if (step === "settings") {
     return (
       <main className="flow">
-        <Settings mode={mode} onMode={chooseMode} onDestination={typedDestination} onTutorial={replayTutorial} onBack={startOver} />
+        <Settings
+          mode={mode}
+          reader={reader}
+          onMode={chooseMode}
+          onReader={chooseReader}
+          onDestination={typedDestination}
+          onTutorial={replayTutorial}
+          onBack={startOver}
+        />
       </main>
     );
   }
@@ -974,7 +1037,7 @@ export default function RiderFlow() {
   if (mode === "sr") {
     return (
       <main className="flow">
-        <SrScreen title={title} status={speedLine ? message + " [" + speedLine + "]" : message} actions={actions}>
+        <SrScreen title={title} status={speedLine ? message + " [" + speedLine + "]" : message} live={reader === "screen"} actions={actions}>
           {typing}
           {view}
         </SrScreen>

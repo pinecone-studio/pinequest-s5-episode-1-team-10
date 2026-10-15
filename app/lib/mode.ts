@@ -27,3 +27,29 @@ export function saveMode(mode: Mode): void {
     // storage blocked: asked again next time
   }
 }
+
+// Who reads the status in screen-reader mode. "app" is the Mongolian clips. "screen" is VoiceOver
+// or TalkBack, and the app stays quiet so the two voices never talk at once.
+export type Reader = "app" | "screen";
+
+const READER_KEY = "avtobus.reader";
+
+export function savedReader(): Reader {
+  const q = new URLSearchParams(window.location.search).get("reader");
+  if (q === "app" || q === "screen") {
+    return q;
+  }
+  try {
+    return window.localStorage.getItem(READER_KEY) === "screen" ? "screen" : "app";
+  } catch {
+    return "app";
+  }
+}
+
+export function saveReader(reader: Reader): void {
+  try {
+    window.localStorage.setItem(READER_KEY, reader);
+  } catch {
+    // storage blocked: the app voice stays the default
+  }
+}
