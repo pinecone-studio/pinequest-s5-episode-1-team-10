@@ -126,6 +126,7 @@ Read this first every session. Before `/clear`, update all three sections:
 - **2026-10-07** Plan before work: show plan + questions, wait for approval.
 
 ## Done
+- **2026-10-15** **main didn't build after #27 + #28** (merged on top of #26): the #26/#27 conflict in `BusCamera.tsx` was resolved by deleting the end of the camera-restart code and the start of `start()` (camera permission hint + its 15 s repeat, the visibility listener), leaving a syntax error; `RiderFlow.tsx` `useSyncExternalStore` fallback typed as string. Rebuilt the block in #27's style (`speak` = status + speech), restored the `explainPermission` import, typed the fallback `Reader`; made the 10 missing clips (#27's new sentences). Checked: tsc + eslint clean, 106 server tests, `next build`, blind voice flow, SOS branches, camera in WebKit (photo 1 yes 3.05 s, photo 2 never), real camera path (no bus -> bus seen -> 55-р автобус ирлээ -> door 1 o'clock), safety (wake lock, camera restart, ride resume), 0 errors.
 - **2026-10-15** `app/lib/ocr.ts`: OCR keys split on `
 ?
 ` — on a Windows checkout (git autocrlf) every character had a `

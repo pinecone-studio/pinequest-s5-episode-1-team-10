@@ -113,7 +113,7 @@ export default function RiderFlow() {
     setStepState(next);
   }
   const [mode, setMode] = useState<Mode>("voice");
-  const reader = useSyncExternalStore(subscribeReader, currentSavedReader, function () {
+  const reader = useSyncExternalStore(subscribeReader, currentSavedReader, function (): Reader {
     return "app";
   });
   const readerRef = useRef<Reader>("app");
