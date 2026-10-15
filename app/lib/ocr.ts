@@ -42,7 +42,9 @@ export function loadOcr(): Promise<boolean> {
           return item.text();
         }),
       ]);
-      keys = ["blank"].concat(text.split("\n"), [" "]);
+      // \r?\n: a Windows checkout (git autocrlf) turns the file into CRLF, and a "\r" glued to every
+      // character made "455" arrive as "4\r5\r5\r" -> never a route number, never "yes".
+      keys = ["blank"].concat(text.split(/\r?\n/), [" "]);
       det = await exclusive(function () {
         return rt.ort.InferenceSession.create(detBytes, { executionProviders: rt.providers });
       });
