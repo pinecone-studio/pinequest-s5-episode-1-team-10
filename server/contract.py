@@ -78,6 +78,9 @@ class PlanResponse(BaseModel):
     found_speech: str = Field(description='Mongolian "this is your bus" sentence for when /verify says yes')
     transfer: Optional[Transfer] = Field(default=None, description="Two-bus trip: route/alight_stop/stops_to_ride above "
                                                                    "are the FIRST bus; null for a direct bus")
+    sure: bool = Field(default=True, description="False: the destination was a sound-alike, not the whole stop name "
+                                                 "heard; ask the rider 'is it <destination>?' before the trip")
+    alternatives: list[str] = Field(default=[], description="When not sure: other stop names that sound like what was heard")
 
 
 class LocatedStop(BaseModel):

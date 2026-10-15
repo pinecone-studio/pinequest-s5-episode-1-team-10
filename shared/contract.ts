@@ -62,6 +62,8 @@ export interface PlanResponse {
   speech: string[]; // Mongolian pieces to speak in order (all pre-recordable); fetch each from /tts
   found_speech: string; // Mongolian "this is your bus" sentence for when /verify says yes
   transfer: Transfer | null; // two-bus trip: route/alight_stop/stops_to_ride above are the FIRST bus
+  sure?: boolean; // false: the destination is a sound-alike of what was heard: ask "is it <destination>?" first
+  alternatives?: string[]; // when not sure: other stop names that sound like what was heard
 }
 
 // Voice assistant. POST /ask?lat=&lon= with a WAV body, or GET /ask?text=&lat=&lon=. Answers come only

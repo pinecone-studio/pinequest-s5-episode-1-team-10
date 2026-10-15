@@ -579,12 +579,42 @@ def _suggest_bus(num, letter, prefix, lat, lon):
     raise PlanError(MSG_NO_BUS_NEAR)
 
 
+ALT_MIN = 0.6  # another stop name this close to what was heard is offered when the match isn't exact
+ALT_MAX = 2
+
+
+def _alternatives(words, named):
+    """Other stop names that sound like what was heard, best first (not the chosen one)."""
+    phrase = _squash(" ".join(words))
+    chosen = {bus_api.base_name(s["name"]) for s in named}
+    scored = {}
+    for s in bus_api._stops():
+        base = bus_api.base_name(s["name"])
+        if base in chosen or base in scored:
+            continue
+        scored[base] = (difflib.SequenceMatcher(None, phrase, _squash(base)).ratio(), stop_name(s["name"]))
+    best = sorted(scored.values(), reverse=True)[:ALT_MAX]
+    return [name for score, name in best if score >= ALT_MIN]
+
+
 def suggest(text, lat, lon):
+    """PlanResponse dict. "sure" is False when the destination wasn't heard as a whole stop name (a
+    sound-alike was chosen): the app asks "is it X?" before giving the trip, with "alternatives"."""
     bus = bus_request(text)
     if bus:
         return _suggest_bus(*bus, lat, lon)
     words = query_words(text)
     named, nearby = find_destination(words, text)
+    # Sure = the whole stop name was heard, even split up by speech recognition ("Сүх баатарын тал бай").
+    said = {_squash(fold(" ".join(words))), _squash(fold(cyrillic(text)))}
+    sure = bool(exact_name(text)) or any(_squash(fold(bus_api.base_name(s["name"]))) in said for s in named)
+    plan = _suggest_to(words, named, nearby, lat, lon)
+    plan["sure"] = sure
+    plan["alternatives"] = [] if sure else _alternatives(words, named)
+    return plan
+
+
+def _suggest_to(words, named, nearby, lat, lon):
     if not named and not words:
         raise PlanError(MSG_SAY_AGAIN)
     if not named:

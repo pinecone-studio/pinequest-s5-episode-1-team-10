@@ -514,3 +514,14 @@ def test_premade_only_server_refuses_new_clips(monkeypatch, tmp_path):
     monkeypatch.setattr(tts, "CACHE_DIR", tmp_path)
     monkeypatch.setattr(tts, "LIVE", False)
     assert client.get("/tts", params={"text": "Шинэ өгүүлбэр"}).status_code == 422
+
+
+def test_plan_says_when_the_destination_is_only_a_sound_alike():
+    exact = plan("Сансар ШТС руу явмаар байна").json()
+    assert exact["sure"] is True and exact["alternatives"] == []
+    split = plan("Сансар Ш Т С").json()  # speech recognition split the name: still the whole name
+    assert split["sure"] is True
+    guess = plan("Сансаар").json()  # misheard: a sound-alike was chosen, so the app asks first
+    assert guess["alight_stop"]["stop_id"] == "3"
+    assert guess["sure"] is False
+    assert "Сансар ШТС" not in guess["alternatives"]  # never offers the chosen stop again

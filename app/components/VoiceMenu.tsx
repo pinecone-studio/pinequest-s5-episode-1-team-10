@@ -1,6 +1,9 @@
 "use client";
 
 // VoiceOver-style screen for blind riders: the whole screen is one touch surface.
+// Every screen first reads all its buttons, numbered ("Энэ дэлгэцэнд 3 товч байна. Нэгдүгээр товч:
+// ..."), and what a double tap does right away; every option reached says its number and "Сонгох бол
+// хоёр товшино уу", so the rider always knows what a double tap will do. No microphone for choosing.
 //   swipe right / left  -> next / previous option, read aloud (Mongolian TTS)
 //   one tap             -> read the current option again
 //   double tap          -> choose it (with nothing chosen yet: the screen's main action)
@@ -9,7 +12,7 @@
 // Keyboard (desktop testing, Bluetooth keyboards): arrows move, Enter/Space choose, R repeats.
 // Options are also real buttons with labels, so the phone's own screen reader can use them.
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
-import { phrase, say, sayAfter, unlockAudio, vibrate } from "../lib/speech";
+import { phrase, say, sayAfter, unlockAudio, vibrate, type PhraseKey } from "../lib/speech";
 
 export interface MenuItem {
   id: string;
@@ -34,6 +37,16 @@ export const HOLD_MS = 500;
 
 // The gesture hint follows the options only the first few times; after that the rider knows it.
 let hintsLeft = 3;
+const NUMBERED = 8; // button_1..button_8, buttons_1..buttons_8 in phrases.json
+
+function spoken(item: MenuItem): string[] {
+  return item.speech ?? [item.label];
+}
+
+// "Хоёрдугаар товч:" for index 1.
+function ordinal(i: number): string[] {
+  return i < NUMBERED ? [phrase(("button_" + (i + 1)) as PhraseKey)] : [];
+}
 
 export default function VoiceMenu({ items, primary, menuId, onHoldStart, onHoldEnd, intro, children }: Props) {
   const [index, setIndexState] = useState(-1); // -1: nothing reached yet
@@ -70,7 +83,12 @@ export default function VoiceMenu({ items, primary, menuId, onHoldStart, onHoldE
         return;
       }
       introduced.current = menuId + labels;
-      const texts = [phrase("options_intro")].concat(labels.split("|"));
+      let texts = items.length <= NUMBERED ? [phrase(("buttons_" + items.length) as PhraseKey)] : [];
+      items.forEach(function (item, i) {
+        texts = texts.concat(ordinal(i), spoken(item));
+      });
+      const now = primary !== undefined ? items[primary] : undefined;
+      texts = texts.concat(now ? [phrase("double_tap_now")].concat(spoken(now)) : [phrase("swipe_first")]);
       if (hintsLeft > 0) {
         hintsLeft--;
         texts.push(phrase("options_hint"));
@@ -93,8 +111,7 @@ export default function VoiceMenu({ items, primary, menuId, onHoldStart, onHoldE
   }
 
   function speak(i: number): void {
-    const item = items[i];
-    say(item.speech ?? [item.label]);
+    say(ordinal(i).concat(spoken(items[i]), phrase("double_tap_to_choose")));
   }
 
   function move(step: number): void {
