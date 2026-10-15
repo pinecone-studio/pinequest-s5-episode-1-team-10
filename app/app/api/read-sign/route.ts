@@ -2,7 +2,13 @@
 // The phone sends the crop as raw JPEG and decides itself (lib/parse-sign.ts); this only hides the key.
 // Region: no `preferredRegion` export. Next 16 deprecates it, and on Vercel it accepts only
 // auto/global/home (other values fail the deploy). deploy/vercel.sh already pins every function to icn1 (Seoul).
+import { Agent } from "undici";
 import type { ReadSignResponse } from "../../../../shared/contract";
+
+// One connection pool per server instance, kept open between requests (Node's own fetch closes an idle
+// connection after 4 s): no new TCP + TLS handshake to Azure per read. The phone's warm-up (?warm=1,
+// every 60 s while the bus screen is open) keeps it, and the function, warm.
+const azure = new Agent({ keepAliveTimeout: 90_000, keepAliveMaxTimeout: 600_000, connections: 8 });
 
 const API_VERSION = "2023-10-01";
 const MIN_WORD_CONFIDENCE = 0.8; // below: the word becomes "?", so a doubtful read can't become a "yes"
@@ -42,6 +48,8 @@ function lineText(line: AzureLine): string {
 }
 
 export async function POST(request: Request): Promise<Response> {
+  const begun = performance.now();
+  const warm = new URL(request.url).searchParams.get("warm") === "1";
   const endpoint = process.env.AZURE_VISION_ENDPOINT;
   const key = process.env.AZURE_VISION_KEY;
   if (!endpoint || !key) {
@@ -67,7 +75,8 @@ export async function POST(request: Request): Promise<Response> {
       body: image,
       signal: AbortSignal.timeout(AZURE_TIMEOUT_MS),
       cache: "no-store",
-    });
+      dispatcher: azure,
+    } as RequestInit & { dispatcher: Agent });
   } catch (e) {
     return fail(502, "Azure did not answer: " + (e instanceof Error ? e.name : String(e)));
   }
@@ -89,6 +98,8 @@ export async function POST(request: Request): Promise<Response> {
       lines.push(lineText(line));
     });
   });
-  const body: ReadSignResponse = { lines: lines, timingMs: timingMs };
+  const serverMs = Math.round(performance.now() - begun);
+  console.log("[read-sign] " + (warm ? "warm " : "") + image.byteLength + " bytes, azure " + timingMs + " ms, server " + serverMs + " ms");
+  const body: ReadSignResponse = { lines: warm ? [] : lines, azureMs: timingMs, serverMs: serverMs };
   return Response.json(body, { headers: { "Cache-Control": "no-store" } });
 }

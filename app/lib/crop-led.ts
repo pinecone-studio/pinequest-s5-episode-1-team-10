@@ -8,7 +8,7 @@ import type { Box } from "./box.ts";
 
 const SMALL_W = 320;
 const FALLBACK_MS = 2000;
-const FULL_W = 1280;
+const FULL_W = 1280; // a whole frame is the backup read: it must read on the first try (960 px / q 0.5 made "455" unsure)
 const MAX_CROPS = 2;
 const PAD = 0.15; // of the box width / height, on each side
 const MIN_ASPECT = 2.0; // a sign line is wide; lamps and traffic lights are round

@@ -31,7 +31,11 @@ interface Props {
 
 const FRAME_MS = 100; // ~10 frames a second
 const MAX_IN_FLIGHT = 3;
-const CALLS_PER_MINUTE = 20; // Azure free tier (F0), shared by every phone using the key
+const MAX_REQUESTS_PER_SEC = 20 / 60; // Azure free tier (F0): 20 a minute, shared by every phone using the key
+const CALLS_PER_MINUTE = MAX_REQUESTS_PER_SEC * 60;
+const WARM_EVERY_MS = 60000; // keep the server function and its Azure connection warm while the camera is open
+const CROP_BYTES = 20 * 1024; // target for a sign crop (grayscale JPEG, 10-20 KB)
+const TIMING_SAMPLES = 50; // for p50 / p95 on the debug line
 const BURST = 5; // reads sent at once when a sign appears; then one every 4 s
 const READ_TIMEOUT_MS = 2500; // a later answer is no vote
 const NO_ANSWER_MS = 5000; // reads sent this long with no answer at all -> "not sure"
@@ -41,7 +45,57 @@ const NOISE_IOU = 0.6;
 const NO_SIGN_HINT_MS = 12000; // no lit sign this long: "no bus, keep pointing at the road"
 const SIGN_HARD_MS = 10000; // signs read unclearly ("?") this long with no route number: "point at the front"
 const UNCLEAR_RECENT_MS = 3000;
-const JPEG_QUALITY = 0.85;
+// JPEG qualities tried, highest first, until a crop is under CROP_BYTES. A whole frame (960 px) is sent at
+// 0.5: ~80 KB, the smallest that still read the sign on photo 1 (640 px / 39 KB read nothing).
+const CROP_QUALITIES = [0.75, 0.6, 0.45];
+const FRAME_QUALITY = 0.6;
+
+function percentile(values: number[], p: number): number {
+  if (!values.length) {
+    return 0;
+  }
+  const sorted = values.slice().sort(function (a, b) {
+    return a - b;
+  });
+  return sorted[Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))];
+}
+
+function jpeg(canvas: HTMLCanvasElement, quality: number): Promise<Blob | null> {
+  return new Promise(function (resolve) {
+    canvas.toBlob(resolve, "image/jpeg", quality);
+  });
+}
+
+// The crop in grayscale on its own canvas (the cropper reuses its canvas on the next frame), as JPEG:
+// colour adds bytes and nothing for reading a sign.
+async function grayJpeg(crop: LedCrop): Promise<Blob | null> {
+  const from = crop.canvas;
+  const c = document.createElement("canvas");
+  c.width = from.width;
+  c.height = from.height;
+  const ctx = c.getContext("2d", { willReadFrequently: true }) as CanvasRenderingContext2D;
+  ctx.drawImage(from, 0, 0);
+  const img = ctx.getImageData(0, 0, c.width, c.height);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const y = (d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8;
+    d[i] = y;
+    d[i + 1] = y;
+    d[i + 2] = y;
+  }
+  ctx.putImageData(img, 0, 0);
+  if (crop.kind === "frame") {
+    return jpeg(c, FRAME_QUALITY);
+  }
+  let blob: Blob | null = null;
+  for (let i = 0; i < CROP_QUALITIES.length; i++) {
+    blob = await jpeg(c, CROP_QUALITIES[i]);
+    if (!blob || blob.size <= CROP_BYTES) {
+      break;
+    }
+  }
+  return blob;
+}
 
 // What the scanner is doing (?debug=1 shows it; tests read window.__scan).
 interface ScanStats {
@@ -56,6 +110,8 @@ interface ScanStats {
   lastLines: string;
   azureMs: number;
   roundTripMs: number;
+  lastKB: number; // size of the last image sent
+  timing: string; // p50 / p95 of the phone's whole wait and of the Azure call
   yesMs: number; // camera open -> "yes"
   error: string;
 }
@@ -93,12 +149,14 @@ export default function BusScanner({ stopId, route, foundSpeech, onFound, onErro
       const announcer = createAnnouncer(function (texts, earcon) {
         return announceRef.current(texts, earcon);
       });
-      const stats: ScanStats = { stage: "starting", video: "", frames: 0, sent: 0, answers: 0, busy: 0, overBudget: 0, noise: 0, lastLines: "", azureMs: 0, roundTripMs: 0, yesMs: 0, error: "" };
+      const stats: ScanStats = { stage: "starting", video: "", frames: 0, sent: 0, answers: 0, busy: 0, overBudget: 0, noise: 0, lastLines: "", azureMs: 0, roundTripMs: 0, lastKB: 0, timing: "", yesMs: 0, error: "" };
+      const totals: number[] = [];
+      const azures: number[] = [];
       (window as unknown as { __scan: ScanStats }).__scan = stats;
       const debugTimer = setInterval(function () {
         if (debugRef.current) {
           debugRef.current.textContent =
-            stats.stage + " · " + stats.video + " · frames " + stats.frames + " · sent " + stats.sent + " · answers " + stats.answers + " · dropped busy " + stats.busy + " / budget " + stats.overBudget + " / noise " + stats.noise + " · azure " + stats.azureMs + " ms · round trip " + stats.roundTripMs + " ms" + (stats.lastLines ? " «" + stats.lastLines + "»" : "") + (stats.yesMs ? " · yes " + stats.yesMs + " ms" : "") + (latencyText() ? " · " + latencyText() : "") + (stats.error ? " · ERROR " + stats.error : "");
+            stats.stage + " · " + stats.video + " · frames " + stats.frames + " · sent " + stats.sent + " · answers " + stats.answers + " · dropped busy " + stats.busy + " / budget " + stats.overBudget + " / noise " + stats.noise + " · azure " + stats.azureMs + " ms · round trip " + stats.roundTripMs + " ms · last " + stats.lastKB + " KB" + (stats.timing ? " · " + stats.timing : "") + (stats.lastLines ? " «" + stats.lastLines + "»" : "") + (stats.yesMs ? " · yes " + stats.yesMs + " ms" : "") + (latencyText() ? " · " + latencyText() : "") + (stats.error ? " · ERROR " + stats.error : "");
         }
       }, 500);
 
@@ -142,7 +200,7 @@ export default function BusScanner({ stopId, route, foundSpeech, onFound, onErro
         const now = performance.now();
         stats.answers++;
         stats.lastLines = body.lines.join(" | ");
-        stats.azureMs = body.timingMs;
+        stats.azureMs = body.azureMs;
         stats.roundTripMs = Math.round(now - sentAt);
         // Fast path: the read clearly picks the rider's route among the routes near this stop
         // (lib/signMatch.ts); else the sign parser's own rules (lib/parse-sign.ts).
@@ -159,7 +217,7 @@ export default function BusScanner({ stopId, route, foundSpeech, onFound, onErro
           found = true;
           stats.stage = "found";
           stats.yesMs = Math.round(now - openedAt);
-          console.info("[scan] yes after " + stats.yesMs + " ms from camera open, read took " + stats.roundTripMs + " ms (azure " + body.timingMs + " ms)");
+          console.info("[scan] yes after " + stats.yesMs + " ms from camera open, read took " + stats.roundTripMs + " ms (azure " + body.azureMs + " ms)");
           markDecided("azure scanner", now, sentAt); // the frame was cut and sent at sentAt
           announcer.announce(match.route, [foundSpeech], now, "match");
           onFound();
@@ -224,32 +282,89 @@ export default function BusScanner({ stopId, route, foundSpeech, onFound, onErro
         if (!waitingSince) {
           waitingSince = now;
         }
-        crop.canvas.toBlob(
-          function (blob) {
-            if (!blob || stopped) {
+        grayJpeg(crop).then(function (blob) {
+          if (!blob || stopped) {
+            inFlight--;
+            return;
+          }
+          stats.lastKB = Math.round(blob.size / 102.4) / 10;
+          const controller = new AbortController();
+          const timeout = setTimeout(function () {
+            controller.abort();
+          }, READ_TIMEOUT_MS);
+          const sentAt = performance.now();
+          fetch("/api/read-sign", { method: "POST", headers: { "Content-Type": "image/jpeg" }, body: blob, signal: controller.signal })
+            .then(function (res) {
+              timed(res, blob.size, sentAt, crop.kind);
+              return answer(res, crop, now);
+            })
+            .catch(function (e) {
+              stats.error = "read " + (e instanceof Error ? e.name : String(e)); // late or offline: no vote
+            })
+            .finally(function () {
+              clearTimeout(timeout);
               inFlight--;
+            });
+        });
+      }
+
+      // Per request: bytes, upload + network (the phone's wait minus the server's time), Azure, total.
+      function timed(res: Response, bytes: number, sentAt: number, kind: string): void {
+        const total = Math.round(performance.now() - sentAt);
+        res
+          .clone()
+          .json()
+          .then(function (body: ReadSignResponse) {
+            if (typeof body.azureMs !== "number") {
               return;
             }
-            const controller = new AbortController();
-            const timeout = setTimeout(function () {
-              controller.abort();
-            }, READ_TIMEOUT_MS);
-            fetch("/api/read-sign", { method: "POST", headers: { "Content-Type": "image/jpeg" }, body: blob, signal: controller.signal })
-              .then(function (res) {
-                return answer(res, crop, now);
-              })
-              .catch(function (e) {
-                stats.error = "read " + (e instanceof Error ? e.name : String(e)); // late or offline: no vote
-              })
-              .finally(function () {
-                clearTimeout(timeout);
-                inFlight--;
-              });
-          },
-          "image/jpeg",
-          JPEG_QUALITY,
-        );
+            totals.push(total);
+            azures.push(body.azureMs);
+            if (totals.length > TIMING_SAMPLES) {
+              totals.shift();
+              azures.shift();
+            }
+            stats.timing = "total p50 " + percentile(totals, 50) + " / p95 " + percentile(totals, 95) + " ms · azure p50 " + percentile(azures, 50) + " / p95 " + percentile(azures, 95) + " ms";
+            console.info("[read] " + kind + " " + Math.round(bytes / 1024) + " KB · upload+network " + Math.max(0, total - body.serverMs) + " ms · azure " + body.azureMs + " ms · total " + total + " ms");
+          })
+          .catch(function () {});
       }
+
+      // Warm-up while the camera is open: one tiny read now and every 60 s (server function + its Azure
+      // connection stay warm). Uses the same budget as the real reads; skipped when it's spent.
+      let warmImage: Promise<Blob | null> | null = null;
+      function warmUp(): void {
+        if (stopped || found || !budget.take(performance.now())) {
+          return;
+        }
+        if (!warmImage) {
+          warmImage = fetch("/warm.jpg")
+            .then(function (res) {
+              return res.ok ? res.blob() : null;
+            })
+            .catch(function () {
+              return null;
+            });
+        }
+        warmImage.then(function (blob) {
+          if (!blob || stopped) {
+            return;
+          }
+          const sentAt = performance.now();
+          fetch("/api/read-sign?warm=1", { method: "POST", headers: { "Content-Type": "image/jpeg" }, body: blob })
+            .then(function (res) {
+              if (res.status === 429) {
+                const wait = parseFloat(res.headers.get("retry-after") ?? "");
+                budget.pauseUntil(performance.now() + (Number.isFinite(wait) ? wait : 10) * 1000);
+                return;
+              }
+              timed(res, blob.size, sentAt, "warm");
+            })
+            .catch(function () {});
+        });
+      }
+      warmUp();
+      const warmTimer = window.setInterval(warmUp, WARM_EVERY_MS);
 
       function tick(): void {
         if (stopped || found || gaveUp) {
@@ -405,6 +520,7 @@ export default function BusScanner({ stopId, route, foundSpeech, onFound, onErro
         stopped = true;
         clearTimeout(timer);
         clearInterval(debugTimer);
+        clearInterval(warmTimer);
         document.removeEventListener("visibilitychange", onVisibility);
         if (stream) {
           stream.getTracks().forEach(function (item) {
