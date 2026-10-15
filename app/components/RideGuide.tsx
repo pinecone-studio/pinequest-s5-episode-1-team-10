@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import type { RideResponse, RideStop } from "../../shared/contract";
 import { metres } from "../lib/geo";
-import { phrase, vibrate, type PhraseKey } from "../lib/speech";
+import { cue, phrase, vibrate, type PhraseKey } from "../lib/speech";
 
 export interface RideInfo {
   left: number; // stops still to ride
@@ -103,7 +103,7 @@ export default function RideGuide({ route, board, alight, simulate, info, onArri
           }
           if (!offSaid && target.lat !== null && target.lon !== null && metres(lat, lon, target.lat, target.lon) < OFF_M) {
             offSaid = true;
-            vibrate([600, 150, 600, 150, 600]);
+            cue("off", [600, 150, 600, 150, 600]);
             announceRef.current([phrase("get_off_now")]);
           }
           if (at === last && offSaid && !arrived) {

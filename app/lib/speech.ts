@@ -428,3 +428,31 @@ export function vibrate(pattern: number[]): void {
     navigator.vibrate(pattern);
   }
 }
+
+// iPhone Safari has no vibration. These two moments also play a short sound.
+export function cue(name: "bus" | "off", pattern: number[]): void {
+  vibrate(pattern);
+  const c = audioContext();
+  if (!c) {
+    return;
+  }
+  if (c.state !== "running") {
+    c.resume().catch(function () {});
+  }
+  const tones = name === "bus" ? [660, 880] : [440, 440, 330];
+  try {
+    tones.forEach(function (item, i) {
+      const osc = c.createOscillator();
+      const gain = c.createGain();
+      gain.gain.value = 0.08;
+      osc.frequency.value = item;
+      osc.connect(gain);
+      gain.connect(c.destination);
+      const at = c.currentTime + i * 0.18;
+      osc.start(at);
+      osc.stop(at + 0.12);
+    });
+  } catch {
+    // the spoken sentence is still the signal
+  }
+}

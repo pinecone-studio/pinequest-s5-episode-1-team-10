@@ -13,7 +13,7 @@ import { loadOcr, readSign } from "../lib/ocr";
 import { detectBuses, loadDetector, type Box } from "../lib/detector";
 import { detectFrontDoor, loadDoorDetector } from "../lib/doorDetector";
 import { frontIsRight, guideToDoor, type DoorGuide } from "../lib/door";
-import { phrase, vibrate, type PhraseKey } from "../lib/speech";
+import { cue, phrase, vibrate, type PhraseKey } from "../lib/speech";
 import { addVote, updateTracks, VOTE_WINDOW, type Track } from "../lib/tracker";
 
 interface Props {
@@ -315,7 +315,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
           foundAt = now;
           console.info("[bus] yes after " + Math.round(now - openedAt) + " ms from camera open, " + track.votes.length + " reads");
           lastGuideSpoken = now; // the intro below already guides; first clock direction comes after it
-          vibrate([400, 100, 400]);
+          cue("bus", [400, 100, 400]);
           // The side is known only once the bus is moving. Standing still used to say "on your right".
           let intro: PhraseKey = "door_intro_plain";
           if (Math.abs(track.vx) > track.box.w * 0.0002) {
