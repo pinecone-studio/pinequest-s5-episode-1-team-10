@@ -1,13 +1,10 @@
-// IoU box tracker + 5-of-7 vote per bus, so one bad frame or OCR read never decides.
-// Fast path: 3 reads in a row that all say "yes" with high confidence decide at once (~1.2 s instead of ~2 s);
-// any other read on the way falls back to 5 of 7.
+// IoU box tracker. A track decides from two agreeing reads on different frames (lib/judge.ts).
+// One read never decides, and a contradicting route number clears the track.
 import type { Verdict } from "../../shared/contract";
 import { iou, type Box } from "./detector";
+import { applyRead, type CountedRead } from "./judge";
 
-export const VOTE_WINDOW = 7;
-export const VOTES_NEEDED = 5;
-export const FAST_VOTES = 3;
-export const FAST_CONF = 0.9; // the server says "yes" from 0.8; the fast path asks for more
+export const VOTE_WINDOW = 7; // shown on the debug overlay only; the decision itself is two reads
 const MATCH_IOU = 0.3;
 const LOST_AFTER_MS = 1500;
 
@@ -17,8 +14,9 @@ export interface Track {
   id: number;
   box: Box;
   lastSeen: number;
-  votes: Verdict[]; // newest last, at most VOTE_WINDOW
+  votes: Verdict[]; // agreeing reads, for the overlay
   confs: number[]; // confidence of each vote, same order
+  reads: CountedRead[];
   decision: Decision;
   announced: Decision; // last decision spoken to the rider
   pending: boolean; // a /verify request is in flight
@@ -61,6 +59,7 @@ export function updateTracks(tracks: Track[], boxes: Box[], now: number): Track[
         lastSeen: now,
         votes: [],
         confs: [],
+        reads: [],
         decision: "checking",
         announced: "checking",
         pending: false,
@@ -76,29 +75,19 @@ export function updateTracks(tracks: Track[], boxes: Box[], now: number): Track[
   return live;
 }
 
-// A verdict counts only when VOTES_NEEDED of the last VOTE_WINDOW reads agree.
-export function addVote(track: Track, verdict: Verdict, confidence: number): void {
-  track.votes = track.votes.concat(verdict).slice(-VOTE_WINDOW);
-  track.confs = track.confs.concat(confidence).slice(-VOTE_WINDOW);
-  const lastVotes = track.votes.slice(-FAST_VOTES);
-  const lastConfs = track.confs.slice(-FAST_VOTES);
-  const fastYes =
-    lastVotes.length === FAST_VOTES &&
-    lastVotes.every(function (item, i) {
-      return item === "yes" && lastConfs[i] >= FAST_CONF;
-    });
-  const count = function (v: Verdict): number {
-    return track.votes.filter(function (item) {
-      return item === v;
-    }).length;
-  };
-  if (fastYes || count("yes") >= VOTES_NEEDED) {
-    track.decision = "yes";
-  } else if (count("no") >= VOTES_NEEDED) {
-    track.decision = "no";
-  } else if (track.votes.length >= VOTE_WINDOW) {
-    track.decision = "unsure";
-  } else {
-    track.decision = "checking";
+// Two reads of the same route number, from different frames, both at confidence >= 0.8.
+// A different number clears the track. A read without a route number is ignored.
+export function addVote(track: Track, verdict: Verdict, confidence: number, number: string | null, frame: number): void {
+  if (!number || verdict === "unsure") {
+    return;
   }
+  const judged = applyRead(track.reads, { verdict: verdict, confidence: confidence, number: number, frame: frame });
+  track.reads = judged.reads;
+  track.votes = judged.reads.map(function (item) {
+    return item.verdict;
+  });
+  track.confs = judged.reads.map(function (item) {
+    return item.confidence;
+  });
+  track.decision = judged.decision;
 }

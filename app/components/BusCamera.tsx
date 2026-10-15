@@ -5,9 +5,9 @@
 // Once it's the rider's bus, the camera keeps following that bus and guides them to its front door:
 // a beacon panned toward the door, clock direction + steps, "bus moving, step back".
 import { useEffect, useRef, type MutableRefObject } from "react";
-import type { Verdict, VerifyResponse } from "../../shared/contract";
+import type { Verdict } from "../../shared/contract";
 import { verifySign, verifyTexts } from "../lib/api";
-import { decideSign } from "../lib/fusion";
+import { decideSign, routeNumber } from "../lib/fusion";
 import { cityNumbers, prefetchStopRoutes, routesFor } from "../lib/stopRoutes";
 import { aimBeacon, startBeacon, stopBeacon } from "../lib/beacon";
 import { MIN_BUS_WIDTH, signCanvas, signCrop } from "../lib/crop";
@@ -345,7 +345,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         }
       }
 
-      function ask(video: HTMLVideoElement, track: Track, now: number, others: Box[]): void {
+      function ask(video: HTMLVideoElement, track: Track, now: number, others: Box[], frame: number): void {
         if (phoneOcr && !signReader) {
           return;
         }
@@ -359,7 +359,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
               return item.box;
             }),
         );
-        let answer: Promise<VerifyResponse | null>;
+        let answer: Promise<{ verdict: Verdict; confidence: number; eta_seconds: number | null; number: string | null; frame: number } | null>;
         if (phoneOcr) {
           const canvas = signCanvas(video, track.box, masked);
           if (!canvas) {
@@ -378,14 +378,19 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
             // The verdict is decided here. The server is told only so the read is logged.
             const decided = decideSign(texts, route, routesFor(stopId), cityNumbers());
             verifyTexts(texts, stopId, route);
-            return { verdict: decided.verdict, confidence: decided.confidence, eta_seconds: null };
+            return { verdict: decided.verdict, confidence: decided.confidence, eta_seconds: null, number: decided.number, frame: frame };
           });
         } else {
           const crop = signCrop(video, track.box, masked);
           if (!crop) {
             return;
           }
-          answer = verifySign({ sign_crop: crop, stop_id: stopId, wanted_route: route });
+          answer = verifySign({ sign_crop: crop, stop_id: stopId, wanted_route: route }).then(function (res) {
+            if (!res) {
+              return null;
+            }
+            return { verdict: res.verdict, confidence: res.confidence, eta_seconds: res.eta_seconds, number: res.verdict === "yes" ? routeNumber(route) : null, frame: frame };
+          });
         }
         track.pending = true;
         track.lastAsked = now;
@@ -405,7 +410,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
             return;
           }
           track.lastAnswer = performance.now();
-          addVote(track, res.verdict as Verdict, res.confidence);
+          addVote(track, res.verdict, res.confidence, res.number, res.frame);
           announce(track);
         });
       }
@@ -465,7 +470,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
           })
           .forEach(function (item) {
             if (!item.pending && pending < MAX_PENDING && now - item.lastAsked >= ASK_EVERY_MS) {
-              ask(video, item, now, found.others);
+              ask(video, item, now, found.others, stats.frames);
             }
           });
         guideSearch(video, found.buses, near, now);
