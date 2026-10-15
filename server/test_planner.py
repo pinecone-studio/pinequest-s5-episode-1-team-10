@@ -534,3 +534,65 @@ def test_plan_asks_about_the_closest_stop_instead_of_not_found():
     assert guess["alight_stop"]["stop_id"] == "3"
     assert guess["sure"] is False
     assert plan("цаг агаар ямар байна").status_code == 404  # nothing like a stop: still "not found"
+
+
+# Which stop and bus is suggested (_best_direct): the shortest walk (50 m steps), then the fewest stops.
+# "Зайсан" (stop 15) is reached by new routes from stops around Home; the stops in between (11-14) only
+# exist in the route orders.
+ZAISAN = {"busStopId": "15", "busStopName": "Зайсан /Урд/", "routeList": []}
+
+
+def add_stops(monkeypatch, stops, directions):
+    """stops: (id, name, lat, lon, [route numbers]); a route's id is its number ("Ч:20" -> "20")."""
+    info = [dict(ZAISAN, routeList=[{"busRouteId": r.split(":")[1], "busRouteNo": r} for r in directions])]
+    stations = [{"busStopId": "15", "gpxY": "47.9300", "gpxX": "106.9500"}]
+    for sid, name, lat, lon, routes in stops:
+        info.append({"busStopId": sid, "busStopName": name,
+                     "routeList": [{"busRouteId": r.split(":")[1], "busRouteNo": r} for r in routes]})
+        stations.append({"busStopId": sid, "gpxY": str(lat), "gpxX": str(lon)})
+    monkeypatch.setattr(__import__(__name__), "GROUP_INFO", GROUP_INFO + info)
+    monkeypatch.setattr(__import__(__name__), "STATIONS", STATIONS + stations)
+    for route, order in directions.items():
+        monkeypatch.setitem(DIRECTIONS, route.split(":")[1], {
+            "rotStopList": [{"busStopId": s, "busStopSeq": str(i)} for i, s in enumerate(order)], "reverseRotStopList": []})
+    bus_api._stops.cache_clear(); bus_api._stations.cache_clear()
+    planner._stops_by_id.cache_clear(); planner._neighbours.cache_clear(); planner._names_by_fold.cache_clear()
+
+
+def test_closer_stop_with_more_stops_beats_a_farther_stop_with_fewer(monkeypatch):
+    # Home (33 m): Ч:20, 5 stops. "Far" (~400 m): Ч:21, 1 stop. By cost the far stop used to win
+    # (1 + 400/150 < 5 + 33/150); the rider now walks 33 m and rides longer.
+    add_stops(monkeypatch, [("16", "Far", 47.9039, 106.9000, ["Ч:21"])],
+              {"Ч:20": ["1", "11", "12", "13", "14", "15"], "Ч:21": ["16", "15"]})
+    monkeypatch.setitem(GROUP_INFO[0], "routeList", GROUP_INFO[0]["routeList"] + [{"busRouteId": "20", "busRouteNo": "Ч:20"}])
+    bus_api._stops.cache_clear(); planner._stops_by_id.cache_clear()
+    body = plan("Зайсан").json()
+    assert body["board_stop"]["stop_id"] == "1" and body["route"] == "Ч:20"
+    assert body["stops_to_ride"] == 5 and body["transfer"] is None
+    assert body["speech"][:5] == ["Ч хорь автобусанд суугаарай.", "Суух зогсоол:", "Home.", "Хойд тал.", "Зогсоол руу 30 метр алхана."]
+
+
+def test_equal_walk_fewer_stops_wins(monkeypatch):
+    # Home 33 m and "Across" 45 m are the same 50 m step: Across's Ч:22 (2 stops) beats Home's Ч:20 (5).
+    add_stops(monkeypatch, [("17", "Across", 47.9003, 106.9006, ["Ч:22"])],
+              {"Ч:20": ["1", "11", "12", "13", "14", "15"], "Ч:22": ["17", "13", "15"]})
+    monkeypatch.setitem(GROUP_INFO[0], "routeList", GROUP_INFO[0]["routeList"] + [{"busRouteId": "20", "busRouteNo": "Ч:20"}])
+    bus_api._stops.cache_clear(); planner._stops_by_id.cache_clear()
+    body = plan("Зайсан").json()
+    assert body["board_stop"]["stop_id"] == "17" and body["route"] == "Ч:22"
+    assert body["stops_to_ride"] == 2
+
+
+def test_a_cheaper_direct_bus_still_beats_a_transfer(monkeypatch):
+    # Direct: Home Ч:20 (10 stops, cost 10.2, suggested) and Far Ч:21 (1 stop, cost 3.7). The transfer
+    # Home -Ч:75-> Mid -Х:29-> Зайсан (1 + 1 + 6 = 8.2) is cheaper than the suggested bus but not than
+    # the cheapest one: a transfer still has to beat every direct bus, so the direct bus is kept.
+    long_way = ["1"] + [str(i) for i in range(101, 110)] + ["15"]
+    add_stops(monkeypatch, [("16", "Far", 47.9039, 106.9000, ["Ч:21"])],
+              {"Ч:20": long_way, "Ч:21": ["16", "15"], "Х:29": ["2", "15"]})
+    monkeypatch.setitem(GROUP_INFO[0], "routeList", GROUP_INFO[0]["routeList"] + [{"busRouteId": "20", "busRouteNo": "Ч:20"}])
+    monkeypatch.setitem(GROUP_INFO[1], "routeList", GROUP_INFO[1]["routeList"] + [{"busRouteId": "29", "busRouteNo": "Х:29"}])
+    bus_api._stops.cache_clear(); planner._stops_by_id.cache_clear(); planner._neighbours.cache_clear()
+    body = plan("Зайсан").json()
+    assert body["transfer"] is None
+    assert body["board_stop"]["stop_id"] == "1" and body["route"] == "Ч:20" and body["stops_to_ride"] == 10

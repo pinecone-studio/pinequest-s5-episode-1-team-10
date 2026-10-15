@@ -30,6 +30,10 @@ WALK_COST_M = 150  # walking this far to the first stop costs as much as riding 
 TRANSFER_PENALTY = 6
 TRANSFER_WALK_M = 200  # the second bus may leave from another stop this close (other side of the street)
 TRANSFER_WALK_COST_M = 60
+# Which direct bus is suggested: the shortest walk to its stop first, then the fewest stops. Walks are
+# compared in WALK_STEP_M steps (metres // 50): GPS is off by tens of metres, so 33 m and 45 m are the
+# same walk and the bus with fewer stops wins; 30 m beats 400 m even if the 400 m stop saves stops.
+WALK_STEP_M = 50
 CLOSE_WALK_M = 250  # the rider is this close to the place they named: walking beats any bus
 SHORT_WORD = 6  # words shorter than this ("муис", "марал") are only fixed by a near-perfect spelling match
 SHORT_WORD_CUTOFF = 0.92
@@ -232,17 +236,25 @@ def _neighbours(stop_id):
 
 
 def _best_direct(origins, dests):
-    """(cost, origin, route, dest, stops) of the cheapest one-bus trip, or None."""
+    """(cost, origin, route, dest, stops) of the one-bus trip to suggest, or None.
+
+    The trip: shortest walk to the boarding stop (WALK_STEP_M steps), then fewest stops, then the
+    lower cost. `cost` is the cheapest one-bus trip's, not this one's: a transfer is chosen only when it
+    beats every direct bus, as before."""
     best = None
+    cheapest = None
     for o in origins:
         for d in dests:
-            for route in set(o["routes"]) & set(d["routes"]):
+            for route in sorted(set(o["routes"]) & set(d["routes"])):
                 n = bus_api.stops_between(o["route_ids"][route], o["stop_id"], d["stop_id"])
                 if n is not None:
                     cost = n + o["distance_m"] / WALK_COST_M
-                    if best is None or cost < best[0]:
-                        best = (cost, o, route, d, n)
-    return best
+                    rank = (o["distance_m"] // WALK_STEP_M, n, cost)
+                    if best is None or rank < best[0]:
+                        best = (rank, o, route, d, n)
+                    if cheapest is None or cost < cheapest:
+                        cheapest = cost
+    return None if best is None else (cheapest,) + best[1:]
 
 
 def _best_transfer(origins, dests):
@@ -659,7 +671,8 @@ def _suggest_to(words, named, nearby, lat, lon):
     bus_api.load_route_directions(rid for st in origins + named + nearby for rids in st["route_ids"].values() for rid in rids)
 
     # Get off at the stop the rider named (direct or with one transfer); a neighbouring stop only if
-    # nothing reaches the named one. Cheapest trip wins: a transfer costs TRANSFER_PENALTY stops.
+    # nothing reaches the named one. A transfer only when it is cheaper than every direct bus (it costs
+    # TRANSFER_PENALTY stops); of the direct buses, the shortest walk, then the fewest stops.
     for dests, exact in ((named, True), (nearby, False)):
         trips = [t for t in (_best_direct(origins, dests), _best_transfer(origins, dests)) if t]
         if not trips:
