@@ -13,7 +13,7 @@ import { loadOcr, readSign } from "../lib/ocr";
 import { detectBuses, loadDetector, type Box } from "../lib/detector";
 import { detectFrontDoor, loadDoorDetector } from "../lib/doorDetector";
 import { frontIsRight, guideToDoor, type DoorGuide } from "../lib/door";
-import { phrase, say, sayPhrase, vibrate, type PhraseKey } from "../lib/speech";
+import { phrase, vibrate, type PhraseKey } from "../lib/speech";
 import { addVote, updateTracks, VOTE_WINDOW, type Track } from "../lib/tracker";
 
 interface Props {
@@ -24,6 +24,7 @@ interface Props {
   onError: () => void;
   guide: MutableRefObject<DoorGuide | null>; // latest door guidance, for the "where is the door?" option
   phoneOcr: boolean; // the server has no OCR (free hosting): read the sign on the phone, send only the texts
+  onAnnounce: (texts: string[]) => Promise<void>; // status text and speech, so a hint is never only spoken
 }
 
 const GUIDE_EVERY_MS = 4000; // repeat "door at 2 o'clock, 9 steps" this often
@@ -144,10 +145,14 @@ interface CamStats {
   error: string;
 }
 
-export default function BusCamera({ stopId, route, foundSpeech, onFound, onError, guide, phoneOcr }: Props) {
+export default function BusCamera({ stopId, route, foundSpeech, onFound, onError, guide, phoneOcr, onAnnounce }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const debugRef = useRef<HTMLParagraphElement>(null);
+  const announceRef = useRef(onAnnounce);
+  useEffect(function () {
+    announceRef.current = onAnnounce;
+  });
 
   useEffect(
     function () {
@@ -183,7 +188,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
 
       function speak(texts: string[]): void {
         talking = true;
-        say(texts).then(function () {
+        announceRef.current(texts).then(function () {
           talking = false;
         });
       }
@@ -368,7 +373,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
             // No answer in time: not a vote. If a bus stays in view with no answers at all, say so.
             if (performance.now() - track.lastAnswer > NO_ANSWER_MS && track.announced === "checking") {
               track.announced = "unsure";
-              sayPhrase("not_sure");
+              speak([phrase("not_sure")]);
             }
             return;
           }
@@ -465,7 +470,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
             });
           } catch (e) {
             stats.error = "camera " + (e instanceof Error ? e.name : "");
-            sayPhrase("camera_failed");
+            speak([phrase("camera_failed")]);
             onError();
             return;
           }
@@ -488,7 +493,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
           }
           // iPhone can refuse to start the video outside a touch: start it on the rider's next one.
           stats.error = "play " + (e instanceof Error ? e.name : "");
-          sayPhrase("camera_tap");
+          speak([phrase("camera_tap")]);
           const v = video;
           await new Promise<void>(function (resolve) {
             function retry(): void {
@@ -511,7 +516,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         if (stopped) {
           return;
         }
-        sayPhrase("camera_on");
+        speak([phrase("camera_on")]);
         stats.stage = "loading";
         // Models still loading (first time: ~25 MB): say so, so the rider knows to wait.
         let loadingSaid = false;
@@ -541,7 +546,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
           clearTimeout(firstLoadingSay);
           stats.error = "detector " + (e instanceof Error ? e.message : String(e));
           if (!stopped) {
-            sayPhrase("camera_failed");
+            speak([phrase("camera_failed")]);
             onError();
           }
           return;

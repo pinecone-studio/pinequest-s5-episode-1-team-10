@@ -632,7 +632,7 @@ export default function RiderFlow() {
   }
   function whereIsDoor(): void {
     const g = doorGuide.current;
-    say(g ? doorSpeech(g) : [phrase("door_lost")]);
+    voice(g ? doorSpeech(g) : [phrase("door_lost")]);
   }
   function boarded(): void {
     stopSpeaking();
@@ -642,7 +642,7 @@ export default function RiderFlow() {
   function stopsLeft(): void {
     const r = rideInfo.current;
     if (r) {
-      say([leftSpeech(r.left)].concat(r.next).filter(Boolean));
+      voice([leftSpeech(r.left)].concat(r.next).filter(Boolean));
     }
   }
   function gotOff(): void {
@@ -1018,6 +1018,7 @@ export default function RiderFlow() {
           onError={onCameraError}
           guide={doorGuide}
           phoneOcr={!serverOcr}
+          onAnnounce={voice}
         />
       )}
       {step === "ride" && cur && (
@@ -1029,6 +1030,7 @@ export default function RiderFlow() {
           simulate={simulatedRide()}
           info={rideInfo}
           onArrived={onArrived}
+          onAnnounce={voice}
         />
       )}
     </>
