@@ -428,12 +428,13 @@ function cropLine(source: Source, r: Region, flip: boolean): { data: Float32Arra
   const c = -vx / det;
   const b = -uyp / det;
   const dd = uxp / det;
-  if (!lineCtx) {
-    lineCtx = canvas(w, REC_H);
+  if (!lineCtx || lineCtx.canvas.width < w || lineCtx.canvas.height < REC_H) {
+    // Only grow. Setting the size on every line re-allocates the canvas, and iPhone Safari then reloads.
+    lineCtx = canvas(Math.max(w, lineCtx ? lineCtx.canvas.width : 0), REC_H);
   }
   const ctx = lineCtx;
-  ctx.canvas.width = w;
-  ctx.canvas.height = REC_H;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, w, REC_H);
   ctx.imageSmoothingQuality = "high";
   ctx.fillStyle = "rgb(128,128,128)";
   ctx.fillRect(0, 0, w, REC_H);

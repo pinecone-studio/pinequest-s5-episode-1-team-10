@@ -19,7 +19,7 @@ const INDEX = "/tts/index.json";
 const READER = "reader-app-v4";
 
 self.addEventListener("install", function (event) {
-  self.skipWaiting();
+  // No skipWaiting. A new worker that takes the page at once has reloaded the app under the rider.
   event.waitUntil(readerInstall());
   // ~185 clips (~2 MB) inside waitUntil, or the browser may stop the worker halfway. The page works
   // normally meanwhile (no worker yet = plain network); one failed clip never fails the install.
@@ -86,9 +86,6 @@ self.addEventListener("activate", function (event) {
               return caches.delete(item);
             }),
         );
-      })
-      .then(function () {
-        return self.clients.claim();
       }),
   );
 });

@@ -17,7 +17,7 @@ import { keepScreenOn } from "../lib/wake";
 import { advise, openCamera, quality, type Advice, type Camera } from "../lib/reader/aim";
 import { readerCommand, type ReaderCommand } from "../lib/reader/commands";
 import { startRemoteLog } from "../lib/reader/remoteLog";
-import { analyze, isReady, keepOffline, listen, loadModels, lowMemoryPhone, readPage, synthesize, type Reading, type SpeechStream } from "../lib/reader/engine";
+import { analyze, isReady, keepOffline, listen, loadModels, lowMemoryPhone, readPage, releasePart, synthesize, type Reading, type SpeechStream } from "../lib/reader/engine";
 import { AIM_DET } from "../lib/reader/pageOcr";
 import { errorTone, loadingSound, pageEndChime, playStream, prompt, releasePlayer, shutter, stopPlayer, tick, unlockPlayer, unsureTone, waitForVoice, type Playing } from "../lib/reader/player";
 import { SentenceBuilder, UNCLEAR, type Sentence } from "../lib/reader/sentences";
@@ -248,8 +248,11 @@ export default function Reader() {
     setMode(m);
     saveMode(m);
     setSpeed(savedSpeed());
-    // An iPhone gets the page reader first: aiming needs only that (its directions are pre-made
-    // sentences), and the voice's ~300 MB is loaded when a page has been photographed.
+    // An iPhone keeps one model at a time. Aiming uses the page reader; the voice starts only after
+    // that reader has been dropped. Holding both is what reloads the page.
+    if (lowMemoryPhone()) {
+      releasePart("voice");
+    }
     loadModels(lowMemoryPhone() ? ["ocr"] : ["ocr", "voice"]);
     if (navigator.storage && navigator.storage.persist) {
       navigator.storage.persist().catch(function () {}); // keep the 50 MB of models
@@ -405,6 +408,10 @@ export default function Reader() {
 
   // Camera on again (after a page was read) and aiming.
   async function aimAgain(): Promise<void> {
+    if (lowMemoryPhone()) {
+      releasePart("voice");
+      loadModels(["ocr"]);
+    }
     const video = videoRef.current;
     if (!camera.current && video) {
       try {
@@ -438,8 +445,9 @@ export default function Reader() {
 
   function startReading(photo: ImageBitmap): void {
     endReading();
-    if (!isReady("voice")) {
-      loadModels(["voice"]); // a no-op when it's loading already
+    // iPhone: the voice waits until the page reader is finished and dropped. Both at once reload the page.
+    if (!lowMemoryPhone() && !isReady("voice")) {
+      loadModels(["voice"]);
     }
     const s: Session = {
       sentences: [],
@@ -495,6 +503,12 @@ export default function Reader() {
         if (done) {
           s.done = true;
           s.ocr = null;
+          if (lowMemoryPhone()) {
+            releasePart("ocr");
+            if (!isReady("voice") && s.sentences.length) {
+              loadModels(["voice"]);
+            }
+          }
         }
         if (s.wake) {
           s.wake();
@@ -503,6 +517,12 @@ export default function Reader() {
       function () {
         if (session.current === s) {
           s.done = true;
+          if (lowMemoryPhone()) {
+            releasePart("ocr");
+            if (!isReady("voice") && s.sentences.length) {
+              loadModels(["voice"]);
+            }
+          }
           if (s.wake) {
             s.wake();
           }
