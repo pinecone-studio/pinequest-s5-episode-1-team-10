@@ -387,8 +387,65 @@ export function sayPhrase(key: PhraseKey): Promise<void> {
   return say([phrase(key)]);
 }
 
+// Vibration; on phones that can't vibrate from a web page (iPhone) the same rhythm is played as short
+// sounds instead, so no cue is lost. A pulse's length says what it means, and keeps it on iPhone:
+//   <= 20 ms  tick           next option, end of the list
+//   30-40 ms  click          chose it, listening, door straight ahead
+//   100-150   short tone     not your bus, get ready
+//   200-300   harsh alarm    BUS MOVING, door close
+//   >= 400    long clear     this is your bus, get off now, SOS
 export function vibrate(pattern: number[]): void {
-  if ("vibrate" in navigator) {
+  if (typeof navigator !== "undefined" && "vibrate" in navigator) {
     navigator.vibrate(pattern);
+    return;
   }
+  const c = audioContext();
+  if (!c) {
+    return;
+  }
+  if (c.state !== "running") {
+    c.resume().catch(function () {});
+  }
+  let at = c.currentTime + 0.01;
+  pattern.forEach(function (item, i) {
+    if (i % 2 === 0) {
+      pulse(c, at, item);
+    }
+    at += item / 1000;
+  });
+}
+
+function pulse(c: AudioContext, at: number, ms: number): void {
+  const osc = c.createOscillator();
+  const gain = c.createGain();
+  let freq = 1800;
+  let level = 0.08;
+  let len = 0.012;
+  if (ms >= 400) {
+    freq = 520;
+    level = 0.3;
+    len = Math.min(ms, 600) / 1000;
+  } else if (ms >= 200) {
+    osc.type = "square"; // harsh on purpose: danger
+    freq = 1000;
+    level = 0.25;
+    len = ms / 1000;
+  } else if (ms >= 100) {
+    freq = 700;
+    level = 0.2;
+    len = ms / 1000;
+  } else if (ms >= 30) {
+    freq = 1200;
+    level = 0.12;
+    len = 0.03;
+  }
+  osc.frequency.value = freq;
+  gain.gain.setValueAtTime(0.0001, at);
+  gain.gain.exponentialRampToValueAtTime(level, at + 0.005);
+  gain.gain.setValueAtTime(level, at + Math.max(0.006, len - 0.01));
+  gain.gain.exponentialRampToValueAtTime(0.0001, at + len);
+  osc.connect(gain);
+  gain.connect(c.destination);
+  osc.start(at);
+  osc.stop(at + len + 0.02);
 }

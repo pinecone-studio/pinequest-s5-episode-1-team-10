@@ -11,6 +11,8 @@ import type { AskResponse, BoardStop, PlanResponse, PlanStop, VoiceLocateRespons
 import { askByText, locateByText, nearestStop, requestPlan, serverCaps, wakeServer, type ServerCaps } from "../lib/api";
 import { canListen, enableSpeechmatics, listen, type Heard, type Listening } from "../lib/listen";
 import { warmSpeech } from "../lib/speechmatics";
+import { explainPermission } from "../lib/permissions";
+import { keepScreenOn } from "../lib/wake";
 import { GPS_OK_M, locate, type Position } from "../lib/location";
 import { primeBeacon } from "../lib/beacon";
 import { familyNumber, openLink, saveFamilyNumber, smsUrl, sosMessage, telUrl } from "../lib/family";
@@ -167,12 +169,13 @@ export default function RiderFlow() {
     setMessage(found.speech.join(" "));
     // The first sentence ("34-р автобусанд суугаарай.") is pre-made, so it plays at once.
     say(found.speech.concat(phrase("open_camera")));
-    // Load + warm both models while the route is read out, so the camera detects from its first frame.
-    loadDetector()
-      .then(async function (provider) {
-        if (!caps.current.ocr) {
-          await loadOcr(); // free hosting: the phone reads the signs (before the 40 MB door model downloads)
-        }
+    // Camera models download while the route is read out and the rider walks to the stop (first visit
+    // ~25 MB; later from the browser cache), bus detector and sign reader at the same time. Not earlier:
+    // on a slow line, downloading from the start made a trip plan take 17 s instead of 1 s.
+    const detecting = loadDetector();
+    const reading = caps.current.ocr ? Promise.resolve(true) : loadOcr(); // free hosting: the phone reads the signs
+    Promise.all([detecting, reading])
+      .then(function ([provider]) {
         // Without WebGPU the door model would queue in front of bus detection: it loads after the "yes".
         return provider === "webgpu" ? loadDoorDetector() : undefined;
       })
@@ -217,6 +220,9 @@ export default function RiderFlow() {
   // GPS if it's precise enough; otherwise the rider is asked to say where they are.
   async function findMe(intro: PhraseKey[]): Promise<void> {
     setStep("locating");
+    if (!testPosition()) {
+      await explainPermission("geolocation", setMessage); // the first time the phone asks for location
+    }
     const gps = testPosition() ? Promise.resolve(testPosition()) : locate();
     await announce(intro);
     const pos = await gps;
@@ -292,7 +298,7 @@ export default function RiderFlow() {
   async function hearRider(listeningStep: Step): Promise<Heard> {
     stopSpeaking();
     setStep(listeningStep);
-    await explainMicPrompt();
+    await explainPermission("microphone", setMessage); // the phone's box is visual: say what's coming
     setMessage(phrase("listening"));
     const rec = listen(showWords);
     listening.current = rec;
@@ -301,23 +307,6 @@ export default function RiderFlow() {
     listening.current = null;
     warmSpeech(); // the next key, ahead of time
     return heard;
-  }
-  // The first time, the phone shows a permission box a blind rider can't see: say so before it opens.
-  const micExplained = useRef(false);
-  async function explainMicPrompt(): Promise<void> {
-    if (micExplained.current) {
-      return;
-    }
-    micExplained.current = true;
-    try {
-      const state = await navigator.permissions.query({ name: "microphone" as PermissionName });
-      if (state.state === "prompt") {
-        setMessage(phrase("mic_permission"));
-        await say([phrase("mic_permission")]);
-      }
-    } catch {
-      // older browsers can't tell: the phone just asks
-    }
   }
   function showWords(words: string): void {
     if (modeRef.current === "voice") {
@@ -608,6 +597,54 @@ export default function RiderFlow() {
   // Voice assistant: press and hold anywhere, on any screen, and talk; release when done. It records in
   // place, so the camera or ride keeps running; the server answers from our bus data only and may name
   // an action ("plan", "open_camera", "door"...), done here like the menu option would.
+  // #1 Screen stays on while the camera looks for the bus and during the ride (iPhone auto-locks after
+  // 30 s - 1 min and a locked phone pauses the page).
+  useEffect(
+    function () {
+      keepScreenOn(step === "camera" || step === "ride");
+    },
+    [step],
+  );
+  useEffect(function () {
+    return function () {
+      keepScreenOn(false);
+    };
+  }, []);
+
+  // #2 Back after an interruption (screen locked, a call, another app): say so and where the rider is.
+  // The camera restarts itself (BusCamera), the ride's GPS too (RideGuide); this re-reads the screen.
+  const stepNow = useRef<Step>("start");
+  stepNow.current = step;
+  const [resumed, setResumed] = useState(0); // bumps VoiceMenu's key: its options are read again
+  useEffect(function () {
+    let hiddenAt = 0;
+    function onVisibility(): void {
+      if (document.visibilityState === "hidden") {
+        hiddenAt = performance.now();
+        return;
+      }
+      const away = hiddenAt ? performance.now() - hiddenAt : 0;
+      hiddenAt = 0;
+      const s = stepNow.current;
+      if (away < 2000 || s === "start" || s === "learn" || s === "camera") {
+        return; // a blink, nothing to repeat yet, or the camera says it itself
+      }
+      if (s === "ride" && rideInfo.current) {
+        const r = rideInfo.current;
+        say([phrase("app_resumed"), leftSpeech(r.left)].concat(r.next).filter(Boolean));
+      } else {
+        say([phrase("app_resumed")]);
+      }
+      setResumed(function (n) {
+        return n + 1;
+      });
+    }
+    document.addEventListener("visibilitychange", onVisibility);
+    return function () {
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
+
   const talk = useRef<{ stop: () => void } | null>(null);
   const [speedLine, setSpeedLine] = useState("");
   useEffect(function () {
@@ -645,7 +682,7 @@ export default function RiderFlow() {
       }, 700);
     }
     (async function () {
-      await explainMicPrompt();
+      await explainPermission("microphone", setMessage);
       // The microphone opens while the beep plays, so the rider can talk right after it.
       const rec = listen(showWords);
       session.stop = rec.stop;
@@ -995,7 +1032,7 @@ export default function RiderFlow() {
       {speedLine && <p className="status">{speedLine}</p>}
       {typing}
       <VoiceMenu
-        key={step}
+        key={step + "-" + resumed}
         items={actions}
         primary={primary}
         menuId={sos ? "sos" : "main"}
