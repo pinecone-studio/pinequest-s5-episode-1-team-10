@@ -29,6 +29,7 @@ import { beep, phrase, prefetch, rememberClips, say, startWaitingTick, stopSpeak
 import { onSpeedReport, showSpeed, speedCancel, speedMark, speedStart } from "../lib/speed";
 import { wantsReader } from "../lib/reader/commands";
 import BusCamera, { doorSpeech } from "./BusCamera";
+import BusScanner from "./BusScanner";
 import RideGuide, { leftSpeech, type RideInfo } from "./RideGuide";
 import Tutorial, { tutorialNeeded } from "./Tutorial";
 import Settings from "./Settings";
@@ -67,6 +68,11 @@ const HALF_DIGITS = 4;
 function simulatedRide(): boolean {
   const q = new URLSearchParams(window.location.search);
   return q.get("ride") === "sim" || q.has("image") || q.has("video");
+}
+
+// ?scanner=azure: the camera step reads signs with Azure (BusScanner) instead of the phone's own models.
+function azureScanner(): boolean {
+  return new URLSearchParams(window.location.search).get("scanner") === "azure";
 }
 
 // One bus of the trip: the first, or the second after a transfer (дамжин суух).
@@ -244,6 +250,9 @@ export default function RiderFlow() {
     setMessage(found.speech.join(" "));
     // The first sentence ("34-р автобусанд суугаарай.") is pre-made, so it plays at once.
     say(found.speech.concat(cameraAsk()));
+    if (azureScanner()) {
+      return; // no models on the phone: BusScanner reads the sign with Azure
+    }
     // Camera models download while the route is read out and the rider walks to the stop (first visit
     // ~25 MB; later from the browser cache), bus detector and sign reader at the same time. Not earlier:
     // on a slow line, downloading from the start made a trip plan take 17 s instead of 1 s.
@@ -1189,7 +1198,10 @@ export default function RiderFlow() {
   // What the screen shows besides its buttons: the camera, or the ride's progress.
   const view = (
     <>
-      {step === "camera" && cur && (
+      {step === "camera" && cur && azureScanner() && (
+        <BusScanner stopId={cur.board.stop_id} route={cur.route} foundSpeech={cur.foundSpeech} onFound={onFound} onError={onCameraError} onAnnounce={voice} />
+      )}
+      {step === "camera" && cur && !azureScanner() && (
         <BusCamera
           stopId={cur.board.stop_id}
           route={cur.route}

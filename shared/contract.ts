@@ -30,6 +30,14 @@ export interface NearestStop {
 
 export const VERIFY_TIMEOUT_MS = 1000;
 
+// POST /api/read-sign (Next.js route, Azure AI Vision Read; no Python mirror): body = raw image/jpeg of a
+// sign crop. Only the phone decides (lib/parse-sign.ts, with the stop's routes).
+// Errors: 429 = free-tier limit (Retry-After seconds), 503 = no Azure key, 502 = Azure failed.
+export interface ReadSignResponse {
+  lines: string[]; // text lines; a word read with confidence < 0.8 is replaced by "?"
+  timingMs: number; // the Azure call alone
+}
+
 // POST /plan. Errors: 404 { detail } = no suggestion (detail is Mongolian, speak it); 503 = bus data down.
 export interface PlanRequest {
   text: string; // a place ("Сансар руу явна") or a bus number ("55", "Ч:55", "55-р автобус")

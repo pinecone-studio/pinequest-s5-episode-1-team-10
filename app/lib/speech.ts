@@ -198,20 +198,42 @@ function getAudio(url: string): Promise<Blob | null> {
     });
 }
 
-function fetchClip(text: string): Promise<string | null> {
-  const url = clipUrl(text);
-  if (localClips.has(text)) {
-    // the reader's own clip: if it can't be had, silence (never the phone's Russian voice)
-    return getAudio(url).then(function (found) {
-      return found ? URL.createObjectURL(found) : null;
-    });
+// Clips kept in memory, for sentences that must play the moment they're needed (lib/announcer.ts).
+const memoryClips = new Map<string, Blob>();
+
+function clipBlob(text: string): Promise<Blob | null> {
+  const kept = memoryClips.get(text);
+  if (kept) {
+    return Promise.resolve(kept);
   }
-  const blob = url === apiUrl(text) ? getAudio(url) : getAudio(url).then(function (direct) {
+  const url = clipUrl(text);
+  if (localClips.has(text) || url === apiUrl(text)) {
+    // the reader's own clip (if it can't be had: silence, never the phone's Russian voice), or the
+    // server's /api/tts already: one try
+    return getAudio(url);
+  }
+  return getAudio(url).then(function (direct) {
     return direct ?? getAudio(apiUrl(text)); // a stale name never makes a sentence silent
   });
-  return blob.then(function (found) {
+}
+
+function fetchClip(text: string): Promise<string | null> {
+  return clipBlob(text).then(function (found) {
     return found ? URL.createObjectURL(found) : null;
   });
+}
+
+// Downloads these clips now and keeps them in memory, so they later play with no network wait.
+export function preloadClips(texts: string[]): Promise<void> {
+  return Promise.all(
+    texts.map(function (item) {
+      return clipBlob(item).then(function (found) {
+        if (found) {
+          memoryClips.set(item, found);
+        }
+      });
+    }),
+  ).then(function () {});
 }
 
 // Ask the server to make clips now so they play at once later (e.g. the rider's stop name).
