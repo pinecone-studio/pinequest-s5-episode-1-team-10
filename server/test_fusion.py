@@ -103,3 +103,15 @@ def test_fleet_and_phone_numbers_are_ignored():
 
 def test_other_extra_digit_is_still_no():
     assert decide([("17", 0.9)], "Ч:7", HERE + ["Ч:17"]) == ("no", 0.9)
+
+
+def test_destination_letter_glued_to_the_number_still_reads_the_route():
+    # Safari's OCR read "Ч:55 Н..." as "455H" (Chrome: "455 H"): no route "455н" exists, so it's 55.
+    routes, city = ["Ч:55", "Ч:52"], {"55", "52", "455а"}
+    assert decide([("455H 1000-E", 0.92)], "Ч:55", routes, city) == ("yes", 0.92)
+    assert decide([("452H", 0.92)], "Ч:55", routes, city) == ("no", 0.92)
+    # A real lettered route, or a cut-off one, is never cut down to the bare number.
+    assert decide([("7а", 0.95)], "Ч:7", ["Ч:7", "Ч:7а"], {"7", "7а"})[0] != "yes"
+    assert decide([("3Н", 0.95)], "Ч:3", ["Ч:3", "М:3НА"], {"3", "3на"})[0] != "yes"
+    # Without bus data nothing is guessed.
+    assert decide([("455H", 0.92)], "Ч:55", routes, None)[0] != "yes"
