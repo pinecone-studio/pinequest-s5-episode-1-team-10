@@ -331,9 +331,12 @@ input {
   overflow: hidden;
 }
 
+/* The whole picture, never cropped or stretched (cover cut a 16:9 stream down to a third of its width);
+   any space left over is black. Not mirrored: it's the back camera. */
 .reader-video {
   max-height: 60dvh;
-  object-fit: cover;
+  object-fit: contain;
+  background: #000;
 }
 
 .reader-video-hidden {
@@ -401,7 +404,8 @@ input {
   flex: 0 1 auto;
 }
 
-/* Upright like a book page (9:16), centred. */
+/* Upright like a book page (9:16), centred; lib/reader/aim.ts sets the real stream's shape once
+   the video has its size. */
 .reader-aim .reader-video {
   aspect-ratio: 9 / 16;
   height: 46dvh;

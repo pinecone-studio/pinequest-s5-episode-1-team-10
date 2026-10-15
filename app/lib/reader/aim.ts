@@ -1,6 +1,7 @@
 // Aiming the camera without seeing: the back camera, what to tell the rider about each frame, and
 // the full-resolution photo once the page is in view.
 import type { FrameCheck } from "./protocol";
+import { mainBackStream } from "../camera";
 
 export type Advice = "noText" | "dark" | "back" | "closer" | "left" | "right" | "up" | "down" | "still" | "ready";
 
@@ -117,13 +118,32 @@ async function bitmapOf(source: HTMLVideoElement | HTMLImageElement | Blob, w: n
   }
 }
 
+interface PhotoRange {
+  max: number;
+}
+
 interface PhotoCapture {
-  takePhoto: () => Promise<Blob>;
+  takePhoto: (settings?: { imageWidth?: number; imageHeight?: number; fillLightMode?: string }) => Promise<Blob>;
+  getPhotoCapabilities?: () => Promise<{ imageWidth?: PhotoRange; imageHeight?: PhotoRange; fillLightMode?: string[] }>;
+}
+
+// The box shows the whole picture at its real shape (CSS: object-fit contain), whatever size the
+// camera gave: upright on a phone, wide on a laptop or a phone turned sideways.
+function fitBox(video: HTMLVideoElement): void {
+  if (video.videoWidth && video.videoHeight) {
+    video.style.aspectRatio = video.videoWidth + " / " + video.videoHeight;
+  }
 }
 
 // Starts a video element showing the stream. Safari never settles play() on an element that was taken
 // off the page meanwhile, so waiting is limited, and a refusal (not allowed to autoplay) is not fatal.
 async function startVideo(video: HTMLVideoElement, stream: MediaStream): Promise<void> {
+  video.onloadedmetadata = function () {
+    fitBox(video);
+  };
+  video.onresize = function () {
+    fitBox(video); // the phone was turned
+  };
   video.srcObject = stream;
   video.muted = true;
   video.setAttribute("playsinline", "");
@@ -151,25 +171,39 @@ export async function openCamera(first: HTMLVideoElement): Promise<Camera> {
     // video frame: ask for 4K there (a 1080p frame lost small print), else the best the phone gives.
     // Upright (9:16), like the phone and a book page (user: the wide 16:9 view wasted the sides).
     const canPhoto = "ImageCapture" in window;
+    const hd = { width: { ideal: 1080 }, height: { ideal: 1920 } };
+    let size: MediaTrackConstraints = canPhoto ? hd : { width: { ideal: 2160 }, height: { ideal: 3840 } };
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: canPhoto
-          ? { facingMode: "environment", width: { ideal: 1080 }, height: { ideal: 1920 } }
-          : { facingMode: "environment", width: { ideal: 2160 }, height: { ideal: 3840 } },
-        audio: false,
-      });
+      stream = await navigator.mediaDevices.getUserMedia({ video: { ...size, facingMode: "environment" }, audio: false });
     } catch {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment", width: { ideal: 1080 }, height: { ideal: 1920 } },
-        audio: false,
-      });
+      size = hd;
+      stream = await navigator.mediaDevices.getUserMedia({ video: { ...size, facingMode: "environment" }, audio: false });
     }
+    // The main back camera, never the ultra-wide (distorts a page up close, focuses badly) nor
+    // iPhone's virtual Dual/Triple camera (switches to the ultra-wide for close-ups).
+    stream = (await mainBackStream(stream, size)).stream;
   }
   await startVideo(video, stream);
   const track = stream.getVideoTracks()[0];
   const caps = (track.getCapabilities ? track.getCapabilities() : {}) as MediaTrackCapabilities & { torch?: boolean };
   const ImageCaptureClass = (window as unknown as { ImageCapture?: new (t: MediaStreamTrack) => PhotoCapture }).ImageCapture;
   const capture = !still && ImageCaptureClass ? new ImageCaptureClass(track) : null;
+  // The largest photo the camera takes, without its flash (glare on paper). Asked once.
+  const photoSettings = capture && capture.getPhotoCapabilities
+    ? capture.getPhotoCapabilities().then(
+        function (pc) {
+          return {
+            imageWidth: pc.imageWidth ? pc.imageWidth.max : undefined,
+            imageHeight: pc.imageHeight ? pc.imageHeight.max : undefined,
+            fillLightMode: pc.fillLightMode && pc.fillLightMode.indexOf("off") >= 0 ? "off" : undefined,
+          };
+        },
+        function () {
+          return {};
+        },
+      )
+    : Promise.resolve({});
+  let torchOn = false;
   return {
     attach: function (next: HTMLVideoElement) {
       if (next !== video) {
@@ -178,8 +212,11 @@ export async function openCamera(first: HTMLVideoElement): Promise<Camera> {
       }
     },
     torch: Boolean(caps.torch),
-    // smallest line height (share of the frame) that still reads well in the photo
-    minLine: still || capture || Math.max(video.videoWidth, video.videoHeight) >= 3000 ? 0.003 : 0.0045,
+    // smallest line height (share of the frame) that still reads well in the photo; asked each frame,
+    // so it follows the video's real size once its metadata is in (before that: the stricter limit)
+    get minLine() {
+      return still || capture || Math.max(video.videoWidth, video.videoHeight) >= 3000 ? 0.003 : 0.0045;
+    },
     frame: function (maxSide: number) {
       if (!video.videoWidth) {
         return Promise.resolve(null);
@@ -194,12 +231,27 @@ export async function openCamera(first: HTMLVideoElement): Promise<Camera> {
       }
       if (capture) {
         try {
-          const blob = await capture.takePhoto();
+          const settings: { imageWidth?: number; imageHeight?: number; fillLightMode?: string } = { ...(await photoSettings) };
+          if (torchOn) {
+            delete settings.fillLightMode; // the rider's light stays as it is
+          }
+          let blob: Blob;
+          try {
+            blob = await capture.takePhoto(settings);
+          } catch {
+            blob = await capture.takePhoto(); // this phone refuses the settings
+          }
           const full = await createImageBitmap(blob);
           const w = full.width;
           const h = full.height;
           full.close();
-          return await bitmapOf(blob, w, h, MAX_PHOTO);
+          // A photo in the sensor's orientation (sideways to the upright video) would be read
+          // sideways: then the video frame is the safer page.
+          const sideways = w !== h && video.videoWidth !== video.videoHeight && (w > h) !== (video.videoWidth > video.videoHeight);
+          if (!sideways || !video.videoWidth) {
+            return await bitmapOf(blob, w, h, MAX_PHOTO);
+          }
+          console.info("[camera] reader: photo " + w + "x" + h + " is sideways to the video " + video.videoWidth + "x" + video.videoHeight + ", using the video frame");
         } catch {
           // some phones refuse while streaming: use the video frame
         }
@@ -212,6 +264,7 @@ export async function openCamera(first: HTMLVideoElement): Promise<Camera> {
       }
       try {
         await track.applyConstraints({ advanced: [{ torch: on } as MediaTrackConstraintSet] });
+        torchOn = on;
       } catch {
         // not allowed on this phone
       }
@@ -220,6 +273,7 @@ export async function openCamera(first: HTMLVideoElement): Promise<Camera> {
       stream.getTracks().forEach(function (item) {
         item.stop();
       });
+      video.style.aspectRatio = "";
       video.srcObject = null;
       first.srcObject = null;
     },
