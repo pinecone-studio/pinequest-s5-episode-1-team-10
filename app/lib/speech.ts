@@ -518,7 +518,7 @@ function pulse(c: AudioContext, at: number, ms: number): void {
 }
 
 // iPhone Safari has no vibration. These two moments also play a short sound.
-export function cue(name: "bus" | "off", pattern: number[]): void {
+export function cue(name: "bus" | "off" | "sos", pattern: number[]): void {
   vibrate(pattern);
   const c = audioContext();
   if (!c) {
@@ -527,12 +527,14 @@ export function cue(name: "bus" | "off", pattern: number[]): void {
   if (c.state !== "running") {
     c.resume().catch(function () {});
   }
-  const tones = name === "bus" ? [660, 880] : [440, 440, 330];
+  // sos: six alternating tones, louder than the others (iPhone has no vibration: this is the signal)
+  const tones = name === "bus" ? [660, 880] : name === "sos" ? [880, 1175, 880, 1175, 880, 1175] : [440, 440, 330];
+  const volume = name === "sos" ? 0.3 : 0.08;
   try {
     tones.forEach(function (item, i) {
       const osc = c.createOscillator();
       const gain = c.createGain();
-      gain.gain.value = 0.08;
+      gain.gain.value = volume;
       osc.frequency.value = item;
       osc.connect(gain);
       gain.connect(c.destination);

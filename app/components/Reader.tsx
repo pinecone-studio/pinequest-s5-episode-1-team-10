@@ -13,6 +13,7 @@ import { serverCaps } from "../lib/api";
 import { canListen, enableSpeechmatics, listen as listenToRider } from "../lib/listen";
 import { savedMode, saveMode, type Mode } from "../lib/mode";
 import { beep, hasClip, phrase, vibrate, type PhraseKey } from "../lib/speech";
+import { callFamily } from "../lib/sos";
 import { keepScreenOn } from "../lib/wake";
 import { advise, openCamera, quality, type Advice, type Camera } from "../lib/reader/aim";
 import { readerCommand, type ReaderCommand } from "../lib/reader/commands";
@@ -959,6 +960,17 @@ export default function Reader() {
     }
   }
 
+  // Two fingers held until the SOS tone, then lifted (lib/sosHold.ts): reading stops, the family is called.
+  function sosCall(): void {
+    if (talking.current) {
+      talking.current.stop();
+    }
+    stopPlayer();
+    if (!callFamily()) {
+      void say("sos_no_contact");
+    }
+  }
+
   function doubleTap(): void {
     unlockPlayer();
     if (menu.current) {
@@ -1090,7 +1102,7 @@ export default function Reader() {
         {status}
       </p>
       {mode === "voice" ? (
-        <ReaderPad onTouch={unlockPlayer} onDoubleTap={doubleTap} onSwipe={swipe} onTap={tap} onHoldStart={holdStart} onHoldEnd={holdEnd}>
+        <ReaderPad onTouch={unlockPlayer} onDoubleTap={doubleTap} onSwipe={swipe} onTap={tap} onHoldStart={holdStart} onHoldEnd={holdEnd} onSos={sosCall}>
           {view}
         </ReaderPad>
       ) : (

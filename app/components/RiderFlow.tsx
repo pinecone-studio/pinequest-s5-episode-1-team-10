@@ -17,6 +17,7 @@ import { keepScreenOn } from "../lib/wake";
 import { GPS_OK_M, locate, type Position } from "../lib/location";
 import { primeBeacon } from "../lib/beacon";
 import { familyNumber, openLink, saveFamilyNumber, smsUrl, sosMessage, telUrl } from "../lib/family";
+import { callFamily, isCallFamilySpeech, isHelpSpeech } from "../lib/sos";
 import { groupDigits, phoneDigits } from "../lib/phoneWords";
 import { currentSavedReader, saveMode, setCurrentReader, subscribeReader, type Mode, type Reader } from "../lib/mode";
 import { routeLabel } from "../lib/route";
@@ -856,6 +857,25 @@ export default function RiderFlow() {
         openReader(); // "энийг уншаад өг", "ном унших": the reader, not the bus assistant
         return;
       }
+      if (isHelpSpeech(heard.text) || isCallFamilySpeech(heard.text)) {
+        // "тусламж хэрэгтэй" / "ээждээ залга": the SOS menu opens at once, on the phone's own words.
+        // The server's "near X stop" line only improves the message when it arrives a moment later.
+        speedCancel();
+        const callOnly = isCallFamilySpeech(heard.text) && !isHelpSpeech(heard.text);
+        startSos(callOnly ? "call" : "sms", { heard: heard.text, answer: "", speech: [""], action: callOnly ? "call_family" : "sos", plan: null });
+        if (!callOnly) {
+          const at = pos;
+          void askByText(heard.text, at.lat, at.lon, context).then(function (later) {
+            const where = later && later.action === "sos" ? later.speech.slice(1).join(" ") : "";
+            if (where) {
+              setSos(function (current) {
+                return current && current.mode === "sms" ? { mode: "sms", body: sosMessage(at.lat, at.lon, where) } : current;
+              });
+            }
+          });
+        }
+        return;
+      }
       sayWaitIfSlow();
       const result: AskResponse | null = await askByText(heard.text, pos.lat, pos.lon, context);
       clearTimeout(waitTimer);
@@ -942,6 +962,19 @@ export default function RiderFlow() {
     setSos(null);
     setMessage("");
     say([phrase("sos_cancelled")]);
+  }
+
+  // Two fingers held until the SOS tone, then lifted (lib/sosHold.ts), on any screen: no microphone, no
+  // server. Talking and speech stop, the dialer opens on the family number. Lifting is the tap phones
+  // need to open the dialer, and a normal one-finger gesture can never start it.
+  function sosHoldCall(): void {
+    endTalk();
+    stopSpeaking();
+    setSos(null);
+    if (!callFamily()) {
+      setMessage(phrase("sos_no_contact_setup"));
+      say([phrase("sos_no_contact_setup")]);
+    }
   }
 
   // SOS without speaking (screen-reader button): same as saying "тусламж хэрэгтэй".
@@ -1219,6 +1252,7 @@ export default function RiderFlow() {
         intro={!listeningNow && step !== "camera" && step !== "locating" && step !== "working"}
         onHoldStart={startTalk}
         onHoldEnd={endTalk}
+        onSos={sosHoldCall}
       >
         {view}
       </VoiceMenu>

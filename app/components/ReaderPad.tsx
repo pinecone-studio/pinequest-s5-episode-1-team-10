@@ -5,9 +5,11 @@
 //   swipe right / left  -> next / previous sentence
 //   one tap             -> where am I (what the reader is doing, which sentence)
 //   press and hold      -> speak a command ("дараагийн хуудас", "хурдан", "буцах"...)
+//   two fingers, hold   -> SOS (onSos): a loud tone after ~1 s, let go = the family is called
 // Keyboard (desktop testing, Bluetooth keyboards): Space/Enter, arrows, W = where, hold V = speak.
-import { useEffect, useRef, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { unlockAudio, vibrate } from "../lib/speech";
+import { createSosHold } from "../lib/sosHold";
 import { DOUBLE_TAP_MS, HOLD_MS, SWIPE_PX } from "./VoiceMenu";
 
 interface Props {
@@ -17,15 +19,20 @@ interface Props {
   onTap: () => void;
   onHoldStart: () => void;
   onHoldEnd: () => void;
+  onSos: () => void; // two fingers held until the SOS tone, then lifted (lib/sosHold.ts)
   children?: ReactNode;
 }
 
-export default function ReaderPad({ onTouch, onDoubleTap, onSwipe, onTap, onHoldStart, onHoldEnd, children }: Props) {
+export default function ReaderPad({ onTouch, onDoubleTap, onSwipe, onTap, onHoldStart, onHoldEnd, onSos, children }: Props) {
   const down = useRef<{ x: number; y: number } | null>(null);
   const lastTap = useRef(0);
   const tapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const holding = useRef(false);
+  const [sosHold] = useState(createSosHold);
+  useEffect(function () {
+    sosHold.setHandler(onSos);
+  });
 
   useEffect(function () {
     return function () {
@@ -35,8 +42,9 @@ export default function ReaderPad({ onTouch, onDoubleTap, onSwipe, onTap, onHold
       if (holdTimer.current) {
         clearTimeout(holdTimer.current);
       }
+      sosHold.cancel();
     };
-  }, []);
+  }, [sosHold]);
 
   function cancelHold(): void {
     if (holdTimer.current) {
@@ -57,6 +65,16 @@ export default function ReaderPad({ onTouch, onDoubleTap, onSwipe, onTap, onHold
     }
     unlockAudio();
     onTouch();
+    if (sosHold.down(e)) {
+      // A second finger: this is SOS's, not a tap / swipe / command. A command already started ends.
+      cancelHold();
+      down.current = null;
+      if (holding.current) {
+        holding.current = false;
+        onHoldEnd();
+      }
+      return;
+    }
     down.current = { x: e.clientX, y: e.clientY };
     cancelHold();
     holdTimer.current = setTimeout(function () {
@@ -68,6 +86,7 @@ export default function ReaderPad({ onTouch, onDoubleTap, onSwipe, onTap, onHold
   }
 
   function onPointerMove(e: PointerEvent): void {
+    sosHold.move(e);
     const start = down.current;
     if (start && Math.hypot(e.clientX - start.x, e.clientY - start.y) > SWIPE_PX / 2) {
       cancelHold(); // a swipe
@@ -76,6 +95,10 @@ export default function ReaderPad({ onTouch, onDoubleTap, onSwipe, onTap, onHold
 
   function onPointerUp(e: PointerEvent): void {
     cancelHold();
+    if (sosHold.up(e)) {
+      down.current = null;
+      return; // a lift of a two-finger touch is never a tap
+    }
     if (holding.current) {
       holding.current = false;
       down.current = null;
