@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="mn">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Автобус хөтөч — Баг 10</title>
+<style>
+@font-face {
+  font-family: "Manrope";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/manrope-400.ttf") format("truetype");
+}
+@font-face {
+  font-family: "Manrope";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("fonts/manrope-600.ttf") format("truetype");
+}
+@font-face {
+  font-family: "Unbounded";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("fonts/unbounded-500.ttf") format("truetype");
+}
+@font-face {
+  font-family: "Unbounded";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("fonts/unbounded-700.ttf") format("truetype");
+}
+
+:root {
+  --ink: #141611;
+  --paper: #f3f0e7;
+  --amber: #e2a11a;
+  --amber-deep: #8d5e08;
+  --muted-dark: #a3aa9c;
+  --muted-light: #5e645a;
+  --line-dark: #2c3128;
+  --line-light: #ddd6c8;
+}
+
+* { box-sizing: border-box; }
+html, body, main { margin: 0; height: 100%; }
+body {
+  background: var(--ink);
+  color: var(--paper);
+  font-family: "Manrope", "Noto Sans", sans-serif;
+  font-weight: 400;
+}
+main { position: relative; }
+body.light { background: var(--paper); color: var(--ink); }
+
+.slide {
+  display: none;
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  padding: clamp(28px, 6vh, 76px) clamp(28px, 6.5vw, 104px) clamp(64px, 9vh, 92px);
+  flex-direction: column;
+}
+.slide.on { display: flex; }
+.dark { background: var(--ink); color: var(--paper); }
+.light { background: var(--paper); color: var(--ink); }
+
+.kicker {
+  margin: 0 0 clamp(16px, 2.4vh, 28px);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+.dark .kicker { color: var(--amber); }
+.light .kicker { color: var(--amber-deep); }
+
+h1 {
+  margin: 0;
+  font-family: "Unbounded", "Manrope", sans-serif;
+  font-weight: 500;
+  font-size: clamp(48px, 6.4vw, 92px);
+  line-height: 0.98;
+  letter-spacing: -0.03em;
+}
+.lede {
+  margin: clamp(18px, 2.5vh, 28px) 0 0;
+  max-width: 16em;
+  font-size: clamp(18px, 1.7vw, 26px);
+  line-height: 1.35;
+}
+.dark .lede { color: var(--muted-dark); }
+.light .lede { color: var(--muted-light); }
+
+.hero {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(280px, 0.95fr);
+  gap: clamp(24px, 4vw, 64px);
+  align-items: center;
+}
+.bus { width: 100%; height: auto; }
+
+.center { justify-content: center; }
+.stat b {
+  display: block;
+  font-family: "Unbounded", "Manrope", sans-serif;
+  font-weight: 500;
+  font-size: clamp(72px, 11vw, 148px);
+  line-height: 0.9;
+  letter-spacing: -0.04em;
+  color: var(--amber-deep);
+}
+.stat span {
+  display: block;
+  margin-top: 12px;
+  max-width: 16em;
+  font-size: clamp(20px, 2vw, 30px);
+  line-height: 1.3;
+}
+.source {
+  margin-top: clamp(18px, 3vh, 36px);
+  font-size: 15px;
+  color: var(--muted-light);
+}
+.gap {
+  margin: clamp(8px, 2vh, 20px) 0 0;
+  max-width: 18em;
+  font-size: clamp(22px, 2.3vw, 34px);
+  line-height: 1.28;
+  font-weight: 600;
+}
+
+.steps {
+  margin: 0 0 clamp(22px, 3vh, 36px);
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(14px, 2.2vh, 26px);
+}
+.steps li {
+  display: grid;
+  grid-template-columns: 4.2rem minmax(0, 1fr);
+  gap: 8px 18px;
+  align-items: baseline;
+}
+.steps .n {
+  font-family: "Unbounded", "Manrope", sans-serif;
+  font-weight: 500;
+  font-size: clamp(22px, 2vw, 28px);
+  color: var(--amber);
+}
+.steps strong {
+  display: block;
+  font-family: "Unbounded", "Manrope", sans-serif;
+  font-weight: 500;
+  font-size: clamp(26px, 2.6vw, 36px);
+  letter-spacing: -0.03em;
+}
+.steps p {
+  margin: 4px 0 0;
+  font-size: clamp(16px, 1.45vw, 20px);
+  color: var(--muted-dark);
+}
+.footline {
+  margin: 0;
+  padding-top: 18px;
+  border-top: 1px solid var(--line-dark);
+  font-size: clamp(16px, 1.4vw, 20px);
+  color: var(--muted-dark);
+}
+
+.promise {
+  margin: auto 0 0;
+  max-width: 14em;
+  font-family: "Unbounded", "Manrope", sans-serif;
+  font-weight: 500;
+  font-size: clamp(36px, 4.4vw, 64px);
+  line-height: 1.12;
+  letter-spacing: -0.03em;
+}
+.facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: clamp(16px, 3vw, 40px);
+  margin-top: auto;
+  padding-top: 28px;
+  border-top: 1px solid var(--line-light);
+}
+.facts b {
+  display: block;
+  font-family: "Unbounded", "Manrope", sans-serif;
+  font-weight: 500;
+  font-size: clamp(22px, 2vw, 28px);
+  letter-spacing: -0.03em;
+}
+.facts span {
+  display: block;
+  margin-top: 8px;
+  font-size: 16px;
+  line-height: 1.35;
+  color: var(--muted-light);
+}
+.note {
+  margin: 22px 0 0;
+  font-size: 16px;
+  color: var(--muted-light);
+}
+
+.measure {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: clamp(24px, 5vw, 72px);
+  align-items: center;
+}
+.zero b {
+  display: block;
+  font-family: "Unbounded", "Manrope", sans-serif;
+  font-weight: 500;
+  font-size: clamp(120px, 16vw, 220px);
+  line-height: 0.8;
+  letter-spacing: -0.05em;
+  color: var(--amber);
+}
+.zero span {
+  display: block;
+  margin-top: 10px;
+  font-size: clamp(20px, 2vw, 28px);
+}
+.rows { margin: 0; padding: 0; list-style: none; }
+.rows li {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 16px 32px;
+  align-items: baseline;
+  padding: 14px 0;
+  border-top: 1px solid var(--line-dark);
+}
+.rows li:last-child { border-bottom: 1px solid var(--line-dark); }
+.rows b {
+  font-family: "Unbounded", "Manrope", sans-serif;
+  font-weight: 500;
+  font-size: clamp(20px, 1.8vw, 26px);
+  letter-spacing: -0.03em;
+}
+.rows span { font-size: clamp(16px, 1.4vw, 20px); color: var(--muted-dark); }
+.fine {
+  margin: 18px 0 0;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--muted-dark);
+}
+
+.rules {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(18px, 3vh, 32px);
+}
+.rules li {
+  font-family: "Unbounded", "Manrope", sans-serif;
+  font-weight: 500;
+  font-size: clamp(26px, 3.1vw, 44px);
+  line-height: 1.2;
+  letter-spacing: -0.03em;
+  max-width: 18em;
+}
+.rules .warn { color: var(--amber-deep); }
+
+.people {
+  margin: auto 0;
+  padding: 0;
+  list-style: none;
+  width: min(100%, 760px);
+  font-size: clamp(22px, 2.4vw, 34px);
+}
+.people li {
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  column-gap: 24px;
+  align-items: baseline;
+  padding: clamp(10px, 1.5vh, 16px) 0;
+  border-top: 1px solid var(--line-dark);
+}
+.people li:last-child { border-bottom: 1px solid var(--line-dark); }
+.people strong {
+  font-family: "Unbounded", "Manrope", sans-serif;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+}
+.people span { color: var(--muted-dark); font-size: 0.72em; }
+
+.demo {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) auto;
+  gap: clamp(24px, 4vw, 64px);
+  align-items: center;
+}
+.demo a {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 2px solid var(--amber-deep);
+}
+.url {
+  margin: 0;
+  font-family: "Unbounded", "Manrope", sans-serif;
+  font-weight: 500;
+  font-size: clamp(22px, 2.7vw, 40px);
+  line-height: 1.2;
+  letter-spacing: -0.04em;
+  white-space: nowrap;
+}
+.say {
+  margin: 18px 0 0;
+  font-size: clamp(18px, 1.7vw, 24px);
+  color: var(--muted-light);
+}
+.qr {
+  width: clamp(140px, 18vw, 210px);
+  height: auto;
+  background: var(--paper);
+}
+
+.chrome {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px clamp(20px, 4vw, 48px) 16px;
+  pointer-events: none;
+}
+.ticks { display: flex; gap: 7px; pointer-events: auto; }
+.tick {
+  width: 18px;
+  height: 3px;
+  padding: 0;
+  border: 0;
+  background: currentColor;
+  opacity: 0.25;
+  cursor: pointer;
+}
+.tick.now { opacity: 1; background: var(--amber); }
+body.light .tick.now { background: var(--amber-deep); }
+.count {
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  opacity: 0.6;
+}
+.edge {
+  position: fixed;
+  top: 0;
+  bottom: 48px;
+  width: 8vw;
+  min-width: 48px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 32px;
+  cursor: pointer;
+  opacity: 0;
+}
+.edge:hover, .edge:focus { opacity: 0.45; }
+.edge.left { left: 0; }
+.edge.right { right: 0; }
+
+@media (max-width: 800px) {
+  .hero, .measure, .demo, .facts { grid-template-columns: 1fr; }
+  .bus { max-width: 420px; }
+  .zero b { font-size: 120px; }
+  .rows li, .steps li { grid-template-columns: 1fr; gap: 2px; }
+  .people { width: 100%; }
+  .people li { grid-template-columns: 1fr; gap: 2px; }
+  .qr { width: 140px; }
+  .url { white-space: normal; }
+}
+@media (max-height: 700px) {
+  .promise { font-size: 36px; }
+  .rules li { font-size: 26px; }
+  .zero b { font-size: 120px; }
+}
+</style>
+</head>
+<body>
+<main>
+  <section class="slide dark on" aria-label="Нэр">
+    <div class="hero">
+      <div>
+        <p class="kicker">Баг 10</p>
+        <h1>Автобус<br>хөтөч</h1>
+        <p class="lede">Өгөгдөл автобус ойролцоогоор хаана байгааг мэднэ. Камер яг аль нь, хаалга нь хаана байгааг мэднэ.</p>
+      </div>
+      <svg class="bus" viewBox="0 0 560 400" role="img" aria-label="Автобусны урд хаалга, дээр нь 55 гэсэн тэмдэг, хаалга руу дуут дохио">
+        <line x1="48" y1="332" x2="520" y2="332" stroke="#2c3128" stroke-width="2"/>
+        <rect x="64" y="148" width="392" height="156" rx="26" stroke="#f3f0e7" stroke-width="3" fill="none"/>
+        <rect x="292" y="100" width="96" height="48" rx="6" fill="#e2a11a"/>
+        <text x="340" y="132" text-anchor="middle" font-family="Unbounded, Manrope, sans-serif" font-size="24" font-weight="500" fill="#141611">55</text>
+        <rect x="92" y="176" width="64" height="44" rx="6" stroke="#f3f0e7" stroke-width="2" fill="none"/>
+        <rect x="168" y="176" width="64" height="44" rx="6" stroke="#f3f0e7" stroke-width="2" fill="none"/>
+        <rect x="244" y="176" width="64" height="44" rx="6" stroke="#f3f0e7" stroke-width="2" fill="none"/>
+        <rect x="348" y="176" width="78" height="128" rx="8" stroke="#e2a11a" stroke-width="3" fill="none"/>
+        <line x1="387" y1="176" x2="387" y2="304" stroke="#e2a11a" stroke-width="2"/>
+        <circle cx="150" cy="332" r="26" stroke="#f3f0e7" stroke-width="3" fill="#141611"/>
+        <circle cx="150" cy="332" r="7" fill="#f3f0e7"/>
+        <circle cx="372" cy="332" r="26" stroke="#f3f0e7" stroke-width="3" fill="#141611"/>
+        <circle cx="372" cy="332" r="7" fill="#f3f0e7"/>
+        <path d="M470 214 a 40 40 0 0 1 0 80" stroke="#e2a11a" stroke-width="2.5" fill="none"/>
+        <path d="M492 196 a 62 62 0 0 1 0 116" stroke="#e2a11a" stroke-width="2.5" fill="none" opacity="0.65"/>
+        <path d="M514 178 a 84 84 0 0 1 0 152" stroke="#e2a11a" stroke-width="2.5" fill="none" opacity="0.35"/>
+      </svg>
+    </div>
+  </section>
+
+  <section class="slide light center" aria-label="Асуудал">
+    <p class="kicker">Асуудал</p>
+    <div class="stat">
+      <b>11 125</b>
+      <span>харааны бэрхшээлтэй иргэн Монголд бүртгэлтэй.</span>
+    </div>
+    <p class="gap">Тэмдэг уншина. Хүнтэй холбоно. Зөв хаалга хүртэл хөтлөх хэрэгтэй.</p>
+    <p class="source">2025 · 1212.mn</p>
+  </section>
+
+  <section class="slide dark center" aria-label="Шийдэл">
+    <p class="kicker">Шийдэл</p>
+    <ol class="steps">
+      <li>
+        <span class="n">01</span>
+        <div>
+          <strong>Хэл</strong>
+          <p>Очих газар, эсвэл автобусны дугаар.</p>
+        </div>
+      </li>
+      <li>
+        <span class="n">02</span>
+        <div>
+          <strong>Сонго</strong>
+          <p>Нэг чиглэл. Бодит зогсоол, бодит маршрут.</p>
+        </div>
+      </li>
+      <li>
+        <span class="n">03</span>
+        <div>
+          <strong>Шалга</strong>
+          <p>Тэмдэг ба өгөгдөл зөвшөөрвөл л «ирлээ».</p>
+        </div>
+      </li>
+      <li>
+        <span class="n">04</span>
+        <div>
+          <strong>Хаалга</strong>
+          <p>Цагийн зүг, алхам, дуут дохио.</p>
+        </div>
+      </li>
+    </ol>
+    <p class="footline">Жолоочид хүрэхийн тулд эхлээд зөв хаалган дээр очно.</p>
+  </section>
+
+  <section class="slide light" aria-label="Итгэл">
+    <p class="kicker">Итгэл</p>
+    <p class="promise">Хоёр эх сурвалж зөвшөөрвөл л «ирлээ».</p>
+    <p class="note">Туслах зөвхөн автобусны өгөгдлөөс хариулна.</p>
+    <div class="facts">
+      <div>
+        <b>5 / 7</b>
+        <span>Сүүлийн кадр санал нэг байвал тоолно.</span>
+      </div>
+      <div>
+        <b>1 сек</b>
+        <span>Хариугүй бол «итгэлгүй». Тааварлахгүй.</span>
+      </div>
+      <div>
+        <b>Энэ зогсоол</b>
+        <span>Зөвхөн энд ирдэг дугаар тооцогдоно.</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide dark" aria-label="Хэмжилт">
+    <p class="kicker">Хэмжилт</p>
+    <div class="measure">
+      <div class="zero">
+        <b>0</b>
+        <span>буруу «ирлээ»</span>
+      </div>
+      <ul class="rows">
+        <li><b>2.3 сек</b><span>Ч:55 гэж хэлтэл</span></li>
+        <li><b>1 цагийн зүг</b><span>хаалга хүртэл 13 алхам</span></li>
+        <li><b>833/834</b><span>зогсоолын нэр таарсан</span></li>
+        <li><b>27/27</b><span>туслахын шалгалт</span></li>
+      </ul>
+    </div>
+    <p class="fine">Төв номын сангийн 2 зураг, 2026.10.14. Уншигдахгүй тэмдэг дээр «итгэлгүй». Зогсоолын нэр: 834 нэрийн шалгалт. Туслах: 27 асуулт.</p>
+  </section>
+
+  <section class="slide light center" aria-label="Аюулгүй">
+    <p class="kicker">Аюулгүй</p>
+    <ul class="rules">
+      <li>Таяг саадыг мэдэрнэ. Апп зүг заана.</li>
+      <li>Нэг чих нээлттэй. Зам сонсогдоно.</li>
+      <li class="warn">Хөдөлбөл: «Хойш зогсоорой.»</li>
+    </ul>
+    <p class="note">Гэр бүлд байршил илгээнэ. Мессеж, эсвэл залгалт.</p>
+  </section>
+
+  <section class="slide dark" aria-label="Баг">
+    <p class="kicker">Баг</p>
+    <ul class="people">
+      <li><strong>Ахлагч</strong><span>сервер, нэгтгэл</span></li>
+      <li><strong>Халиун</strong><span>илрүүлэлт, камер</span></li>
+      <li><strong>Чулуунбат</strong><span>апп, дуут урсгал</span></li>
+      <li><strong>Уранзул</strong><span>хаалга, аюулгүй байдал</span></li>
+      <li><strong>Отгонжаргал</strong><span>зураг, дуу, тест</span></li>
+    </ul>
+  </section>
+
+  <section class="slide light" aria-label="Демо">
+    <div class="demo">
+      <div>
+        <p class="kicker">Туршаарай</p>
+        <p class="url"><a href="https://avtobus-khotoch.vercel.app">avtobus-khotoch.vercel.app</a></p>
+        <p class="say">«Дэнжийн 1000» гэж хэлээрэй.</p>
+      </div>
+      <img class="qr" src="demo-qr.png" alt="Демо хуудасны QR код">
+    </div>
+  </section>
+</main>
+
+<button class="edge left" id="prev" type="button" aria-label="Өмнөх слайд">‹</button>
+<button class="edge right" id="next" type="button" aria-label="Дараах слайд">›</button>
+<div class="chrome">
+  <div class="ticks" id="ticks"></div>
+  <div class="count" id="count">1 / 8</div>
+</div>
+
+<script>
+(function () {
+  var slides = Array.prototype.slice.call(document.querySelectorAll(".slide"));
+  var index = 0;
+  var ticks = document.getElementById("ticks");
+  var count = document.getElementById("count");
+
+  slides.forEach(function (item, i) {
+    var button = document.createElement("button");
+    button.type = "button";
+    button.className = "tick";
+    button.setAttribute("aria-label", "Слайд " + String(i + 1));
+    button.addEventListener("click", function () { show(i); });
+    ticks.appendChild(button);
+  });
+
+  function show(next) {
+    var wrapped = next;
+    if (wrapped < 0) wrapped = slides.length - 1;
+    if (wrapped >= slides.length) wrapped = 0;
+    index = wrapped;
+    slides.forEach(function (item, i) {
+      var on = i === index;
+      item.classList.toggle("on", on);
+      if (on) item.removeAttribute("hidden");
+      else item.setAttribute("hidden", "");
+    });
+    document.body.classList.toggle("light", slides[index].classList.contains("light"));
+    count.textContent = String(index + 1) + " / " + String(slides.length);
+    Array.prototype.forEach.call(ticks.children, function (item, i) {
+      item.classList.toggle("now", i === index);
+    });
+  }
+
+  function onKey(event) {
+    var key = event.key;
+    if (key === "ArrowRight" || key === " " || key === "PageDown") {
+      event.preventDefault();
+      show(index + 1);
+    } else if (key === "ArrowLeft" || key === "PageUp" || key === "Backspace") {
+      event.preventDefault();
+      show(index - 1);
+    } else if (key === "Home") {
+      show(0);
+    } else if (key === "End") {
+      show(slides.length - 1);
+    } else if (key === "f" || key === "F") {
+      if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+      else document.exitFullscreen();
+    }
+  }
+
+  document.addEventListener("keydown", onKey);
+  document.getElementById("next").addEventListener("click", function () { show(index + 1); });
+  document.getElementById("prev").addEventListener("click", function () { show(index - 1); });
+
+  var startX = 0;
+  document.addEventListener("pointerdown", function (event) {
+    startX = event.clientX;
+  });
+  document.addEventListener("pointerup", function (event) {
+    if (event.target.closest("a, button")) return;
+    var dx = event.clientX - startX;
+    if (Math.abs(dx) < 60) return;
+    show(index + (dx < 0 ? 1 : -1));
+  });
+
+  var params = new URLSearchParams(location.search);
+  var start = Number(params.get("slide") || "1");
+  if (!start || start < 1 || start > slides.length) start = 1;
+  show(start - 1);
+})();
+</script>
+</body>
+</html>
