@@ -101,6 +101,19 @@ export function isReady(part: Part): boolean {
   return ready[part];
 }
 
+// Drops a worker and the ONNX runtime inside it. On an iPhone the page reader is dropped before the
+// voice starts: the two together are what gets the tab killed.
+export function releasePart(part: Part): void {
+  const w = workers[part];
+  if (w) {
+    w.onmessage = null;
+    w.onerror = null;
+    w.terminate();
+    workers[part] = null;
+  }
+  ready[part] = false;
+}
+
 // iPhone / iPad: the page reader and the voice are not kept in memory together (see Reader.tsx).
 export function lowMemoryPhone(): boolean {
   return settings().lowMemory;
