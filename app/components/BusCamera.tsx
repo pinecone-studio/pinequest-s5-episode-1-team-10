@@ -18,7 +18,9 @@ import { frontIsRight, guideToDoor, type DoorGuide } from "../lib/door";
 import { isIOS } from "../lib/device";
 import { explainPermission } from "../lib/permissions";
 import { buzz, phrase, prepareInstant, vibrate, type Earcon, type PhraseKey } from "../lib/speech";
-import { addVote, updateTracks, VOTE_WINDOW, type Track } from "../lib/tracker";
+import { addVote, decideNow, updateTracks, VOTE_WINDOW, type Track } from "../lib/tracker";
+import { candidatesNear, loadRouteData, routeKey } from "../lib/candidates";
+import { matchSign as matchCandidates } from "../lib/signMatch";
 import { latencyText, markDecided } from "../lib/latency";
 
 interface Props {
@@ -155,6 +157,7 @@ interface CamStats {
   error: string;
   detectMs: number;
   ocrMs: number;
+  match: string; // the last fast-path verdict (lib/signMatch.ts): "yes Ч:55 margin 0.42"
   decideMs: number; // first frame of the confirmed bus -> "yes"
 }
 
@@ -195,14 +198,14 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
       let doorSeenAt = 0;
       let doorBox: Box | null = null;
       let lastDoorRun = 0;
-      const stats: CamStats = { stage: "starting", provider: "", video: "", frames: 0, fps: 0, buses: 0, widest: 0, reads: 0, lastText: "", error: "", detectMs: 0, ocrMs: 0, decideMs: 0 };
+      const stats: CamStats = { stage: "starting", provider: "", video: "", frames: 0, fps: 0, buses: 0, widest: 0, reads: 0, lastText: "", error: "", detectMs: 0, ocrMs: 0, decideMs: 0 , match: "" };
       (window as unknown as { __cam: CamStats }).__cam = stats;
       let fpsFrom = performance.now();
       let fpsFrames = 0;
       const debugTimer = setInterval(function () {
         if (debugRef.current) {
           debugRef.current.textContent =
-            stats.stage + " · " + stats.provider + " · " + stats.video + " · " + stats.fps + " fps · buses " + stats.buses + " (widest " + stats.widest + " px) · reads " + stats.reads + (stats.lastText ? " «" + stats.lastText + "»" : "") + " · detect " + stats.detectMs + " ms · ocr " + stats.ocrMs + " ms · decide " + stats.decideMs + " ms" + (latencyText() ? " · " + latencyText() : "") + (stats.error ? " · ERROR " + stats.error : "");
+            stats.stage + " · " + stats.provider + " · " + stats.video + " · " + stats.fps + " fps · buses " + stats.buses + " (widest " + stats.widest + " px) · reads " + stats.reads + (stats.lastText ? " «" + stats.lastText + "»" : "") + " · detect " + stats.detectMs + " ms · ocr " + stats.ocrMs + " ms · decide " + stats.decideMs + " ms" + (stats.match ? " · match " + stats.match : "") + (latencyText() ? " · " + latencyText() : "") + (stats.error ? " · ERROR " + stats.error : "");
         }
       }, 500);
 
@@ -430,10 +433,35 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         dispatch(data.trackId);
         track.lastAnswer = performance.now();
         // The verdict is decided here. The server is told only so the read is logged.
-        const decided = decideSign(texts, route, routesFor(stopId), cityNumbers());
         verifyTexts(texts, stopId, route);
-        addVote(track, decided.verdict, decided.confidence, decided.number, data.frame);
+        judge(track, texts, data.frame);
         announce(track);
+      }
+
+      // Fast path first: one read that clearly picks the rider's route among the routes near this stop
+      // decides on this frame (lib/signMatch.ts); otherwise the usual two agreeing reads.
+      const wantedKey = routeKey(route);
+      function judge(track: Track, texts: [string, number][], frame: number): void {
+        const pool = wantedKey ? candidatesNear(stopId) : null;
+        if (pool) {
+          const quick = matchCandidates(
+            texts
+              .map(function (item) {
+                return item[0];
+              })
+              .join(" "),
+            wantedKey as string,
+            pool.near,
+            pool.all,
+          );
+          stats.match = quick.verdict + " " + (quick.best ?? "-") + " margin " + quick.margin.toFixed(2);
+          if (quick.verdict === "yes") {
+            decideNow(track, routeNumber(route), quick.score, frame);
+            return;
+          }
+        }
+        const decided = decideSign(texts, route, routesFor(stopId), cityNumbers());
+        addVote(track, decided.verdict, decided.confidence, decided.number, frame);
       }
 
       // Full-resolution sign crop. The best (bright, complete, sharp) frame is the one the worker reads.
@@ -478,9 +506,8 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
               .join(" ")
               .slice(0, 40);
             found.lastAnswer = performance.now();
-            const decided = decideSign(texts, route, routesFor(stopId), cityNumbers());
             verifyTexts(texts, stopId, route);
-            addVote(found, decided.verdict, decided.confidence, decided.number, frame);
+            judge(found, texts, frame);
             announce(found);
           });
           return;
@@ -776,6 +803,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
           return;
         }
         speak([phrase("camera_on")]);
+        loadRouteData(); // the routes near this stop, for the first-frame match (lib/candidates.ts)
         // The verdict sentences into memory now (earcons too), so a match plays with no download or decode.
         prepareInstant([foundSpeech, phrase("door_intro_plain"), phrase("door_intro_right"), phrase("door_intro_left"), phrase("not_your_bus"), phrase("not_sure")]);
         stats.stage = "loading";

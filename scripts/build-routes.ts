@@ -300,6 +300,19 @@ async function main(): Promise<void> {
 
   writeFileSync(join(ROOT, "data", "routes.json"), JSON.stringify(routes, null, 1) + "\n");
   writeFileSync(join(ROOT, "data", "stops.json"), JSON.stringify(stops, null, 1) + "\n");
+  // The camera's copy (app/public/data/route-data.json, ~70 KB): keys + terminals, stops + their routes.
+  mkdirSync(join(ROOT, "app", "public", "data"), { recursive: true });
+  writeFileSync(
+    join(ROOT, "app", "public", "data", "route-data.json"),
+    JSON.stringify({
+      routes: routes.map(function (item) {
+        return [item.key, item.terminals];
+      }),
+      stops: stops.map(function (item) {
+        return [item.id, Math.round(item.lat * 1e6) / 1e6, Math.round(item.lng * 1e6) / 1e6, item.routeKeys];
+      }),
+    }),
+  );
 
   console.log("\n== routes: " + routes.length + " (data/route.ts), written to data/routes.json");
   console.log("matched to Hamuga data: " + report.matched.length);

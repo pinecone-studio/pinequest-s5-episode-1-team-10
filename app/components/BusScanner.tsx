@@ -15,6 +15,8 @@ import { createLedCropper, type LedCrop } from "../lib/crop-led";
 import { makeRouteBook, matchSign, type RouteBook } from "../lib/parse-sign";
 import { explainPermission } from "../lib/permissions";
 import { phrase, prepareInstant, type Earcon } from "../lib/speech";
+import { candidatesNear, loadRouteData, routeKey } from "../lib/candidates";
+import { matchSign as matchCandidates } from "../lib/signMatch";
 import { cityNumbers, prefetchStopRoutes, routesFor } from "../lib/stopRoutes";
 import { latencyText, markDecided } from "../lib/latency";
 
@@ -142,7 +144,13 @@ export default function BusScanner({ stopId, route, foundSpeech, onFound, onErro
         stats.lastLines = body.lines.join(" | ");
         stats.azureMs = body.timingMs;
         stats.roundTripMs = Math.round(now - sentAt);
-        const match = matchSign(body.lines, route, routeBook());
+        // Fast path: the read clearly picks the rider's route among the routes near this stop
+        // (lib/signMatch.ts); else the sign parser's own rules (lib/parse-sign.ts).
+        const wantedKey = routeKey(route);
+        const pool = wantedKey ? candidatesNear(stopId) : null;
+        const quick = pool ? matchCandidates(body.lines.join(" "), wantedKey as string, pool.near, pool.all) : null;
+        const parsed = matchSign(body.lines, route, routeBook());
+        const match = quick && quick.verdict === "yes" ? { verdict: "yes" as const, route: parsed.route ?? (wantedKey as string) } : parsed;
         if (match.route) {
           lastRouteAt = now;
           cropper.routeRead(now);
@@ -325,6 +333,7 @@ export default function BusScanner({ stopId, route, foundSpeech, onFound, onErro
         if (!routesFor(stopId)) {
           prefetchStopRoutes(stopId, [], ""); // the plan step already asked; in case it failed
         }
+        loadRouteData(); // routes near this stop, for the fast match
         announcer.preload([foundSpeech, phrase("not_your_bus"), phrase("not_sure")]);
         prepareInstant([foundSpeech, phrase("not_your_bus")]); // decoded into memory: no wait at the verdict
         const video = videoRef.current;

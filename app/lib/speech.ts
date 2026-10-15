@@ -585,7 +585,8 @@ export type Earcon = "match" | "wrong";
 const decoded = new Map<string, AudioBuffer>();
 let earcons: Record<Earcon, AudioBuffer> | null = null;
 
-// match: two rising notes (bright, "yes"); wrong: two falling low notes (dull, "no"). ~0.3 s.
+// match: two rising notes (bright, "yes"); wrong: two falling low notes (dull, "no"). Short (0.13 /
+// 0.17 s) so the words follow at once (user: as fast as possible).
 function makeEarcons(c: AudioContext): Record<Earcon, AudioBuffer> {
   function notes(list: [number, number][], wave: (phase: number) => number, volume: number): AudioBuffer {
     const rate = c.sampleRate;
@@ -609,16 +610,16 @@ function makeEarcons(c: AudioContext): Record<Earcon, AudioBuffer> {
   return {
     match: notes(
       [
-        [880, 0.11],
-        [1320, 0.2],
+        [880, 0.05],
+        [1320, 0.08],
       ],
       Math.sin,
       0.35,
     ),
     wrong: notes(
       [
-        [330, 0.15],
-        [247, 0.22],
+        [330, 0.07],
+        [247, 0.1],
       ],
       function (ph) {
         return 0.8 * Math.sin(ph) + 0.2 * Math.sin(3 * ph); // a little rougher
@@ -715,7 +716,7 @@ export function playInstant(earcon: Earcon, texts: string[]): Promise<void> {
     }
     finish = stop;
     if (inMemory) {
-      at += 0.06;
+      at += 0.02;
       spoken.forEach(function (item, i) {
         if (i === 0) {
           soundScheduled("voice", c, at);

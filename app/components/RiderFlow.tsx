@@ -36,6 +36,7 @@ import Settings from "./Settings";
 import SrScreen from "./SrScreen";
 import TypeIn from "./TypeIn";
 import VoiceMenu, { type MenuItem } from "./VoiceMenu";
+import { loadRouteData } from "../lib/candidates";
 
 type Step =
   | "start"
@@ -769,6 +770,7 @@ export default function RiderFlow() {
   // blind rider holds the phone and listens, so a screen that never gets touched locked after 30 s -
   // 1 min, the locked page was dropped and the app started again from the beginning.
   useEffect(function () {
+    loadRouteData(); // routes + stops for the camera's first-frame match, fetched while the rider plans
     keepScreenOn(true);
     return function () {
       keepScreenOn(false);
