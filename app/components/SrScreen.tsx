@@ -8,13 +8,14 @@ import type { MenuItem } from "./VoiceMenu";
 
 interface Props {
   title: string;
+  stepId: string; // focus moves when the step changes, even if the heading text stays the same
   status: string;
   live: boolean; // true: VoiceOver reads status changes. false: the app's own voice is reading them.
   actions: MenuItem[];
   children?: ReactNode; // camera view, ride progress
 }
 
-export default function SrScreen({ title, status, live, actions, children }: Props) {
+export default function SrScreen({ title, stepId, status, live, actions, children }: Props) {
   const heading = useRef<HTMLHeadingElement>(null);
 
   useEffect(
@@ -23,7 +24,7 @@ export default function SrScreen({ title, status, live, actions, children }: Pro
         heading.current.focus();
       }
     },
-    [title],
+    [stepId],
   );
 
   return (

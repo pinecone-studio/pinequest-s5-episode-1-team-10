@@ -1037,7 +1037,13 @@ export default function RiderFlow() {
   if (mode === "sr") {
     return (
       <main className="flow">
-        <SrScreen title={title} status={speedLine ? message + " [" + speedLine + "]" : message} live={reader === "screen"} actions={actions}>
+        <SrScreen
+          title={title}
+          stepId={sos ? "sos" : step}
+          status={speedLine ? message + " [" + speedLine + "]" : message}
+          live={reader === "screen"}
+          actions={actions}
+        >
           {typing}
           {view}
         </SrScreen>
