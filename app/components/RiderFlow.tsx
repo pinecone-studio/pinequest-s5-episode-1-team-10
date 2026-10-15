@@ -652,6 +652,19 @@ export default function RiderFlow() {
     stopSpeaking();
     setStep("planned");
   }
+  function backToDestination(): void {
+    stopSpeaking();
+    setStep("ask");
+    announce([welcome()]);
+  }
+  function hearRoute(): void {
+    const p = planRef.current;
+    if (!p) {
+      return;
+    }
+    const speech = legRef.current === 1 && p.transfer ? p.transfer.speech : p.speech;
+    voice(speech.concat(phrase("open_camera")));
+  }
   function startOver(): void {
     setPlan(null);
     planRef.current = null;
@@ -949,6 +962,12 @@ export default function RiderFlow() {
     if (step === "ask" || step === "where") {
       actions = actions.concat({ id: "settings", label: "Тохиргоо", onActivate: openSettings });
     }
+  }
+  if (step === "planned" && cur && !sos) {
+    actions = actions.concat(
+      { ...label("plan-back", "menu_back"), onActivate: backToDestination },
+      { ...label("plan-again", "menu_hear_again"), onActivate: hearRoute },
+    );
   }
 
   if (step === "start") {
