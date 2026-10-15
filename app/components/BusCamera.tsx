@@ -463,27 +463,72 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         }
       }
 
-      async function start(): Promise<void> {
-        // ?video=/test/bus.webm plays a recorded clip instead of the camera (testing, demo video);
-        // ?image=/test/tov_nomyn_san_1.png shows a still photo as if the camera were pointed at it.
-        const params = new URLSearchParams(window.location.search);
-        const recorded = params.get("video");
-        const photo = params.get("image");
+      // ?video=/test/bus.webm plays a recorded clip instead of the camera (testing, demo video);
+      // ?image=/test/tov_nomyn_san_1.png shows a still photo as if the camera were pointed at it.
+      const params = new URLSearchParams(window.location.search);
+      const recorded = params.get("video");
+      const photo = params.get("image");
+      function openStream(): Promise<MediaStream | null> {
         if (photo) {
-          stream = await photoStream(photo);
-        } else if (!recorded) {
+          return photoStream(photo);
+        }
+        if (recorded) {
+          return Promise.resolve(null);
+        }
+        return navigator.mediaDevices.getUserMedia({
+          // 1080p: the route number on an LED sign is a few dozen pixels; more pixels, further away.
+          video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } },
+          audio: false,
+        });
+      }
+
+      // #2 Back from a locked screen / a call / another app: iPhone stops the camera while the page is
+      // hidden. Start it again if it stopped, and tell the rider the camera is looking again.
+      let hiddenAt = 0;
+      async function onVisibility(): Promise<void> {
+        if (document.visibilityState === "hidden") {
+          hiddenAt = performance.now();
+          return;
+        }
+        const away = hiddenAt ? performance.now() - hiddenAt : 0;
+        hiddenAt = 0;
+        const video = videoRef.current;
+        if (stopped || !video || away < 2000) {
+          return;
+        }
+        const track = stream ? stream.getVideoTracks()[0] : null;
+        if (stream && (!track || track.readyState === "ended" || track.muted || video.paused)) {
           try {
-            stream = await navigator.mediaDevices.getUserMedia({
-              // 1080p: the route number on an LED sign is a few dozen pixels; more pixels, further away.
-              video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } },
-              audio: false,
+            const fresh = await openStream();
+            if (stopped) {
+              if (fresh) {
+                fresh.getTracks().forEach(function (item) {
+                  item.stop();
+                });
+              }
+              return;
+            }
+            stream.getTracks().forEach(function (item) {
+              item.stop();
             });
+            stream = fresh;
+            video.srcObject = fresh;
           } catch (e) {
             stats.error = "camera " + (e instanceof Error ? e.name : "");
             speak([phrase("camera_failed")]);
             onError();
             return;
           }
+        }, 15000);
+        try {
+          stream = await openStream().finally(function () {
+            clearInterval(askAgain);
+          });
+        } catch (e) {
+          stats.error = "camera " + (e instanceof Error ? e.name : "");
+          sayPhrase("camera_failed");
+          onError();
+          return;
         }
         const video = videoRef.current;
         if (stopped || !video) {
@@ -587,6 +632,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
       start();
       return function () {
         stopped = true;
+        document.removeEventListener("visibilitychange", onVisibility);
         clearInterval(debugTimer);
         stopBeacon();
         guide.current = null;
