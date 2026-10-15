@@ -14,7 +14,8 @@ import { MIN_BUS_WIDTH, signCanvas, signCrop, signScore } from "../lib/crop";
 import { loadOcr, readSign } from "../lib/ocr";
 import { detectBuses, loadDetector, type Box } from "../lib/detector";
 import { detectFrontDoor, loadDoorDetector } from "../lib/doorDetector";
-import { frontIsRight, guideToDoor, type DoorGuide } from "../lib/door";
+import { frontIsRight, guideToDoor, MAIN_FOV_DEG, type DoorGuide } from "../lib/door";
+import { openBusCamera } from "../lib/camera";
 import { isIOS } from "../lib/device";
 import { explainPermission } from "../lib/permissions";
 import { buzz, phrase, prepareInstant, vibrate, type Earcon, type PhraseKey } from "../lib/speech";
@@ -148,6 +149,7 @@ interface CamStats {
   stage: string;
   provider: string;
   video: string;
+  camera: string; // which back camera (lib/camera.ts): "ultrawide-label Back Ultra Wide Camera"
   frames: number;
   fps: number;
   buses: number;
@@ -194,18 +196,19 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
       let closeSaid = false;
       const openedAt = performance.now(); // for the "[bus] yes after N ms" log (speed checks)
       const frameTimes = new Map<number, number>(); // frame number -> when it was taken (lib/latency.ts)
+      let fovDeg = MAIN_FOV_DEG; // the open camera's field of view, for the door guidance
       let doorFromFront: number | null = null; // smoothed door-model position, share of the bus length
       let doorSeenAt = 0;
       let doorBox: Box | null = null;
       let lastDoorRun = 0;
-      const stats: CamStats = { stage: "starting", provider: "", video: "", frames: 0, fps: 0, buses: 0, widest: 0, reads: 0, lastText: "", error: "", detectMs: 0, ocrMs: 0, decideMs: 0 , match: "" };
+      const stats: CamStats = { stage: "starting", provider: "", video: "", camera: "", frames: 0, fps: 0, buses: 0, widest: 0, reads: 0, lastText: "", error: "", detectMs: 0, ocrMs: 0, decideMs: 0 , match: "" };
       (window as unknown as { __cam: CamStats }).__cam = stats;
       let fpsFrom = performance.now();
       let fpsFrames = 0;
       const debugTimer = setInterval(function () {
         if (debugRef.current) {
           debugRef.current.textContent =
-            stats.stage + " · " + stats.provider + " · " + stats.video + " · " + stats.fps + " fps · buses " + stats.buses + " (widest " + stats.widest + " px) · reads " + stats.reads + (stats.lastText ? " «" + stats.lastText + "»" : "") + " · detect " + stats.detectMs + " ms · ocr " + stats.ocrMs + " ms · decide " + stats.decideMs + " ms" + (stats.match ? " · match " + stats.match : "") + (latencyText() ? " · " + latencyText() : "") + (stats.error ? " · ERROR " + stats.error : "");
+            stats.stage + " · " + stats.provider + " · " + stats.video + (stats.camera ? " " + stats.camera : "") + " · " + stats.fps + " fps · buses " + stats.buses + " (widest " + stats.widest + " px) · reads " + stats.reads + (stats.lastText ? " «" + stats.lastText + "»" : "") + " · detect " + stats.detectMs + " ms · ocr " + stats.ocrMs + " ms · decide " + stats.decideMs + " ms" + (stats.match ? " · match " + stats.match : "") + (latencyText() ? " · " + latencyText() : "") + (stats.error ? " · ERROR " + stats.error : "");
         }
       }, 500);
 
@@ -279,7 +282,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         if (!recent) {
           doorBox = null;
         }
-        const g = guideToDoor(bus.box, video.videoWidth, video.videoHeight, frontIsRight(bus.vx, bus.box), recent ? doorFromFront : null);
+        const g = guideToDoor(bus.box, video.videoWidth, video.videoHeight, frontIsRight(bus.vx, bus.box), recent ? doorFromFront : null, fovDeg);
         guide.current = g;
         aimBeacon(g.angle);
         // Safety first: a moving bus overrides everything else.
@@ -681,22 +684,23 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
       const params = new URLSearchParams(window.location.search);
       const recorded = params.get("video");
       const photo = params.get("image");
-      function openStream(): Promise<MediaStream | null> {
+      // ?cam=main: the default back camera, not the ultra-wide (to compare at a real stop).
+      const mainCamera = params.get("cam") === "main";
+      async function openStream(): Promise<MediaStream | null> {
         if (photo) {
           return photoStream(photo);
         }
         if (recorded) {
-          return Promise.resolve(null);
+          return null;
         }
-        return navigator.mediaDevices.getUserMedia({
-          // 1080p: the route number on an LED sign is a few dozen pixels; more pixels, further away.
-          // iPhone: 720p (Safari reloads the page when the camera step uses too much memory; 720p
-          // still reads the sign since each word is read on its own, lib/ocr.ts).
-          video: isIOS()
-            ? { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } }
-            : { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } },
-          audio: false,
-        });
+        // The ultra-wide where the phone has one (the whole bus fits in the frame up close).
+        // 1080p: the route number on an LED sign is a few dozen pixels; more pixels, further away.
+        // iPhone: 720p (Safari reloads the page when the camera step uses too much memory; 720p
+        // still reads the sign since each word is read on its own, lib/ocr.ts).
+        const opened = await openBusCamera(isIOS() ? { width: { ideal: 1280 }, height: { ideal: 720 } } : { width: { ideal: 1920 }, height: { ideal: 1080 } }, mainCamera);
+        fovDeg = opened.fovDeg;
+        stats.camera = opened.choice + " " + opened.label;
+        return opened.stream;
       }
 
       // #2 Back from a locked screen / a call / another app: iPhone stops the camera while the page is
