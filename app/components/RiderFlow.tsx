@@ -15,7 +15,7 @@ import { GPS_OK_M, locate, type Position } from "../lib/location";
 import { primeBeacon } from "../lib/beacon";
 import { familyNumber, openLink, saveFamilyNumber, smsUrl, sosMessage, telUrl } from "../lib/family";
 import { groupDigits, phoneDigits } from "../lib/phoneWords";
-import { savedMode, saveMode, type Mode } from "../lib/mode";
+import { saveMode, type Mode } from "../lib/mode";
 import { routeLabel } from "../lib/route";
 import { loadDetector } from "../lib/detector";
 import { loadDoorDetector } from "../lib/doorDetector";
@@ -897,30 +897,27 @@ export default function RiderFlow() {
   }
 
   if (step === "start") {
-    // A screen-reader user's first swipe lands on the first button; anyone else taps anywhere.
+    // Two equal halves. The screen-reader choice is first, so a VoiceOver user's first swipe
+    // lands there. The big "Эхлэх" used to open the gesture screen, which VoiceOver blocks.
     return (
       <main className="flow start-screen">
         <button
-          className="action"
+          type="button"
+          className="start-half"
           onClick={function () {
             begin("sr");
           }}
         >
-          Дэлгэц уншигчтай эхлэх (TalkBack, VoiceOver)
+          Дэлгэц уншигчтай (VoiceOver, TalkBack)
         </button>
         <button
-          className="big start"
-          onPointerUp={function () {
-            begin(savedMode() ?? "voice");
-          }}
-          onClick={function (e) {
-            if (e.detail === 0) {
-              begin(savedMode() ?? "voice");
-            }
+          type="button"
+          className="start-half"
+          onClick={function () {
+            begin("voice");
           }}
         >
-          Эхлэх
-          <span className="hint">Дэлгэц уншигчгүй бол хаана ч хамаагүй товшино уу</span>
+          Дэлгэц уншигчгүй
         </button>
       </main>
     );
