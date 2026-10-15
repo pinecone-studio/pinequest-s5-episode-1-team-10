@@ -21,7 +21,7 @@ import { loadDetector } from "../lib/detector";
 import { loadDoorDetector } from "../lib/doorDetector";
 import { loadOcr } from "../lib/ocr";
 import type { DoorGuide } from "../lib/door";
-import { beep, phrase, prefetch, rememberClips, say, stopSpeaking, unlockAudio, vibrate, type PhraseKey } from "../lib/speech";
+import { beep, phrase, prefetch, rememberClips, say, startWaitingTick, stopSpeaking, unlockAudio, vibrate, type PhraseKey } from "../lib/speech";
 import { onSpeedReport, showSpeed, speedCancel, speedMark, speedStart } from "../lib/speed";
 import BusCamera, { doorSpeech } from "./BusCamera";
 import RideGuide, { leftSpeech, type RideInfo } from "./RideGuide";
@@ -147,6 +147,16 @@ export default function RiderFlow() {
   const numberNext = useRef<"find" | "ask">("find"); // where the number setup goes when done
   const numberLater = useRef(false); // "Дараа нь": not asked again until the app is opened again
   const voiceBroken = useRef(false); // this browser can't recognise Mongolian: typing from now on
+
+  useEffect(
+    function () {
+      if (step !== "locating" && step !== "working") {
+        return;
+      }
+      return startWaitingTick();
+    },
+    [step],
+  );
 
   useEffect(function () {
     const saved = savedReader();

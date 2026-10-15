@@ -387,6 +387,42 @@ export function sayPhrase(key: PhraseKey): Promise<void> {
   return say([phrase(key)]);
 }
 
+// A soft click about once a second, so a slow GPS fix or a slow server is not silence.
+// The first click is after one second: a fast answer never ticks.
+export function startWaitingTick(): () => void {
+  let stopped = false;
+  let timer = 0;
+  function click(): void {
+    if (stopped) {
+      return;
+    }
+    const c = audioContext();
+    if (c) {
+      if (c.state !== "running") {
+        c.resume().catch(function () {});
+      }
+      try {
+        const osc = c.createOscillator();
+        const gain = c.createGain();
+        gain.gain.value = 0.03;
+        osc.frequency.value = 520;
+        osc.connect(gain);
+        gain.connect(c.destination);
+        osc.start();
+        osc.stop(c.currentTime + 0.04);
+      } catch {
+        // no audio device: the status text still says what is happening
+      }
+    }
+    timer = window.setTimeout(click, 1000);
+  }
+  timer = window.setTimeout(click, 1000);
+  return function () {
+    stopped = true;
+    window.clearTimeout(timer);
+  };
+}
+
 export function vibrate(pattern: number[]): void {
   if ("vibrate" in navigator) {
     navigator.vibrate(pattern);
