@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="mn">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Баг 10 · Автобус хотоход</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;500;700;800&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --blue: #2563eb;
+      --blue-deep: #1e3a8a;
+      --blue-glow: #60a5fa;
+      --ink: #0b1220;
+      --muted: #64748b;
+      --white: #ffffff;
+      --ease: cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      height: 100%;
+      overflow: hidden;
+      font-family: Outfit, system-ui, sans-serif;
+      background: #020617;
+      color: var(--ink);
+    }
+    #wrap {
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2vmin;
+    }
+    #stage {
+      width: min(96vw, calc(96vh * 16 / 9));
+      aspect-ratio: 16 / 9;
+      position: relative;
+      border-radius: 20px;
+      overflow: hidden;
+      box-shadow:
+        0 0 0 1px rgba(255,255,255,.08),
+        0 40px 120px rgba(0,0,0,.55),
+        0 0 80px rgba(37,99,235,.15);
+    }
+    .slide {
+      position: absolute;
+      inset: 0;
+      background: var(--white);
+      padding: 6% 7%;
+      opacity: 0;
+      pointer-events: none;
+      transform: scale(1.04);
+      filter: blur(8px);
+      transition:
+        opacity 0.65s var(--ease),
+        transform 0.85s var(--ease),
+        filter 0.65s var(--ease);
+    }
+    .slide.active {
+      opacity: 1;
+      pointer-events: auto;
+      transform: scale(1);
+      filter: blur(0);
+      z-index: 2;
+    }
+    .slide.leaving {
+      opacity: 0;
+      transform: scale(0.98);
+      filter: blur(4px);
+      z-index: 1;
+    }
+    .grain {
+      pointer-events: none;
+      position: absolute;
+      inset: 0;
+      opacity: 0.04;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    }
+    .orb {
+      position: absolute;
+      border-radius: 50%;
+      filter: blur(70px);
+      opacity: 0.55;
+      animation: drift 12s ease-in-out infinite;
+    }
+    .orb.one { width: 42%; height: 42%; background: var(--blue-glow); right: -8%; top: -10%; animation-delay: 0s; }
+    .orb.two { width: 28%; height: 28%; background: #818cf8; right: 18%; bottom: -5%; animation-delay: -4s; }
+    .orb.three { width: 20%; height: 20%; background: var(--blue); left: 55%; top: 40%; animation-delay: -7s; opacity: 0.35; }
+    @keyframes drift {
+      0%, 100% { transform: translate(0, 0) scale(1); }
+      50% { transform: translate(-24px, 18px) scale(1.08); }
+    }
+    .reveal {
+      opacity: 0;
+      transform: translateY(28px);
+    }
+    .slide.active .reveal {
+      animation: rise 0.9s var(--ease) forwards;
+    }
+    @keyframes rise {
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .d1 { animation-delay: 0.08s !important; }
+    .d2 { animation-delay: 0.16s !important; }
+    .d3 { animation-delay: 0.24s !important; }
+    .d4 { animation-delay: 0.32s !important; }
+    .d5 { animation-delay: 0.4s !important; }
+    .d6 { animation-delay: 0.48s !important; }
+    .d7 { animation-delay: 0.56s !important; }
+    .d8 { animation-delay: 0.64s !important; }
+    h1 {
+      font-size: clamp(2.4rem, 5.2vw, 4rem);
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      line-height: 1.05;
+      max-width: 12ch;
+    }
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 1.2rem;
+      padding: 0.45rem 0.9rem;
+      border-radius: 999px;
+      background: rgba(37, 99, 235, 0.08);
+      color: var(--blue-deep);
+      font-weight: 700;
+      font-size: 0.85rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+    .tag::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--blue);
+      animation: pulse 2s ease infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.35); opacity: 0.65; }
+    }
+    .sub {
+      margin-top: 1rem;
+      font-size: clamp(1rem, 1.8vw, 1.35rem);
+      color: var(--muted);
+      font-weight: 500;
+      max-width: 28ch;
+      line-height: 1.45;
+    }
+    .split {
+      display: grid;
+      grid-template-columns: 42% 1fr;
+      height: 100%;
+      margin: -6% -7%;
+      width: calc(100% + 14%);
+    }
+    .panel {
+      background: linear-gradient(165deg, var(--blue) 0%, var(--blue-deep) 100%);
+      color: var(--white);
+      padding: 12% 8%;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      transform: translateX(-100%);
+    }
+    .slide.active .panel {
+      animation: panelIn 0.85s var(--ease) forwards;
+    }
+    @keyframes panelIn {
+      to { transform: translateX(0); }
+    }
+    .panel h1 { color: var(--white); font-size: clamp(2rem, 4vw, 3rem); max-width: none; }
+    .panel-body {
+      padding: 12% 10%;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+    .hero-line {
+      font-size: clamp(1.25rem, 2.2vw, 1.75rem);
+      font-weight: 700;
+      line-height: 1.35;
+      max-width: 22ch;
+    }
+    .stat {
+      font-size: clamp(5rem, 14vw, 9rem);
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      background: linear-gradient(135deg, var(--blue) 0%, #6366f1 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      line-height: 1;
+    }
+    .stat-label {
+      font-size: clamp(1.1rem, 2vw, 1.5rem);
+      font-weight: 700;
+      margin-top: 0.5rem;
+    }
+    .timeline {
+      margin-top: 2.5rem;
+      display: flex;
+      gap: 2%;
+      align-items: flex-start;
+    }
+    .tl-item {
+      flex: 1;
+      padding: 1.2rem 1rem;
+      border-radius: 16px;
+      background: linear-gradient(180deg, #f8fafc 0%, #fff 100%);
+      border: 1px solid rgba(37, 99, 235, 0.12);
+      transform: translateY(40px);
+      opacity: 0;
+    }
+    .slide.active .tl-item {
+      animation: rise 0.75s var(--ease) forwards;
+    }
+    .slide.active .tl-item:nth-child(1) { animation-delay: 0.15s; }
+    .slide.active .tl-item:nth-child(2) { animation-delay: 0.28s; }
+    .slide.active .tl-item:nth-child(3) { animation-delay: 0.41s; }
+    .tl-num {
+      font-size: 0.75rem;
+      font-weight: 800;
+      color: var(--blue);
+      letter-spacing: 0.08em;
+    }
+    .tl-text {
+      margin-top: 0.5rem;
+      font-weight: 600;
+      font-size: clamp(0.85rem, 1.4vw, 1.05rem);
+      line-height: 1.35;
+    }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1.2rem;
+      margin-top: 2rem;
+    }
+    .metric {
+      padding: 1.4rem;
+      border-radius: 20px;
+      background: rgba(255,255,255,0.7);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(37,99,235,0.15);
+      box-shadow: 0 20px 50px rgba(37,99,235,0.08);
+      transform: scale(0.92);
+      opacity: 0;
+    }
+    .slide.active .metric {
+      animation: pop 0.7s var(--ease) forwards;
+    }
+    .slide.active .metric:nth-child(1) { animation-delay: 0.12s; }
+    .slide.active .metric:nth-child(2) { animation-delay: 0.22s; }
+    .slide.active .metric:nth-child(3) { animation-delay: 0.32s; }
+    @keyframes pop {
+      to { transform: scale(1); opacity: 1; }
+    }
+    .metric .n {
+      font-size: clamp(2rem, 4vw, 2.8rem);
+      font-weight: 800;
+      color: var(--blue);
+    }
+    .metric .l { font-size: 0.85rem; color: var(--muted); margin-top: 0.35rem; font-weight: 500; }
+    .demo-url {
+      font-size: clamp(1.5rem, 3vw, 2.4rem);
+      font-weight: 800;
+      letter-spacing: -0.02em;
+    }
+    .demo-glow {
+      position: absolute;
+      left: 7%;
+      top: 38%;
+      width: 50%;
+      height: 20%;
+      background: radial-gradient(ellipse, rgba(37,99,235,0.25), transparent 70%);
+      animation: glow 3s ease-in-out infinite;
+    }
+    @keyframes glow {
+      0%, 100% { opacity: 0.5; transform: scale(1); }
+      50% { opacity: 1; transform: scale(1.05); }
+    }
+    .team {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1rem 1.2rem;
+      margin-top: 1.5rem;
+    }
+    .card {
+      text-align: center;
+      padding: 0.8rem 0.5rem;
+      border-radius: 16px;
+      transform: translateY(32px) rotateX(8deg);
+      opacity: 0;
+    }
+    .slide.active .card {
+      animation: cardIn 0.8s var(--ease) forwards;
+    }
+    .slide.active .card:nth-child(1) { animation-delay: 0.1s; }
+    .slide.active .card:nth-child(2) { animation-delay: 0.18s; }
+    .slide.active .card:nth-child(3) { animation-delay: 0.26s; }
+    .slide.active .card:nth-child(4) { animation-delay: 0.34s; }
+    .slide.active .card:nth-child(5) { animation-delay: 0.42s; }
+    .slide.active .card:nth-child(6) { animation-delay: 0.5s; }
+    @keyframes cardIn {
+      to { transform: translateY(0) rotateX(0); opacity: 1; }
+    }
+    .ring {
+      width: 72px;
+      height: 72px;
+      margin: 0 auto 0.5rem;
+      border-radius: 50%;
+      padding: 3px;
+      background: linear-gradient(135deg, var(--blue), #a5b4fc);
+      animation: spin 8s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .ring img, .ring .ph {
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      object-fit: cover;
+      display: block;
+      background: #e2e8f0;
+      animation: spin 8s linear infinite reverse;
+    }
+    .card .name { font-weight: 800; font-size: 0.95rem; }
+    .card .role { font-size: 0.72rem; color: var(--muted); margin-top: 0.2rem; font-weight: 500; }
+    .quote {
+      font-size: clamp(1.35rem, 2.5vw, 2rem);
+      font-weight: 600;
+      line-height: 1.45;
+      max-width: 24ch;
+      border-left: 4px solid var(--blue);
+      padding-left: 1.2rem;
+    }
+    .bullets { margin-top: 2rem; }
+    .bullets li {
+      list-style: none;
+      font-size: clamp(1rem, 1.8vw, 1.25rem);
+      font-weight: 600;
+      padding: 0.65rem 0;
+      opacity: 0;
+      transform: translateX(-16px);
+    }
+    .slide.active .bullets li {
+      animation: slideIn 0.65s var(--ease) forwards;
+    }
+    .slide.active .bullets li:nth-child(1) { animation-delay: 0.15s; }
+    .slide.active .bullets li:nth-child(2) { animation-delay: 0.28s; }
+    .slide.active .bullets li:nth-child(3) { animation-delay: 0.41s; }
+    @keyframes slideIn {
+      to { opacity: 1; transform: translateX(0); }
+    }
+    .bullets li::before {
+      content: "→";
+      color: var(--blue);
+      margin-right: 0.6rem;
+      font-weight: 800;
+    }
+    .progress {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      height: 4px;
+      background: linear-gradient(90deg, var(--blue), #818cf8);
+      transition: width 0.5s var(--ease);
+      z-index: 10;
+    }
+    .hud {
+      position: fixed;
+      bottom: 16px;
+      right: 20px;
+      font-size: 12px;
+      color: rgba(255,255,255,0.45);
+      font-weight: 600;
+      z-index: 99;
+    }
+    .hud kbd {
+      background: rgba(255,255,255,0.08);
+      padding: 2px 8px;
+      border-radius: 6px;
+      margin: 0 2px;
+    }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div id="stage">
+      <div class="progress" id="progress"></div>
+
+      <section class="slide active" data-i="0">
+        <div class="grain"></div>
+        <div class="orb one"></div>
+        <div class="orb two"></div>
+        <div class="orb three"></div>
+        <h1 class="reveal">Автобус хотоход</h1>
+        <p class="tag reveal d2">Pinequest S5 · Баг 10</p>
+        <p class="sub reveal d3">Камер + API — хаалга хүртэл, итгэлгүй бол хэлнэ</p>
+      </section>
+
+      <section class="slide" data-i="1">
+        <div class="split">
+          <div class="panel"><h1>Асуудал</h1></div>
+          <div class="panel-body">
+            <p class="hero-line reveal">11,125 хараа ихэссэн иргэн — автобусанд гарахад тусламжгүй</p>
+            <p class="sub reveal d2">Hamuga мэдээлэл + камерын баталгаажуулалт</p>
+          </div>
+        </div>
+        <div class="orb two" style="right:5%;opacity:0.35;"></div>
+      </section>
+
+      <section class="slide" data-i="2">
+        <div class="orb one" style="opacity:0.3;right:10%;"></div>
+        <p class="stat reveal" data-count="0">0</p>
+        <p class="stat-label reveal d2">Буруу «энэ таны автобус»</p>
+        <p class="sub reveal d3">Итгэлгүй → «баталгаажуулна уу»</p>
+      </section>
+
+      <section class="slide" data-i="3">
+        <h1 class="reveal">Зам</h1>
+        <div class="timeline">
+          <div class="tl-item"><div class="tl-num">01</div><div class="tl-text">Хаашаа · эсвэл дугаар</div></div>
+          <div class="tl-item"><div class="tl-num">02</div><div class="tl-text">Ирэх мэдэгдэл</div></div>
+          <div class="tl-item"><div class="tl-num">03</div><div class="tl-text">Камер + API · хаалга</div></div>
+        </div>
+      </section>
+
+      <section class="slide" data-i="4">
+        <h1 class="reveal">Тоо</h1>
+        <div class="metrics">
+          <div class="metric"><div class="n">11.1K</div><div class="l">хараа ихэссэн (2025)</div></div>
+          <div class="metric"><div class="n">2</div><div class="l">эх сурвалж</div></div>
+          <div class="metric"><div class="n">&lt;2s</div><div class="l">«таны автобус»</div></div>
+        </div>
+      </section>
+
+      <section class="slide" data-i="5">
+        <div class="split">
+          <div class="panel"><h1>Шийдэл</h1></div>
+          <div class="panel-body">
+            <p class="hero-line reveal">Утасны PWA</p>
+            <p class="sub reveal d2">Чиглүүлэг сүлжээг хүлээхгүй</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="slide" data-i="6">
+        <p class="stat reveal">5/7</p>
+        <p class="stat-label reveal d2">Frame санал</p>
+        <p class="sub reveal d3">Нэг кадраар шийдэхгүй</p>
+      </section>
+
+      <section class="slide" data-i="7">
+        <h1 class="reveal">Аюулгүй</h1>
+        <ul class="bullets">
+          <li>Автобус хөдлөх → «хол зогс»</li>
+          <li>SOS — гэр бүлд байршил</li>
+          <li>Нэг чих · илбэр</li>
+        </ul>
+      </section>
+
+      <section class="slide" data-i="8">
+        <div class="demo-glow"></div>
+        <div class="orb three"></div>
+        <p class="demo-url reveal">avtobus-khotoch.vercel.app</p>
+        <p class="tag reveal d2" style="margin-top:1.5rem;">Live · Android Chrome</p>
+      </section>
+
+      <section class="slide" data-i="9">
+        <h1 class="reveal">Манай баг</h1>
+        <div class="team">
+          <div class="card"><div class="ring"><img src="https://avatars.githubusercontent.com/u/314887023?v=4" alt="" /></div><div class="name">Lead</div><div class="role">Backend · API</div></div>
+          <div class="card"><div class="ring"><img src="https://avatars.githubusercontent.com/u/287896902?v=4" alt="" /></div><div class="name">Халиун</div><div class="role">YOLO · ONNX</div></div>
+          <div class="card"><div class="ring"><img src="https://avatars.githubusercontent.com/u/311271751?v=4" alt="" /></div><div class="name">Чулуунбат</div><div class="role">App · PWA</div></div>
+          <div class="card"><div class="ring"><img src="https://avatars.githubusercontent.com/u/93957653?v=4" alt="" /></div><div class="name">Uranzul</div><div class="role">SOS · чиглүүлэг</div></div>
+          <div class="card"><div class="ring"><img src="https://avatars.githubusercontent.com/u/267874740?v=4" alt="" /></div><div class="name">Otgonjargal</div><div class="role">Дата · дуу</div></div>
+          <div class="card"><div class="ring"><div class="ph">?</div></div><div class="name">6-р гишүүн</div><div class="role">Нэр оруулна</div></div>
+        </div>
+      </section>
+
+      <section class="slide" data-i="10">
+        <p class="quote reveal">«Автобусын дугаарыг харахгүй — зөвхөн сонсож мэдэхгүй.»</p>
+        <p class="sub reveal d3">Хэрэглэгчийн ярилцлага</p>
+      </section>
+
+      <section class="slide" data-i="11">
+        <h1 class="reveal">Хэмжүүр</h1>
+        <ul class="bullets">
+          <li>Буруу «тийм» = 0</li>
+          <li>Хаалга X/Y</li>
+          <li>Туслах 10/X</li>
+        </ul>
+      </section>
+
+      <section class="slide" data-i="12">
+        <div class="orb one" style="opacity:0.25;left:-5%;"></div>
+        <h1 class="reveal">Баярлалаа</h1>
+        <p class="tag reveal d2">Асуулт?</p>
+        <p class="sub reveal d3">Баг 10 · Pinequest S5</p>
+      </section>
+    </div>
+  </div>
+  <p class="hud"><kbd>→</kbd> <kbd>←</kbd> · <kbd>F</kbd> fullscreen · <kbd>A</kbd> autoplay</p>
+  <script>
+    (function () {
+      var slides = document.querySelectorAll(".slide");
+      var progress = document.getElementById("progress");
+      var idx = 0;
+      var timer = null;
+      var autoplaySec = 6;
+      var params = new URLSearchParams(window.location.search);
+      if (params.get("sec")) {
+        autoplaySec = parseInt(params.get("sec"), 10) || 6;
+      }
+
+      function go(next) {
+        if (next === idx || next < 0 || next >= slides.length) {
+          return;
+        }
+        slides[idx].classList.remove("active");
+        slides[idx].classList.add("leaving");
+        var old = idx;
+        idx = next;
+        slides[idx].classList.add("active");
+        progress.style.width = ((idx + 1) / slides.length * 100) + "%";
+        window.setTimeout(function () {
+          slides[old].classList.remove("leaving");
+        }, 700);
+        resetAnim(slides[idx]);
+      }
+
+      function resetAnim(slide) {
+        var nodes = slide.querySelectorAll(".reveal, .tl-item, .metric, .card, .bullets li");
+        nodes.forEach(function (node) {
+          node.style.animation = "none";
+          void node.offsetWidth;
+          node.style.animation = "";
+        });
+      }
+
+      function toggleAutoplay() {
+        if (timer) {
+          window.clearInterval(timer);
+          timer = null;
+          return;
+        }
+        timer = window.setInterval(function () {
+          if (idx >= slides.length - 1) {
+            go(0);
+          } else {
+            go(idx + 1);
+          }
+        }, autoplaySec * 1000);
+      }
+
+      document.addEventListener("keydown", function (e) {
+        if (e.key === "ArrowRight" || e.key === " ") {
+          e.preventDefault();
+          go(Math.min(idx + 1, slides.length - 1));
+        }
+        if (e.key === "ArrowLeft") {
+          go(Math.max(idx - 1, 0));
+        }
+        if (e.key === "f" || e.key === "F") {
+          if (!document.fullscreenElement) {
+            document.documentElement.requestFullscreen();
+          } else {
+            document.exitFullscreen();
+          }
+        }
+        if (e.key === "a" || e.key === "A") {
+          toggleAutoplay();
+        }
+      });
+
+      progress.style.width = (1 / slides.length * 100) + "%";
+      if (params.get("autoplay") === "1") {
+        toggleAutoplay();
+      }
+    })();
+  </script>
+</body>
+</html>

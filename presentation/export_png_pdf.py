@@ -8,7 +8,9 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parent
-HTML = ROOT / "slides.html"
+HTML = ROOT / "deck" / "index.html"
+if not HTML.is_file():
+    HTML = ROOT / "slides.html"
 OUT_DIR = ROOT / "export"
 PDF = ROOT / "Team10-Avtobus-Khotoch.pdf"
 SLIDE_COUNT = 13

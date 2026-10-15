@@ -1,6 +1,19 @@
-# Баг 10 — илгээх presentation (шууд ашиглах)
+# Баг 10 — presentation
 
-## Шууд нээх
+## ⭐ Animation-тай deck (sanal bolgoh)
+
+**`deck/index.html`** — Outfit font, blur orbs, stagger, panel slide, team ring animation.
+
+```bash
+cd presentation/deck && python3 -m http.server 8765
+# http://localhost:8765/?autoplay=1&sec=8  — Figma-д ямар темп вэ гэдгийг үзэх
+```
+
+Figma-д ижил хөдөлгөөн: **`FIGMA_ANIMATION.md`** (transition ms, stagger delay бүгд).
+
+---
+
+## Шууд нээх (static)
 
 | Файл | Хэрэглээ |
 |------|----------|
