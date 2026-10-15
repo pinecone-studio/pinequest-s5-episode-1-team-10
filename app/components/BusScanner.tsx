@@ -12,11 +12,11 @@ import { createAnnouncer } from "../lib/announcer";
 import { iou, type Box } from "../lib/box";
 import { createCallBudget } from "../lib/call-budget";
 import { createLedCropper, type LedCrop } from "../lib/crop-led";
-import { makeRouteBook, matchSign, type RouteBook } from "../lib/parse-sign";
+import { makeRouteBook, type RouteBook } from "../lib/parse-sign";
 import { explainPermission } from "../lib/permissions";
 import { phrase, prepareInstant, type Earcon } from "../lib/speech";
 import { candidatesNear, loadRouteData, routeKey } from "../lib/candidates";
-import { matchSign as matchCandidates } from "../lib/signMatch";
+import { verdictOf as signVerdict, type ScanVerdict } from "../lib/signVerdict";
 import { loadLocalOcr, localOcrState, readLocal } from "../lib/localSignOcr";
 import { cityNumbers, prefetchStopRoutes, routesFor } from "../lib/stopRoutes";
 import { latencyText, markDecided } from "../lib/latency";
@@ -206,14 +206,9 @@ export default function BusScanner({ stopId, route, foundSpeech, onFound, onErro
         onError();
       }
 
-      // Fast path: the read clearly picks the rider's route among the routes near this stop
-      // (lib/signMatch.ts); else the sign parser's own rules (lib/parse-sign.ts).
-      function verdictOf(lines: string[]): { verdict: "yes" | "no" | "unsure"; route: string | null } {
-        const wantedKey = routeKey(route);
-        const pool = wantedKey ? candidatesNear(stopId) : null;
-        const quick = pool ? matchCandidates(lines.join(" "), wantedKey as string, pool.near, pool.all) : null;
-        const parsed = matchSign(lines, route, routeBook());
-        return quick && quick.verdict === "yes" ? { verdict: "yes", route: parsed.route ?? (wantedKey as string) } : parsed;
+      // The decision itself is lib/signVerdict.ts (also checked offline by scripts/match-report.mjs).
+      function verdictOf(lines: string[]): ScanVerdict {
+        return signVerdict(lines, route, routeKey(route) ? candidatesNear(stopId) : null, routeBook());
       }
 
       // A read that settles it (yes, or clearly another route): used at once, the other read stopped.
