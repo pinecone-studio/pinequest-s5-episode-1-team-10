@@ -3,6 +3,7 @@
 // Mounted once in the root layout: stores the voice clips on the phone (lib/offline.ts) and, with ?log=1,
 // starts the phone test log (lib/reader/remoteLog.ts). Renders nothing.
 import { useEffect } from "react";
+import "../lib/install"; // every page: Chrome's own install popup is held back (/read opened directly too)
 import { registerOffline } from "../lib/offline";
 import { startRemoteLog } from "../lib/reader/remoteLog";
 

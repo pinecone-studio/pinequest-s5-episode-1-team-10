@@ -1,10 +1,15 @@
-// Voice clips on the phone: the app's fixed sentences play at once, even with no signal.
-// Registered by lib/offline.ts. Only voice is cached here; models, /ort and every other /api call go
-// straight to the network (the browser's HTTP cache handles models).
-//   /tts/*.mp3, /api/tts?text=...  cache-first (a clip never changes: names are content hashes)
+// The installed app (home screen) and its voice clips on the phone. Registered by lib/offline.ts.
+// NEVER cached: anything under /api/* (bus data, sign reads, speech, assistant) and camera frames (they
+// only ever leave the phone as /api POSTs). Models go straight to the network (the browser's HTTP
+// cache handles them).
+//   pages (navigations)            network-first: a new deploy shows at once; the kept "/" only when
+//                                  offline (app shell)
+//   /manifest.webmanifest, icons   kept copy at once, refreshed in the background
+//   /tts/*.mp3                     cache-first (a clip never changes: names are content hashes)
 //   /tts/index.json                network-first, cached copy when offline (lib/speech.ts needs it)
+// Earcons are made in code (lib/speech.ts makeEarcons): no file to keep.
 // On install, every clip listed in /tts/index.json is cached in the background (deployed site only).
-// Bump VERSION to drop the old cache on the next visit.
+// Bump VERSION / SHELL to drop the old cache on the next visit.
 //
 // The reader (/read) is kept offline by the same worker (one worker per scope), in its own cache:
 //   /read (the page)               network-first (3 s), kept copy when offline
@@ -13,14 +18,17 @@
 //   /ort/*, /reader-worker.js      kept copy at once, refreshed in the background
 // The page tells which files it used ("keep" message), models are kept by the reader itself
 // (lib/reader/modelStore.ts). Bump READER to drop its old cache.
-const VERSION = "v1";
+const VERSION = "v2"; // v2: spoken /api/tts answers are no longer kept (v1 kept them)
 const CACHE = "voice-" + VERSION;
 const INDEX = "/tts/index.json";
 const READER = "reader-app-v4";
+const SHELL = "shell-v1";
+const SHELL_FILES = ["/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png", "/icons/icon-512-maskable.png", "/apple-touch-icon.png"];
 
 self.addEventListener("install", function (event) {
   // No skipWaiting. A new worker that takes the page at once has reloaded the app under the rider.
   event.waitUntil(readerInstall());
+  event.waitUntil(shellInstall());
   // ~185 clips (~2 MB) inside waitUntil, or the browser may stop the worker halfway. The page works
   // normally meanwhile (no worker yet = plain network); one failed clip never fails the install.
   event.waitUntil(
@@ -80,7 +88,11 @@ self.addEventListener("activate", function (event) {
         return Promise.all(
           keys
             .filter(function (item) {
-              return (item.startsWith("voice-") && item !== CACHE) || (item.startsWith("reader-app-") && item !== READER);
+              return (
+                (item.startsWith("voice-") && item !== CACHE) ||
+                (item.startsWith("reader-app-") && item !== READER) ||
+                (item.startsWith("shell-") && item !== SHELL)
+              );
             })
             .map(function (item) {
               return caches.delete(item);
@@ -91,17 +103,7 @@ self.addEventListener("activate", function (event) {
 });
 
 function isClip(url) {
-  return (url.pathname.startsWith("/tts/") && url.pathname.endsWith(".mp3")) || (url.pathname === "/api/tts" && url.searchParams.has("text"));
-}
-
-// /api/tts answers with a redirect to /tts/<name>.mp3: store the final audio as a plain response.
-function plain(res) {
-  if (!res.redirected) {
-    return Promise.resolve(res);
-  }
-  return res.blob().then(function (body) {
-    return new Response(body, { status: 200, headers: { "Content-Type": res.headers.get("Content-Type") || "audio/mpeg" } });
-  });
+  return url.pathname.startsWith("/tts/") && url.pathname.endsWith(".mp3");
 }
 
 function cacheFirst(request) {
@@ -111,13 +113,10 @@ function cacheFirst(request) {
         return hit;
       }
       return fetch(request).then(function (res) {
-        if (!res.ok) {
-          return res;
+        if (res.ok) {
+          cache.put(request.url, res.clone());
         }
-        return plain(res).then(function (clean) {
-          cache.put(request.url, clean.clone());
-          return clean;
-        });
+        return res;
       });
     });
   });
@@ -139,6 +138,62 @@ function networkFirst(request) {
         return hit || Response.error();
       });
     });
+}
+
+// ---- the app shell (installed app) -------------------------------------------------------------
+
+// The start page, manifest and icons, so the home-screen app opens with no signal. One missing file
+// never fails the install.
+function shellInstall() {
+  return caches.open(SHELL).then(function (cache) {
+    return Promise.all(
+      ["/"].concat(SHELL_FILES).map(function (item) {
+        return cache.add(item).catch(function () {});
+      }),
+    );
+  });
+}
+
+// Pages: always the network (a new deploy shows at once). Only "/" is kept, for opening offline.
+function shellPage(request) {
+  const url = new URL(request.url);
+  return fetch(request)
+    .then(function (res) {
+      if (url.pathname === "/" && res.ok && !res.redirected) {
+        const copy = res.clone();
+        caches.open(SHELL).then(function (cache) {
+          cache.put("/", copy);
+        });
+      }
+      return res;
+    })
+    .catch(function () {
+      return caches.open(SHELL).then(function (cache) {
+        return cache.match(url.pathname).then(function (hit) {
+          return hit || Response.error();
+        });
+      });
+    });
+}
+
+// Manifest and icons: the kept copy at once, refreshed in the background.
+function shellFile(event) {
+  const request = event.request;
+  return caches.open(SHELL).then(function (cache) {
+    return cache.match(request, { ignoreSearch: true }).then(function (hit) {
+      const network = fetch(request).then(function (res) {
+        if (res.ok) {
+          cache.put(new URL(request.url).pathname, res.clone());
+        }
+        return res;
+      });
+      if (hit) {
+        event.waitUntil(network.catch(function () {}));
+        return hit;
+      }
+      return network;
+    });
+  });
 }
 
 // ---- the reader (/read) -------------------------------------------------------------------------
@@ -264,8 +319,16 @@ self.addEventListener("fetch", function (event) {
   if (url.origin !== self.location.origin) {
     return;
   }
+  // Server answers and anything the camera sends: never kept, never touched.
+  if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {
+    return;
+  }
   if (request.mode === "navigate" && url.pathname.startsWith("/read")) {
     event.respondWith(readerPage(request));
+  } else if (request.mode === "navigate") {
+    event.respondWith(shellPage(request));
+  } else if (SHELL_FILES.indexOf(url.pathname) !== -1) {
+    event.respondWith(shellFile(event));
   } else if (url.pathname.startsWith("/_next/static/") || url.pathname.startsWith("/reader-clips/")) {
     event.respondWith(readerCacheFirst(request));
   } else if (url.pathname.startsWith("/ort/") || url.pathname === "/reader-worker.js") {

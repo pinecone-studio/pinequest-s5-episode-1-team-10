@@ -32,6 +32,7 @@ import BusCamera, { doorSpeech } from "./BusCamera";
 import BusScanner from "./BusScanner";
 import RideGuide, { leftSpeech, type RideInfo } from "./RideGuide";
 import Tutorial, { tutorialNeeded } from "./Tutorial";
+import InstallButton from "./InstallButton";
 import Settings from "./Settings";
 import SrScreen from "./SrScreen";
 import TypeIn from "./TypeIn";
@@ -1154,6 +1155,7 @@ export default function RiderFlow() {
     // lands there. The big "Эхлэх" used to open the gesture screen, which VoiceOver blocks.
     return (
       <main className="flow start-screen">
+        <InstallButton />
         <button
           type="button"
           className="start-half"

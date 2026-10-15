@@ -184,6 +184,25 @@ input {
   font-weight: 800;
 }
 
+/* Install (components/InstallButton.tsx): above the start halves, full width, smaller than them. */
+.install-button {
+  width: 100%;
+  min-height: 64px;
+  padding: 12px 16px;
+  border: 3px solid var(--accent);
+  border-radius: 16px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 1.35rem;
+  font-weight: 700;
+}
+
+.install-steps {
+  margin: 8px 0 0;
+  padding-left: 1.6em;
+  font-size: 1.25rem;
+}
+
 .helper-link {
   align-self: center;
   padding: 12px 20px;
