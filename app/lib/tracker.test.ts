@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Box } from "./detector.ts";
+import type { Box } from "./box.ts";
 import { addVote, updateTracks } from "./tracker.ts";
 
 function bus(x: number, score: number): Box {
