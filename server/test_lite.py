@@ -31,7 +31,8 @@ def fake_hamuga(monkeypatch, tmp_path):
 
 def test_health_says_what_runs_in_the_browser(monkeypatch):
     monkeypatch.delenv("SPEECHMATICS_API_KEY", raising=False)
-    assert client.get("/api/health").json() == {"ok": True, "stt": False, "ocr": False, "speech": False}
+    monkeypatch.delenv("CHIMEGE_API_KEY", raising=False)
+    assert client.get("/api/health").json() == {"ok": True, "stt": False, "ocr": False, "speech": False, "chimege": False}
     monkeypatch.setenv("SPEECHMATICS_API_KEY", "secret")
     assert client.get("/api/health").json()["speech"] is True
 
@@ -104,3 +105,24 @@ def test_stop_lists_come_from_the_deploy_snapshot(monkeypatch, tmp_path):
     monkeypatch.setattr(bus_api, "SNAPSHOT", tmp_path / "stops_snapshot.json")
     bus_api._snapshot.cache_clear()
     assert client.post("/api/plan", json={"text": "Сансар", "lat": 47.9003, "lon": 106.9}).json()["route"] == "Ч:75"
+
+
+def test_chimege_text_uses_the_secret_token_and_never_calls_without_one(monkeypatch):
+    import chimege
+    sent = {}
+
+    def fake_post(url, content, headers, timeout):
+        sent.update(url=url, size=len(content), token=headers["Token"])
+        return httpx.Response(200, content="ерэн ес арван нэг".encode(), request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(chimege.httpx, "post", fake_post)
+    wav = b"\0" * (60 * 1024)
+    monkeypatch.delenv("CHIMEGE_API_KEY", raising=False)
+    assert client.post("/api/stt/chimege", content=wav).status_code == 503 and not sent  # no key: no paid call
+    monkeypatch.setenv("CHIMEGE_API_KEY", "secret-token")
+    r = client.post("/api/stt/chimege", content=wav)
+    assert r.status_code == 200 and r.json() == {"text": "ерэн ес арван нэг"}
+    assert sent == {"url": chimege.URL, "size": len(wav), "token": "secret-token"} and "secret-token" not in r.text
+    sent.clear()
+    assert client.post("/api/stt/chimege", content=b"\0" * 1000).status_code == 503 and not sent  # too small: never sent
+    assert client.get("/api/health").json()["chimege"] is True

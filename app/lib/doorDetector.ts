@@ -4,8 +4,10 @@
 // Checked on tov_nomyn_san_{1,2}.png: front door 0.28 / 0.20, middle door <= 0.10, rear end none.
 import type * as Ort from "onnxruntime-web";
 import { exclusive, modelBytes, runtime, type Box } from "./detector";
+import { isIOS } from "./device";
 
-const MODEL_URL = "/models/door.onnx";
+// int8 copy (server/quantize_models.py): 40 -> 11 MB, door box within 10% of the full model.
+const MODEL_URL = "/models/door_int8.onnx";
 const SIZE = 320; // model input is SIZE x SIZE (the crop is small, 320 keeps it fast)
 const MIN_SCORE = 0.15; // the neighbouring bus's front scored 0.17, but it's outside our bus box
 const FRONT_PART = 0.45; // search the front 45% of the bus (front door sits at 85-97% of its length)
@@ -17,6 +19,11 @@ const canvas = typeof document === "undefined" ? null : document.createElement("
 
 // Loads once in the background while the camera looks for the bus, so it's ready when the bus is found.
 export function loadDoorDetector(): Promise<void> {
+  // iPhone: no door model. Loading another model right after the bus is found is the next memory
+  // spike that makes Safari reload the page; the door direction comes from the bus box instead.
+  if (isIOS()) {
+    return Promise.resolve();
+  }
   if (!loading) {
     loading = Promise.all([runtime(), modelBytes(MODEL_URL)])
       .then(function ([rt, bytes]) {
@@ -59,8 +66,10 @@ export async function detectFrontDoor(video: HTMLVideoElement, bus: Box, frontRi
   const scale = Math.min(SIZE / cw, SIZE / ch);
   const padX = (SIZE - cw * scale) / 2;
   const padY = (SIZE - ch * scale) / 2;
-  canvas.width = SIZE;
-  canvas.height = SIZE;
+  if (canvas.width !== SIZE || canvas.height !== SIZE) {
+    canvas.width = SIZE;
+    canvas.height = SIZE;
+  }
   const ctx = canvas.getContext("2d", { willReadFrequently: true }) as CanvasRenderingContext2D;
   ctx.fillStyle = "rgb(114,114,114)";
   ctx.fillRect(0, 0, SIZE, SIZE);

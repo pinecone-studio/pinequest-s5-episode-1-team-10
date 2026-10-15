@@ -1,6 +1,7 @@
 // YOLO11n (COCO, ONNX) in the browser: finds buses in a video frame.
 // ponytail: pretrained COCO "bus" class until our fine-tuned bus/door/route_sign model exists.
 import type * as Ort from "onnxruntime-web";
+import { isIOS } from "./device";
 
 export interface Box {
   x: number; // left, video pixels
@@ -94,8 +95,18 @@ async function build(o: OrtModule, bytes: Uint8Array, providers: string[]): Prom
 async function load(): Promise<string> {
   const download = modelBytes(MODEL_URL);
   // Loaded from public/ort as-is (copied by scripts/copy-ort.mjs) so the bundler never touches it.
-  ort = (await import(/* turbopackIgnore: true */ /* webpackIgnore: true */ "/ort/ort.webgpu.min.mjs" as string)) as OrtModule;
+  // iPhone: the plain WASM build (14 MB, not the 27 MB WebGPU one) and one thread (each extra thread is
+  // another copy of the runtime): Safari reloads the page when the camera step used too much memory.
+  const ios = isIOS();
+  const entry = ios ? "/ort/ort.wasm.min.mjs" : "/ort/ort.webgpu.min.mjs";
+  ort = (await import(/* turbopackIgnore: true */ /* webpackIgnore: true */ entry)) as OrtModule;
   ort.env.wasm.wasmPaths = "/ort/";
+  if (ios) {
+    ort.env.wasm.numThreads = 1;
+    // The runtime reserves memory up front (scripts/copy-ort.mjs tries 4 GB first): on iPhone start at
+    // 512 MB, plenty for the bus model + sign reader (~250 MB), so Safari isn't pushed to reload.
+    (globalThis as { ortMaxPages?: number }).ortMaxPages = 8192;
+  }
   const o = ort;
   const bytes = await download;
   if (webgpuWanted()) {
@@ -145,8 +156,10 @@ function toTensor(video: HTMLVideoElement): { data: Float32Array; scale: number;
   const padX = (SIZE - vw * scale) / 2;
   const padY = (SIZE - vh * scale) / 2;
   const c = canvas as HTMLCanvasElement;
-  c.width = SIZE;
-  c.height = SIZE;
+  if (c.width !== SIZE || c.height !== SIZE) {
+    c.width = SIZE; // once: re-sizing every frame re-allocates the canvas (iPhone memory)
+    c.height = SIZE;
+  }
   const ctx = c.getContext("2d", { willReadFrequently: true }) as CanvasRenderingContext2D;
   ctx.fillStyle = "rgb(114,114,114)";
   ctx.fillRect(0, 0, SIZE, SIZE);

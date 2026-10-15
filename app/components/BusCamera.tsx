@@ -13,6 +13,7 @@ import { loadOcr, readSign } from "../lib/ocr";
 import { detectBuses, loadDetector, type Box } from "../lib/detector";
 import { detectFrontDoor, loadDoorDetector } from "../lib/doorDetector";
 import { frontIsRight, guideToDoor, type DoorGuide } from "../lib/door";
+import { isIOS } from "../lib/device";
 import { explainPermission } from "../lib/permissions";
 import { cue, phrase, vibrate, type PhraseKey } from "../lib/speech";
 import { addVote, updateTracks, VOTE_WINDOW, type Track } from "../lib/tracker";
@@ -95,8 +96,12 @@ function draw(
   door: DoorGuide | null,
   doorBox: Box | null,
 ): void {
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
+  // Sized only when the video size changes: re-sizing a 1080p canvas every frame re-allocated ~8 MB
+  // 10-40 times a second, and iPhone Safari reloads a page whose canvas memory runs over its limit.
+  if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+  }
   const ctx = canvas.getContext("2d") as CanvasRenderingContext2D;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.lineWidth = 6;
@@ -478,7 +483,11 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         }
         return navigator.mediaDevices.getUserMedia({
           // 1080p: the route number on an LED sign is a few dozen pixels; more pixels, further away.
-          video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } },
+          // iPhone: 720p (Safari reloads the page when the camera step uses too much memory; 720p
+          // still reads the sign since each word is read on its own, lib/ocr.ts).
+          video: isIOS()
+            ? { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } }
+            : { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } },
           audio: false,
         });
       }

@@ -11,7 +11,8 @@ import json
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, RedirectResponse
 
 import bus_api
@@ -19,6 +20,7 @@ import fusion
 import planner
 import tts
 import assistant
+import chimege
 import speechmatics
 from contract import AskResponse, SpeechToken, NearestStop, VerifyTextsRequest, PlanRequest, PlanResponse, RideResponse, VerifyRequest, VerifyResponse, VoiceLocateResponse
 
@@ -33,7 +35,21 @@ UNAVAILABLE = "Bus data unavailable"
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "stt": False, "ocr": False, "speech": speechmatics.configured()}
+    return {"ok": True, "stt": False, "ocr": False, "speech": speechmatics.configured(), "chimege": chimege.configured()}
+
+
+@app.post("/api/stt/chimege")
+async def speech_text(request: Request):
+    """The phone's recording of one thing the rider said (WAV) -> Chimege's Mongolian text. Paid per
+    call: the phone sends only real speech, once (server/chimege.py)."""
+    wav = await request.body()
+    if len(wav) > chimege.MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Audio too long")
+    try:
+        text = await run_in_threadpool(chimege.transcribe, wav)
+    except (httpx.HTTPError, RuntimeError):
+        raise HTTPException(status_code=503, detail="Chimege unavailable")
+    return {"text": text}
 
 
 @app.post("/api/stt/token", response_model=SpeechToken)

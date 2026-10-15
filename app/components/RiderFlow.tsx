@@ -10,8 +10,8 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { flushSync } from "react-dom";
 import type { AskResponse, BoardStop, PlanResponse, PlanStop, VoiceLocateResponse } from "../../shared/contract";
 import { askByText, locateByText, nearestStop, requestPlan, serverCaps, wakeServer, type ServerCaps } from "../lib/api";
-import { canListen, enableSpeechmatics, listen, type Heard, type Listening } from "../lib/listen";
-import { warmSpeech } from "../lib/speechmatics";
+import { canListen, enableChimege, enableSpeechmatics, listen, type Heard, type Listening } from "../lib/listen";
+import { warmSpeech, type ListenOptions } from "../lib/speechmatics";
 import { explainPermission } from "../lib/permissions";
 import { keepScreenOn } from "../lib/wake";
 import { GPS_OK_M, locate, type Position } from "../lib/location";
@@ -60,6 +60,7 @@ type TypeFor = "number" | "dest" | "where";
 const TYPE_PROMPT: Record<TypeFor, PhraseKey> = { number: "number_type_now", dest: "dest_type_now", where: "where_type_now" };
 const TYPE_LABEL: Record<TypeFor, string> = { number: "Гэр бүлийн утасны дугаар", dest: "Очих газар", where: "Ойролцоох зогсоол" };
 const PHONE_DIGITS = 8; // Mongolian mobile numbers
+const HALF_DIGITS = 4;
 
 // ?ride=sim, or a demo photo instead of the camera: the bus drives the real stops at demo speed.
 function simulatedRide(): boolean {
@@ -141,7 +142,7 @@ export default function RiderFlow() {
   const legRef = useRef(0);
   const position = useRef<Position | null>(null);
   const fromGps = useRef(false); // GPS positions are refreshed on each request; a said place is kept
-  const caps = useRef<ServerCaps>({ stt: true, ocr: true, speech: false });
+  const caps = useRef<ServerCaps>({ stt: true, ocr: true, speech: false, chimege: false });
   const listening = useRef<Listening | null>(null); // the microphone is on
   const [found, setFound] = useState(false); // the camera confirmed the rider's bus: now guiding to its door
   const doorGuide = useRef<DoorGuide | null>(null);
@@ -322,6 +323,7 @@ export default function RiderFlow() {
       caps.current = c;
       setServerOcr(c.ocr);
       enableSpeechmatics(c.speech);
+      enableChimege(c.chimege); // the final text from Chimege when the server has its key
       if (c.speech) {
         warmSpeech(); // a key ready before the rider first speaks
       }
@@ -364,12 +366,12 @@ export default function RiderFlow() {
   // It opens during the beep, so the rider can talk right after it, and stops by itself when they
   // stop talking. The words so far are shown for a sighted helper (not in screen-reader mode: the
   // screen reader would read them out into the microphone).
-  async function hearRider(listeningStep: Step): Promise<Heard> {
+  async function hearRider(listeningStep: Step, options?: ListenOptions): Promise<Heard> {
     stopSpeaking();
     setStep(listeningStep);
     await explainPermission("microphone", setMessage); // the phone's box is visual: say what's coming
     setMessage(phrase("listening"));
-    const rec = listen(showWords);
+    const rec = listen(showWords, options);
     listening.current = rec;
     beep();
     const heard = await rec.done;
@@ -501,18 +503,68 @@ export default function RiderFlow() {
     setStep("numberListening");
     setMessage(phrase("number_say_now"));
     await say([phrase("number_say_now")]);
-    const heard = await hearRider("numberListening");
+    const heard = await hearRider("numberListening", { digits: PHONE_DIGITS });
     if (!heard.text) {
       setStep("number");
       notHeard(heard, "number");
       return;
     }
-    gotNumber(heard.text);
+    const digits = withoutCountryCode(phoneDigits(heard.text));
+    if (digits.length === PHONE_DIGITS) {
+      gotNumber(digits);
+      return;
+    }
+    // Not the whole number (a word misheard, or a pause cut it): two halves of 4 digits, which are
+    // heard far better than 8 in one go.
+    await say([phrase("number_split")]);
+    const first = await hearDigits("number_first_half");
+    if (first === null) {
+      return;
+    }
+    if (first.length === PHONE_DIGITS) {
+      gotNumber(first); // said the whole number again: fine
+      return;
+    }
+    const second = await hearDigits("number_second_half");
+    if (second !== null) {
+      gotNumber(first + second);
+    }
   }
 
+  // "976" (Mongolia's code) said first is left out; the number itself is 8 digits.
+  function withoutCountryCode(digits: string): string {
+    return digits.length === PHONE_DIGITS + 3 && digits.startsWith("976") ? digits.slice(3) : digits;
+  }
+
+  // Half a number (4 digits), asked once more if it wasn't heard whole. null: still not (the rider is
+  // told; the number screen is back, with typing as the other option).
+  async function hearDigits(ask: PhraseKey): Promise<string | null> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const key: PhraseKey = attempt ? "number_half_again" : ask;
+      setStep("numberListening");
+      setMessage(phrase(key));
+      await say([phrase(key)]);
+      const heard = await hearRider("numberListening", { digits: HALF_DIGITS });
+      if (!heard.text && heard.error !== "not-heard") {
+        setStep("number");
+        notHeard(heard, "number");
+        return null;
+      }
+      const digits = withoutCountryCode(phoneDigits(heard.text));
+      if (digits.length === HALF_DIGITS || digits.length === PHONE_DIGITS) {
+        return digits;
+      }
+    }
+    setStep("number");
+    setMessage(phrase("number_short"));
+    say([phrase("number_short")]);
+    return null;
+  }
+
+  // Said or typed: 8 digits are read back one by one for "correct?"; anything else is asked again.
   function gotNumber(text: string): void {
-    const digits = phoneDigits(text);
-    if (digits.length < PHONE_DIGITS) {
+    const digits = withoutCountryCode(phoneDigits(text));
+    if (digits.length !== PHONE_DIGITS) {
       setStep("number");
       setMessage((text ? "“" + text + "” — " : "") + phrase("number_short"));
       say([phrase("number_short")]);

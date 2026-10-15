@@ -9,12 +9,22 @@
 import { audioContext } from "./speech";
 import { speedMark } from "./speed";
 import type { Heard } from "./listen";
+import { phoneComplete } from "./phoneWords";
 
 const RATE = 16000;
 const CHUNK = 1600; // 100 ms of audio per message
 const END_SILENCE_S = 0.7; // this much quiet after speech ends the utterance (measured: text ~2 s after)
 const NO_SPEECH_MS = 7000; // nothing said at all -> "not heard"
 const MAX_MS = 15000;
+// Saying a phone number, people pause between pairs ("ерэн ес ... арван нэг ..."): 0.7 s of quiet cut
+// them off after the first pair or two. Numbers wait longer, and stop at once when the number is
+// complete (lib/phoneWords.ts phoneComplete), so a finished number never waits for the silence.
+const NUMBER_SILENCE_S = 1.8; // Speechmatics allows up to 2
+const NUMBER_MAX_MS = 22000;
+
+export interface ListenOptions {
+  digits?: number; // listening for a number of this many digits (8 = a phone number, 4 = half of one)
+}
 const CONNECT_MS = 5000; // no session by then -> give up (the caller may fall back)
 const MIC_WAIT_MS = 20000; // the first time the phone asks permission; the rider (or a helper) answers
 const FINAL_MS = 3000; // after EndOfStream, wait this long for the last words
@@ -28,6 +38,82 @@ interface Token {
 }
 
 let tokenPromise: Promise<Token | null> | null = null;
+
+// ---- Chimege (Mongolian speech company): the final text, when the server has a key ----
+// Speechmatics hears when the rider starts and stops (and is the backup text); the recording of what
+// they said then goes ONCE to Chimege through our server (/api/stt/chimege, the token stays there).
+// Paid per call (15₮ per up to 15 s): never for silence, never twice, nothing ahead of time.
+let chimegeOn = false;
+export function setChimege(on: boolean): void {
+  chimegeOn = on;
+}
+const CHIMEGE_MAX_S = 15; // one paid unit
+const CHIMEGE_MIN_BYTES = 51200; // Chimege refuses a WAV under 50 KB: short answers are padded
+const CHIMEGE_TIMEOUT_MS = 8000;
+
+function wavFrom(chunks: Int16Array[], samples: number): Blob {
+  const n = Math.max(samples, Math.ceil((CHIMEGE_MIN_BYTES - 44) / 2));
+  const bytes = new Uint8Array(44 + n * 2);
+  const v = new DataView(bytes.buffer);
+  const text = function (at: number, s: string): void {
+    for (let i = 0; i < s.length; i++) {
+      bytes[at + i] = s.charCodeAt(i);
+    }
+  };
+  text(0, "RIFF");
+  v.setUint32(4, 36 + n * 2, true);
+  text(8, "WAVEfmt ");
+  v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true); // PCM
+  v.setUint16(22, 1, true); // mono
+  v.setUint32(24, RATE, true);
+  v.setUint32(28, RATE * 2, true);
+  v.setUint16(32, 2, true);
+  v.setUint16(34, 16, true);
+  text(36, "data");
+  v.setUint32(40, n * 2, true);
+  let at = 44;
+  chunks.forEach(function (item) {
+    bytes.set(new Uint8Array(item.buffer, item.byteOffset, item.byteLength), at);
+    at += item.byteLength;
+  }); // the rest stays zero: silence padding
+  return new Blob([bytes], { type: "audio/wav" });
+}
+
+// Clearly loud for at least 0.3 s (in 100 ms chunks): speech, not a quiet room.
+function loud(chunks: Int16Array[]): boolean {
+  let n = 0;
+  chunks.forEach(function (item) {
+    let sum = 0;
+    for (let i = 0; i < item.length; i++) {
+      sum += item[i] * item[i];
+    }
+    if (Math.sqrt(sum / Math.max(1, item.length)) > 1000) {
+      n++;
+    }
+  });
+  return n >= 3;
+}
+
+function chimegeText(wav: Blob): Promise<string> {
+  const controller = new AbortController();
+  const timer = setTimeout(function () {
+    controller.abort();
+  }, CHIMEGE_TIMEOUT_MS);
+  return fetch("/api/stt/chimege", { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: wav, signal: controller.signal })
+    .then(function (res) {
+      return res.ok ? (res.json() as Promise<{ text: string }>) : { text: "" };
+    })
+    .then(function (body) {
+      return (body.text || "").trim();
+    })
+    .catch(function () {
+      return "";
+    })
+    .finally(function () {
+      clearTimeout(timer);
+    });
+}
 
 function fetchToken(): Promise<Token | null> {
   return fetch("/api/stt/token", { method: "POST" })
@@ -259,7 +345,8 @@ interface ServerMessage {
   reason?: string;
 }
 
-export function listenWithSpeechmatics(onWords?: (text: string) => void): { done: Promise<Heard>; stop: () => void } {
+export function listenWithSpeechmatics(onWords?: (text: string) => void, options?: ListenOptions): { done: Promise<Heard>; stop: () => void } {
+  const digits = options && options.digits ? options.digits : 0;
   let endRequest: () => void = function () {};
   let stopEarly = false;
   const done = new Promise<Heard>(function (resolve) {
@@ -271,6 +358,8 @@ export function listenWithSpeechmatics(onWords?: (text: string) => void): { done
     let seq = 0;
     let busyTries = 0;
     let pending: ArrayBuffer[] = []; // audio from before the session started
+    const recorded: Int16Array[] = []; // everything heard, for Chimege (up to CHIMEGE_MAX_S)
+    let recordedSamples = 0;
     const finals: string[] = [];
     let partial = "";
     let spoke = false;
@@ -279,6 +368,29 @@ export function listenWithSpeechmatics(onWords?: (text: string) => void): { done
     function text(): string {
       return finals.join(" ").replace(/\s+([.,?!])/g, "$1").replace(/\s+/g, " ").trim();
     }
+    // The result goes out through Chimege when it's on and there was speech: one paid call, and its
+    // text wins; if it fails or is slow, Speechmatics' text (or the original error) stands.
+    // Started the moment the rider stops (end()), not after Speechmatics' last words: ~0.5 s sooner.
+    let chimegeCall: Promise<string> | null = null;
+    function askChimege(): Promise<string> | null {
+      if (!chimegeCall && chimegeOn && recordedSamples >= RATE * 0.5 && (spoke || loud(recorded))) {
+        speedMark("speech end");
+        chimegeCall = chimegeText(wavFrom(recorded, recordedSamples));
+      }
+      return chimegeCall;
+    }
+    function deliver(result: Heard): void {
+      const call = askChimege();
+      if (!call) {
+        resolve(result);
+        return;
+      }
+      call.then(function (said) {
+        speedMark("text");
+        resolve(said ? { text: said, error: "", code: "" } : result);
+      });
+    }
+
     function finish(result: Heard): void {
       if (finished) {
         return;
@@ -299,7 +411,7 @@ export function listenWithSpeechmatics(onWords?: (text: string) => void): { done
           // already closed
         }
       }
-      resolve(result);
+      deliver(result);
     }
     function heardResult(): Heard {
       const t = text() || partial.trim();
@@ -329,6 +441,7 @@ export function listenWithSpeechmatics(onWords?: (text: string) => void): { done
         mic.close();
         mic = null;
       }
+      askChimege(); // the recording is complete: Chimege starts while Speechmatics finishes
       if (started) {
         sendEnd();
       } else if (pending.length === 0) {
@@ -339,6 +452,10 @@ export function listenWithSpeechmatics(onWords?: (text: string) => void): { done
     endRequest = end;
 
     function send(pcm: ArrayBuffer): void {
+      if (recordedSamples < RATE * CHIMEGE_MAX_S) {
+        recorded.push(new Int16Array(pcm));
+        recordedSamples += pcm.byteLength / 2;
+      }
       if (ws && started && ws.readyState === WebSocket.OPEN) {
         ws.send(pcm);
         seq++;
@@ -368,7 +485,7 @@ export function listenWithSpeechmatics(onWords?: (text: string) => void): { done
               model: "enhanced",
               max_delay: 0.7,
               enable_partials: true,
-              conversation_config: { end_of_utterance_silence_trigger: END_SILENCE_S },
+              conversation_config: { end_of_utterance_silence_trigger: digits ? NUMBER_SILENCE_S : END_SILENCE_S },
             },
           }),
         );
@@ -394,6 +511,9 @@ export function listenWithSpeechmatics(onWords?: (text: string) => void): { done
             if (onWords) {
               onWords((text() + " " + partial).trim());
             }
+            if (digits && phoneComplete(text() + " " + partial, digits)) {
+              end(); // the whole number is there: the last words come with EndOfTranscript
+            }
           }
         } else if (m.message === "AddTranscript" && m.metadata) {
           const t = m.metadata.transcript.trim();
@@ -403,6 +523,9 @@ export function listenWithSpeechmatics(onWords?: (text: string) => void): { done
             finals.push(t);
             if (onWords) {
               onWords(text());
+            }
+            if (digits && phoneComplete(text(), digits)) {
+              end();
             }
           }
         } else if (m.message === "EndOfUtterance") {
@@ -472,7 +595,7 @@ export function listenWithSpeechmatics(onWords?: (text: string) => void): { done
               end();
             }
           }, NO_SPEECH_MS),
-          setTimeout(end, MAX_MS),
+          setTimeout(end, digits ? NUMBER_MAX_MS : MAX_MS),
         );
         tokenNow.then(function (token) {
           if (finished) {
