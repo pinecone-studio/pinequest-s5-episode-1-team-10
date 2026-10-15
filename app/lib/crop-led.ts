@@ -1,6 +1,9 @@
 // Finds lit LED route signs in a camera frame without any model: pixels in LED colours on a 320 px copy,
 // letters joined into lines, wide boxes kept, and the 2 largest cut from the full-resolution frame.
-// No sign in view for 2 s: one whole frame (1280 px wide) instead, so a sign in another colour is still read.
+// No route number read for 2 s: one whole frame (1280 px wide), so a sign in another colour, or a bus
+// sign next to brighter coloured boards (a yellow advert, a red shop name: they win the 2 largest), is
+// still read. Measured on test photo 1: the 2 crops were an advert and "Plaza", never the bus sign;
+// Azure on the whole frame read "455 КИЙН 1000-Е" (Ч:55).
 import type { Box } from "./box.ts";
 
 const SMALL_W = 320;
@@ -24,6 +27,9 @@ export interface LedCrop {
 
 export interface LedCropper {
   next(video: HTMLVideoElement, now: number): LedCrop[];
+  routeRead(now: number): void; // a route number was read: whole frames wait again
+  frameSent(now: number): void; // the due whole frame was sent (until then it stays due: a frame skipped
+  // for the call budget must not lose its turn to the LED crops)
 }
 
 // Red / amber (hue 0-45 and 330-360) or green (90-160), saturation > 0.4, brightness > 0.5.
@@ -148,7 +154,7 @@ export function createLedCropper(): LedCropper {
   const small = document.createElement("canvas");
   const crops = [document.createElement("canvas"), document.createElement("canvas")];
   const frame = document.createElement("canvas");
-  let lastSign: number | null = null;
+  let lastRoute: number | null = null; // last time a route number was read (or the last whole frame)
 
   function cut(video: HTMLVideoElement, box: Box, into: HTMLCanvasElement): LedCrop {
     const scale = Math.min(MAX_SCALE, Math.max(1, MIN_SIDE / Math.min(box.w, box.h)));
@@ -164,8 +170,14 @@ export function createLedCropper(): LedCropper {
       if (!vw || !vh) {
         return [];
       }
-      if (lastSign === null) {
-        lastSign = now;
+      if (lastRoute === null) {
+        lastRoute = now - FALLBACK_MS; // the first read is a whole frame: the bus sign may not be the brightest colour
+      }
+      if (now - lastRoute >= FALLBACK_MS) {
+        const scale = Math.min(1, FULL_W / vw);
+        const ctx = sized(frame, Math.round(vw * scale), Math.round(vh * scale));
+        ctx.drawImage(video, 0, 0, frame.width, frame.height);
+        return [{ canvas: frame, box: { x: 0, y: 0, w: vw, h: vh, score: 0 }, kind: "frame" }];
       }
       const sh = Math.max(1, Math.round((SMALL_W * vh) / vw));
       const sctx = small.getContext("2d", { willReadFrequently: true }) as CanvasRenderingContext2D;
@@ -176,7 +188,6 @@ export function createLedCropper(): LedCropper {
       sctx.drawImage(video, 0, 0, SMALL_W, sh);
       const found = ledBoxes(sctx.getImageData(0, 0, SMALL_W, sh).data, SMALL_W, sh).slice(0, MAX_CROPS);
       if (found.length) {
-        lastSign = now;
         const sx = vw / SMALL_W;
         const sy = vh / sh;
         return found.map(function (item, i) {
@@ -187,14 +198,13 @@ export function createLedCropper(): LedCropper {
           return cut(video, { x: x, y: y, w: right - x, h: bottom - y, score: item.score }, crops[i]);
         });
       }
-      if (now - lastSign < FALLBACK_MS) {
-        return [];
-      }
-      lastSign = now; // the next whole frame after another 2 s without a sign
-      const scale = Math.min(1, FULL_W / vw);
-      const ctx = sized(frame, Math.round(vw * scale), Math.round(vh * scale));
-      ctx.drawImage(video, 0, 0, frame.width, frame.height);
-      return [{ canvas: frame, box: { x: 0, y: 0, w: vw, h: vh, score: 0 }, kind: "frame" }];
+      return [];
+    },
+    routeRead: function (now: number): void {
+      lastRoute = now;
+    },
+    frameSent: function (now: number): void {
+      lastRoute = now; // the next whole frame after another 2 s without a route number
     },
   };
 }

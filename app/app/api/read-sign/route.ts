@@ -31,9 +31,12 @@ function lineText(line: AzureLine): string {
   if (!line.words || !line.words.length) {
     return line.text;
   }
+  // A doubtful word of 1-2 characters may be a route letter ("55 ?" may be 55Б): "?" keeps the number
+  // doubtful. A longer one is a word of the destination ("455 ДЭНЖИЙН 1000-Е" read with ДЭНЖИЙН unsure):
+  // "…", so it can't block a clear route number (test photo 1 never reached "yes" with "?").
   return line.words
     .map(function (item) {
-      return item.confidence >= MIN_WORD_CONFIDENCE ? item.text : "?";
+      return item.confidence >= MIN_WORD_CONFIDENCE ? item.text : item.text.length <= 2 ? "?" : "…";
     })
     .join(" ");
 }

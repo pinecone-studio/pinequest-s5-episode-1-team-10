@@ -144,6 +144,7 @@ export default function BusScanner({ stopId, route, foundSpeech, onFound, onErro
         const match = matchSign(body.lines, route, routeBook());
         if (match.route) {
           lastRouteAt = now;
+          cropper.routeRead(now);
         }
         if (match.verdict === "yes" && match.route) {
           found = true;
@@ -266,6 +267,9 @@ export default function BusScanner({ stopId, route, foundSpeech, onFound, onErro
               stats.overBudget++;
             } else {
               send(item, now);
+              if (item.kind === "frame") {
+                cropper.frameSent(now);
+              }
             }
           });
           if (waitingSince && now - waitingSince > NO_ANSWER_MS) {
