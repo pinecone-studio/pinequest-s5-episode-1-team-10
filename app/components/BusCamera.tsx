@@ -194,6 +194,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         });
       }
 
+      let signReader = true; // false: the sign model never loaded, so "not sure" would be a lie
       let lastHint = 0;
       let scanningSince = 0;
       let lastBusAt = 0;
@@ -333,6 +334,9 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
       }
 
       function ask(video: HTMLVideoElement, track: Track, now: number, others: Box[]): void {
+        if (phoneOcr && !signReader) {
+          return;
+        }
         // Other tracked buses are masked too, not only the weak detections.
         const masked = others.concat(
           tracks
@@ -543,8 +547,12 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
             // Nothing read yet ("unsure"): wakes the free server and fetches this stop's routes, so the
             // first real read isn't the one that waits for them.
             verifyTexts([], stopId, route);
-            if (!(await loadOcr())) {
+            signReader = await loadOcr();
+            if (!signReader) {
               stats.error = "sign reader not loaded";
+              if (!stopped) {
+                speak([phrase("ocr_failed")]);
+              }
             }
           }
         } catch (e) {
