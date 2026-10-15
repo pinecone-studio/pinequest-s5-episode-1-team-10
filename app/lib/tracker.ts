@@ -17,6 +17,8 @@ export interface Track {
   votes: Verdict[]; // agreeing reads, for the overlay
   confs: number[]; // confidence of each vote, same order
   reads: CountedRead[];
+  samples: number[]; // recent box widths, so a sudden shrink (someone walked in front) is not read
+  aspects: number[];
   decision: Decision;
   announced: Decision; // last decision spoken to the rider
   pending: boolean; // a /verify request is in flight
@@ -60,6 +62,8 @@ export function updateTracks(tracks: Track[], boxes: Box[], now: number): Track[
         votes: [],
         confs: [],
         reads: [],
+        samples: [],
+        aspects: [],
         decision: "checking",
         announced: "checking",
         pending: false,

@@ -23,7 +23,6 @@ import { routeLabel } from "../lib/route";
 import { loadDetector } from "../lib/detector";
 import { prefetchStopRoutes } from "../lib/stopRoutes";
 import { loadDoorDetector } from "../lib/doorDetector";
-import { loadOcr } from "../lib/ocr";
 import type { DoorGuide } from "../lib/door";
 import { beep, phrase, prefetch, rememberClips, say, startWaitingTick, stopSpeaking, unlockAudio, vibrate, type PhraseKey } from "../lib/speech";
 import { onSpeedReport, showSpeed, speedCancel, speedMark, speedStart } from "../lib/speed";
@@ -248,7 +247,13 @@ export default function RiderFlow() {
     // ~25 MB; later from the browser cache), bus detector and sign reader at the same time. Not earlier:
     // on a slow line, downloading from the start made a trip plan take 17 s instead of 1 s.
     const detecting = loadDetector();
-    const reading = caps.current.ocr ? Promise.resolve(true) : loadOcr(); // free hosting: the phone reads the signs
+    // Free hosting: the phone reads the sign in a worker. Warm the file cache now, while the route is
+    // read out, but don't start a second copy of the model on this thread.
+    const reading = caps.current.ocr
+      ? Promise.resolve()
+      : Promise.all(["/models/ocr_det.onnx", "/models/ocr_rec.onnx", "/models/ocr_keys.txt"].map(function (item) {
+          return fetch(item);
+        }));
     Promise.all([detecting, reading])
       .then(function ([provider]) {
         // Without WebGPU the door model would queue in front of bus detection: it loads after the "yes".

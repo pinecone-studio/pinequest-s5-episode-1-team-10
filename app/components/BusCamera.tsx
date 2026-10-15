@@ -1,17 +1,16 @@
 "use client";
 
-// Camera step: YOLO finds buses on the phone, each bus is tracked, its sign crop goes to
-// /verify (PaddleOCR + Hamuga on the server), and 5 of the last 7 answers must agree.
+// Camera step: YOLO finds buses on the phone, each bus is tracked, its sign is read on the phone,
+// and two agreeing reads from different frames decide. One read never does.
+// Detection runs every frame and never waits for the sign reader, which works on a snapshot in a worker.
 // Once it's the rider's bus, the camera keeps following that bus and guides them to its front door:
 // a beacon panned toward the door, clock direction + steps, "bus moving, step back".
 import { useEffect, useRef, type MutableRefObject } from "react";
-import type { Verdict } from "../../shared/contract";
 import { verifySign, verifyTexts } from "../lib/api";
 import { decideSign, routeNumber } from "../lib/fusion";
 import { cityNumbers, prefetchStopRoutes, routesFor } from "../lib/stopRoutes";
 import { aimBeacon, startBeacon, stopBeacon } from "../lib/beacon";
-import { MIN_BUS_WIDTH, signCanvas, signCrop } from "../lib/crop";
-import { loadOcr, readSign } from "../lib/ocr";
+import { MIN_BUS_WIDTH, signCanvas, signCrop, signScore } from "../lib/crop";
 import { detectBuses, loadDetector, type Box } from "../lib/detector";
 import { detectFrontDoor, loadDoorDetector } from "../lib/doorDetector";
 import { frontIsRight, guideToDoor, type DoorGuide } from "../lib/door";
@@ -172,6 +171,10 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
       let stream: MediaStream | null = null;
       let tracks: Track[] = [];
       let pending = 0;
+      let ocrWorker: Worker | null = null;
+      let workerReady = false;
+      const flying = new Set<number>();
+      const held = new Map<number, { score: number; frame: number; width: number; height: number; pixels: Uint8ClampedArray }>();
       let lastSeenSpoken = 0;
       let lastNoSpoken = 0;
       let target: Track | null = null; // the rider's bus, once confirmed
@@ -205,7 +208,6 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         });
       }
 
-      let signReader = true; // false: the sign model never loaded, so "not sure" would be a lie
       let lastHint = 0;
       let scanningSince = 0;
       let lastBusAt = 0;
@@ -345,10 +347,122 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         }
       }
 
-      function ask(video: HTMLVideoElement, track: Track, now: number, others: Box[], frame: number): void {
-        if (phoneOcr && !signReader) {
+      // A box that suddenly shrinks or stretches is probably a person in front of the bus, not a new sign.
+      function steady(track: Track): boolean {
+        const aspect = track.box.w / Math.max(1, track.box.h);
+        if (track.samples.length >= 3) {
+          let sumW = 0;
+          track.samples.forEach(function (item) {
+            sumW += item;
+          });
+          let sumA = 0;
+          track.aspects.forEach(function (item) {
+            sumA += item;
+          });
+          const avgW = sumW / track.samples.length;
+          const avgA = sumA / track.aspects.length;
+          if (avgW > 0 && Math.abs(track.box.w - avgW) / avgW > 0.25) {
+            return false;
+          }
+          if (avgA > 0 && Math.abs(aspect - avgA) / avgA > 0.25) {
+            return false;
+          }
+        }
+        track.samples = track.samples.concat(track.box.w).slice(-8);
+        track.aspects = track.aspects.concat(aspect).slice(-8);
+        return true;
+      }
+
+      function dispatch(id: number): void {
+        const job = held.get(id);
+        if (!ocrWorker || !workerReady || flying.has(id) || !job) {
           return;
         }
+        held.delete(id);
+        flying.add(id);
+        const pixels = job.pixels.buffer as ArrayBuffer;
+        ocrWorker.postMessage({ type: "read", trackId: id, frame: job.frame, width: job.width, height: job.height, pixels: pixels }, [pixels]);
+      }
+
+      function onOcr(e: MessageEvent): void {
+        const data = e.data as { type: string; ok?: boolean; trackId?: number; frame?: number; texts?: [string, number][]; ms?: number };
+        if (data.type === "ready") {
+          workerReady = !!data.ok;
+          if (!workerReady) {
+            stats.error = "sign reader not loaded";
+            if (!stopped) {
+              speak([phrase("ocr_failed")]);
+            }
+            return;
+          }
+          Array.from(held.keys()).forEach(function (item) {
+            dispatch(item);
+          });
+          return;
+        }
+        if (data.type !== "read" || data.trackId === undefined || data.frame === undefined) {
+          return;
+        }
+        flying.delete(data.trackId);
+        stats.ocrMs = data.ms ?? 0;
+        const texts = data.texts ?? [];
+        stats.reads++;
+        stats.lastText = texts
+          .map(function (item) {
+            return item[0];
+          })
+          .join(" ")
+          .slice(0, 40);
+        const track = tracks.find(function (item) {
+          return item.id === data.trackId;
+        });
+        if (!track || stopped || target || track.decision === "yes" || track.decision === "no") {
+          return;
+        }
+        dispatch(data.trackId);
+        track.lastAnswer = performance.now();
+        // The verdict is decided here. The server is told only so the read is logged.
+        const decided = decideSign(texts, route, routesFor(stopId), cityNumbers());
+        verifyTexts(texts, stopId, route);
+        addVote(track, decided.verdict, decided.confidence, decided.number, data.frame);
+        announce(track);
+      }
+
+      // Full-resolution sign crop. The best (bright, complete, sharp) frame is the one the worker reads.
+      function keepCrop(video: HTMLVideoElement, track: Track, now: number, others: Box[], frame: number): void {
+        if (track.decision === "no" || !steady(track)) {
+          return;
+        }
+        const masked = others.concat(
+          tracks
+            .filter(function (item) {
+              return item !== track && item.lastSeen === now;
+            })
+            .map(function (item) {
+              return item.box;
+            }),
+        );
+        const canvas = signCanvas(video, track.box, masked);
+        if (!canvas) {
+          return;
+        }
+        const score = signScore(canvas, track.box);
+        const prev = held.get(track.id);
+        if (prev && prev.score >= score) {
+          return;
+        }
+        const ctx = canvas.getContext("2d", { willReadFrequently: true }) as CanvasRenderingContext2D;
+        held.set(track.id, {
+          score: score,
+          frame: frame,
+          width: canvas.width,
+          height: canvas.height,
+          pixels: new Uint8ClampedArray(ctx.getImageData(0, 0, canvas.width, canvas.height).data),
+        });
+        dispatch(track.id);
+      }
+
+      function ask(video: HTMLVideoElement, track: Track, now: number, others: Box[], frame: number): void {
         // Other tracked buses are masked too, not only the weak detections.
         const masked = others.concat(
           tracks
@@ -359,39 +473,16 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
               return item.box;
             }),
         );
-        let answer: Promise<{ verdict: Verdict; confidence: number; eta_seconds: number | null; number: string | null; frame: number } | null>;
-        if (phoneOcr) {
-          const canvas = signCanvas(video, track.box, masked);
-          if (!canvas) {
-            return;
-          }
-          const readAt = performance.now();
-          answer = readSign(canvas).then(function (texts) {
-            stats.ocrMs = Math.round(performance.now() - readAt);
-            stats.reads++;
-            stats.lastText = texts
-              .map(function (item) {
-                return item[0];
-              })
-              .join(" ")
-              .slice(0, 40);
-            // The verdict is decided here. The server is told only so the read is logged.
-            const decided = decideSign(texts, route, routesFor(stopId), cityNumbers());
-            verifyTexts(texts, stopId, route);
-            return { verdict: decided.verdict, confidence: decided.confidence, eta_seconds: null, number: decided.number, frame: frame };
-          });
-        } else {
-          const crop = signCrop(video, track.box, masked);
-          if (!crop) {
-            return;
-          }
-          answer = verifySign({ sign_crop: crop, stop_id: stopId, wanted_route: route }).then(function (res) {
-            if (!res) {
-              return null;
-            }
-            return { verdict: res.verdict, confidence: res.confidence, eta_seconds: res.eta_seconds, number: res.verdict === "yes" ? routeNumber(route) : null, frame: frame };
-          });
+        const crop = signCrop(video, track.box, masked);
+        if (!crop) {
+          return;
         }
+        const answer = verifySign({ sign_crop: crop, stop_id: stopId, wanted_route: route }).then(function (res) {
+          if (!res) {
+            return null;
+          }
+          return { verdict: res.verdict, confidence: res.confidence, eta_seconds: res.eta_seconds, number: res.verdict === "yes" ? routeNumber(route) : null, frame: frame };
+        });
         track.pending = true;
         track.lastAsked = now;
         pending++;
@@ -469,10 +560,27 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
             return b.box.w - a.box.w; // closest bus first
           })
           .forEach(function (item) {
-            if (!item.pending && pending < MAX_PENDING && now - item.lastAsked >= ASK_EVERY_MS) {
+            if (phoneOcr) {
+              keepCrop(video, item, now, found.others, stats.frames);
+            } else if (!item.pending && pending < MAX_PENDING && now - item.lastAsked >= ASK_EVERY_MS) {
               ask(video, item, now, found.others, stats.frames);
             }
           });
+        const live = new Set(
+          tracks.map(function (item) {
+            return item.id;
+          }),
+        );
+        Array.from(held.keys()).forEach(function (item) {
+          const track = tracks.find(function (row) {
+            return row.id === item;
+          });
+          if (!live.has(item) || !track || track.decision === "no" || track.decision === "yes") {
+            held.delete(item);
+            return;
+          }
+          dispatch(item);
+        });
         guideSearch(video, found.buses, near, now);
         draw(overlay, video, tracks, null, null, null);
         requestNext();
@@ -628,21 +736,24 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
           speak([phrase("camera_loading")]);
         }, LOADING_SAY_MS);
         let provider = "";
-        try {
-          provider = await loadDetector();
-          if (phoneOcr) {
-            // The plan step already asked. Ask again in case this stop was not cached yet.
-            if (!routesFor(stopId)) {
-              prefetchStopRoutes(stopId, [], "");
-            }
-            signReader = await loadOcr();
-            if (!signReader) {
-              stats.error = "sign reader not loaded";
-              if (!stopped) {
-                speak([phrase("ocr_failed")]);
-              }
+        if (phoneOcr) {
+          // The plan step already asked. Ask again in case this stop was not cached yet.
+          if (!routesFor(stopId)) {
+            prefetchStopRoutes(stopId, [], "");
+          }
+          try {
+            ocrWorker = new Worker("/bus-ocr-worker.js");
+            ocrWorker.onmessage = onOcr;
+            ocrWorker.postMessage({ type: "load" });
+          } catch (e) {
+            stats.error = "sign reader " + (e instanceof Error ? e.message : String(e));
+            if (!stopped) {
+              speak([phrase("ocr_failed")]);
             }
           }
+        }
+        try {
+          provider = await loadDetector();
         } catch (e) {
           clearInterval(loadingTimer);
           clearTimeout(firstLoadingSay);
@@ -675,6 +786,9 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
       start();
       return function () {
         stopped = true;
+        if (ocrWorker) {
+          ocrWorker.terminate();
+        }
         document.removeEventListener("visibilitychange", onVisibility);
         clearInterval(debugTimer);
         stopBeacon();

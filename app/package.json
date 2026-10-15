@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "predev": "node scripts/copy-ort.mjs && node scripts/build-reader-worker.mjs",
+    "predev": "node scripts/copy-ort.mjs && node scripts/build-reader-worker.mjs && node scripts/build-bus-ocr-worker.mjs",
     "dev": "next dev",
-    "prebuild": "node scripts/copy-ort.mjs && node scripts/build-reader-worker.mjs",
+    "prebuild": "node scripts/copy-ort.mjs && node scripts/build-reader-worker.mjs && node scripts/build-bus-ocr-worker.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
