@@ -5,7 +5,7 @@
 // is spoken in Mongolian: its message, then its options (VoiceMenu), so a blind rider always knows
 // what they can do. Anything the rider can say can also be typed (iPhone has no Mongolian speech
 // recognition), and a phone number is always read back digit by digit to confirm.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
 import type { AskResponse, BoardStop, PlanResponse, PlanStop, VoiceLocateResponse } from "../../shared/contract";
 import { askByText, locateByText, nearestStop, requestPlan, serverCaps, wakeServer, type ServerCaps } from "../lib/api";
@@ -15,7 +15,7 @@ import { GPS_OK_M, locate, type Position } from "../lib/location";
 import { primeBeacon } from "../lib/beacon";
 import { familyNumber, openLink, saveFamilyNumber, smsUrl, sosMessage, telUrl } from "../lib/family";
 import { groupDigits, phoneDigits } from "../lib/phoneWords";
-import { savedReader, saveMode, saveReader, type Mode, type Reader } from "../lib/mode";
+import { currentSavedReader, saveMode, setCurrentReader, subscribeReader, type Mode, type Reader } from "../lib/mode";
 import { routeLabel } from "../lib/route";
 import { loadDetector } from "../lib/detector";
 import { loadDoorDetector } from "../lib/doorDetector";
@@ -111,8 +111,11 @@ export default function RiderFlow() {
     setStepState(next);
   }
   const [mode, setMode] = useState<Mode>("voice");
-  const [reader, setReader] = useState<Reader>("app");
+  const reader = useSyncExternalStore(subscribeReader, currentSavedReader, function () {
+    return "app";
+  });
   const readerRef = useRef<Reader>("app");
+  readerRef.current = reader;
   const [serverOcr, setServerOcr] = useState(true); // false on free hosting: the phone reads the signs
   const modeRef = useRef<Mode>("voice"); // for callbacks
   // "Swipe right / double tap" only make sense without a screen reader.
@@ -158,16 +161,8 @@ export default function RiderFlow() {
     [step],
   );
 
-  useEffect(function () {
-    const saved = savedReader();
-    readerRef.current = saved;
-    setReader(saved);
-  }, []);
-
   function chooseReader(next: Reader): void {
-    readerRef.current = next;
-    setReader(next);
-    saveReader(next);
+    setCurrentReader(next);
     if (next === "screen") {
       stopSpeaking();
     }

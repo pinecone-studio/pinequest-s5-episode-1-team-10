@@ -53,3 +53,31 @@ export function saveReader(reader: Reader): void {
     // storage blocked: the app voice stays the default
   }
 }
+
+let currentReader: Reader = "app";
+let readerLoaded = false;
+const readerListeners = new Set<() => void>();
+
+export function subscribeReader(listener: () => void): () => void {
+  readerListeners.add(listener);
+  return function () {
+    readerListeners.delete(listener);
+  };
+}
+
+export function currentSavedReader(): Reader {
+  if (!readerLoaded && typeof window !== "undefined") {
+    currentReader = savedReader();
+    readerLoaded = true;
+  }
+  return currentReader;
+}
+
+export function setCurrentReader(next: Reader): void {
+  currentReader = next;
+  readerLoaded = true;
+  saveReader(next);
+  readerListeners.forEach(function (item) {
+    item();
+  });
+}
