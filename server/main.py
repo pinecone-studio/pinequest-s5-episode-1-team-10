@@ -14,11 +14,12 @@ import bus_api
 import fusion
 import ocr
 import planner
+import speechmatics
 import stt
 import tts
 from bus_api import get_eta_seconds
 import assistant
-from contract import (AskResponse, NearestStop, VerifyTextsRequest, PlanRequest, PlanResponse, RideResponse, VerifyRequest, VerifyResponse,
+from contract import (AskResponse, SpeechToken, NearestStop, VerifyTextsRequest, PlanRequest, PlanResponse, RideResponse, VerifyRequest, VerifyResponse,
                       VoiceLocateResponse, VoicePlanResponse)
 
 @asynccontextmanager
@@ -44,7 +45,18 @@ app = FastAPI(title="Bus Boarding Guide", lifespan=lifespan)
 
 @app.get("/health")
 def health():
-    return {"ok": True}
+    # "speech": the phones recognise speech with Speechmatics (/stt/token); this server's Whisper stays
+    # for the older voice endpoints.
+    return {"ok": True, "speech": speechmatics.configured()}
+
+
+@app.post("/stt/token", response_model=SpeechToken)
+def speech_token():
+    """A 60 s Speechmatics key for one phone (the account key stays here)."""
+    try:
+        return speechmatics.temporary_key()
+    except (httpx.HTTPError, RuntimeError):
+        raise HTTPException(status_code=503, detail="Speech recognition unavailable")
 
 
 @app.get("/stops/nearest", response_model=NearestStop)

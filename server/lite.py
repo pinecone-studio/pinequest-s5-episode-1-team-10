@@ -2,7 +2,8 @@
 
 Live Hamuga planning, location, ride stops, the assistant, and the pre-made Mongolian voice clips
 (served as static files next to the app). The heavy parts run on the rider's phone instead:
-speech recognition in the browser (/health "stt": false) and sign reading with PaddleOCR in the
+speech recognition with Speechmatics streamed from the phone (/api/stt/token; /health "stt": false
+means no server Whisper) and sign reading with PaddleOCR in the
 browser ("ocr": false -> the app reads the sign and sends only the texts to /api/verify/texts).
 Routes carry the /api prefix because Vercel passes the original path through.
 """
@@ -11,14 +12,15 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
 import bus_api
 import fusion
 import planner
 import tts
 import assistant
-from contract import AskResponse, NearestStop, VerifyTextsRequest, PlanRequest, PlanResponse, RideResponse, VerifyRequest, VerifyResponse, VoiceLocateResponse
+import speechmatics
+from contract import AskResponse, SpeechToken, NearestStop, VerifyTextsRequest, PlanRequest, PlanResponse, RideResponse, VerifyRequest, VerifyResponse, VoiceLocateResponse
 
 HERE = Path(__file__).parent
 bus_api.ROUTE_CACHE = HERE / "hamuga_cache"  # read-only on Vercel; new routes are fetched, not saved
@@ -31,7 +33,16 @@ UNAVAILABLE = "Bus data unavailable"
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "stt": False, "ocr": False}
+    return {"ok": True, "stt": False, "ocr": False, "speech": speechmatics.configured()}
+
+
+@app.post("/api/stt/token", response_model=SpeechToken)
+def speech_token():
+    """A 60 s Speechmatics key for one phone: it streams its microphone straight to Speechmatics."""
+    try:
+        return JSONResponse(speechmatics.temporary_key(), headers={"Cache-Control": "no-store"})
+    except (httpx.HTTPError, RuntimeError):
+        raise HTTPException(status_code=503, detail="Speech recognition unavailable")
 
 
 @app.get("/api/stops/nearest", response_model=NearestStop)

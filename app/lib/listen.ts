@@ -1,6 +1,11 @@
-// The browser's own speech recognition ("mn-MN"), used when the server has no Whisper
-// (free hosting: /api/health says "stt": false). Chrome / Android; not iPhone Safari.
+// What the rider says, as text. One entry point, listen():
+//   1. Speechmatics real-time (lib/speechmatics.ts): every phone, iPhone included, when the server has
+//      a key (/api/health "speech": true).
+//   2. The browser's own recognizer ("mn-MN", Chrome / Android) if Speechmatics isn't configured or
+//      couldn't start (network, account busy).
+//   3. Neither (iPhone without Speechmatics): "unsupported" -> the app offers typing.
 import { speedMark } from "./speed";
+import { listenWithSpeechmatics } from "./speechmatics";
 
 interface RecognitionResultEvent {
   results: { length: number; [index: number]: { isFinal: boolean; [index: number]: { transcript: string } } };
@@ -74,8 +79,50 @@ function kind(code: string): ListenError {
   return "not-heard"; // no-speech, aborted
 }
 
-// What the rider said, or why nothing was heard.
-export function listenInBrowser(): { done: Promise<Heard>; stop: () => void } {
+export interface Listening {
+  done: Promise<Heard>;
+  stop: () => void;
+}
+
+let speechmatics = false;
+
+// From /api/health "speech": the server can hand out Speechmatics keys.
+export function enableSpeechmatics(on: boolean): void {
+  speechmatics = on;
+}
+
+// Can the rider talk at all on this phone?
+export function canListen(): boolean {
+  return speechmatics || canListenInMongolian();
+}
+
+// What the rider said, or why nothing was heard. onWords: the words so far, while they talk.
+export function listen(onWords?: (text: string) => void): Listening {
+  if (!speechmatics) {
+    return listenInBrowser();
+  }
+  let current: Listening = listenWithSpeechmatics(onWords);
+  let stopped = false;
+  const done = current.done.then(function (heard) {
+    // Speechmatics couldn't start (network, both free sessions busy): the browser's own recognizer,
+    // where there is one, for the rest of what the rider says.
+    if (heard.text || heard.error !== "network" || stopped || !canListenInMongolian()) {
+      return heard;
+    }
+    current = listenInBrowser();
+    return current.done;
+  });
+  return {
+    done,
+    stop: function () {
+      stopped = true;
+      current.stop();
+    },
+  };
+}
+
+// The browser's own recognizer.
+export function listenInBrowser(): Listening {
   const Rec = recognitionClass();
   if (!Rec) {
     return {
