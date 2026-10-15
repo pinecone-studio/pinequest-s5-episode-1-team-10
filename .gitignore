@@ -20,6 +20,8 @@ node_modules/
 .next/
 app/public/ort/
 app/public/test/
+# Voice clips: built into deploy/out by deploy/vercel.sh; a local copy is only for testing sw.js
+app/public/tts/
 server/hamuga_cache/
 
 # Door model export (server/export_door.py) downloads
