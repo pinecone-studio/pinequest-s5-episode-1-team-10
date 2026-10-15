@@ -8,8 +8,10 @@
 import type * as Ort from "onnxruntime-web";
 import { exclusive, modelBytes, runtime } from "./detector";
 
-const DET_URL = "/models/ocr_det.onnx";
-const REC_URL = "/models/ocr_rec.onnx";
+// int8 copies (server/quantize_models.py): 15.6 -> 4.5 MB to download and in memory, same reads on the
+// test photos (checked again in Chrome and WebKit before switching).
+const DET_URL = "/models/ocr_det_int8.onnx";
+const REC_URL = "/models/ocr_rec_int8.onnx";
 const KEYS_URL = "/models/ocr_keys.txt";
 const SIGN_H = 320; // detection height (a multiple of 32); measured: same reads as 480-640, 2-4x faster
 const REC_H = 48;
@@ -61,11 +63,20 @@ export function loadOcr(): Promise<boolean> {
   return loading;
 }
 
+// One work canvas for every image the models read, only ever grown: a new canvas per word (several
+// per sign read, several reads a second) ran iPhone Safari over its canvas memory limit, and it
+// reloads the page then.
+let work: HTMLCanvasElement | null = null;
 function scaled(source: HTMLCanvasElement, sx: number, sy: number, sw: number, sh: number, w: number, h: number): Uint8ClampedArray {
-  const c = document.createElement("canvas");
-  c.width = w;
-  c.height = h;
-  const ctx = c.getContext("2d", { willReadFrequently: true }) as CanvasRenderingContext2D;
+  if (!work) {
+    work = document.createElement("canvas");
+  }
+  if (work.width < w || work.height < h) {
+    work.width = Math.max(work.width, w);
+    work.height = Math.max(work.height, h);
+  }
+  const ctx = work.getContext("2d", { willReadFrequently: true }) as CanvasRenderingContext2D;
+  ctx.clearRect(0, 0, w, h);
   ctx.drawImage(source, sx, sy, sw, sh, 0, 0, w, h);
   return ctx.getImageData(0, 0, w, h).data;
 }

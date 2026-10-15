@@ -21,13 +21,21 @@ export function signCanvas(video: HTMLVideoElement, box: Box, others: Box[]): HT
     return null;
   }
   const scale = Math.min(1, MAX_WIDTH / w);
-  canvas.width = Math.round(w * scale);
-  canvas.height = Math.round(h * scale);
+  // Sizes rounded up (32 px) so the next frames, with a bus box a few pixels different, reuse the same
+  // canvas instead of re-allocating it (iPhone Safari reloads a page over its canvas memory limit).
+  const cw = Math.ceil((w * scale) / 32) * 32;
+  const ch = Math.ceil((h * scale) / 32) * 32;
+  if (canvas.width !== cw || canvas.height !== ch) {
+    canvas.width = cw;
+    canvas.height = ch;
+  }
+  const sx = cw / w;
+  const sy = ch / h;
   const ctx = canvas.getContext("2d") as CanvasRenderingContext2D;
-  ctx.drawImage(video, x, y, w, h, 0, 0, canvas.width, canvas.height);
+  ctx.drawImage(video, x, y, w, h, 0, 0, cw, ch);
   ctx.fillStyle = "#000";
   others.forEach(function (item) {
-    ctx.fillRect((item.x - x) * scale, (item.y - y) * scale, item.w * scale, item.h * scale);
+    ctx.fillRect((item.x - x) * sx, (item.y - y) * sy, item.w * sx, item.h * sy);
   });
   return canvas;
 }

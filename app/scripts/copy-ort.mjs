@@ -3,7 +3,8 @@ import { copyFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } fro
 
 const DIST = "node_modules/onnxruntime-web/dist/";
 // The entry point picks its WASM runtime (asyncify/jsep/jspi) at load time, so ship them all.
-const FILES = ["ort.webgpu.min.mjs"].concat(
+// ort.wasm.min.mjs: the plain WASM build iPhone uses (14 MB instead of the 27 MB WebGPU one).
+const FILES = ["ort.webgpu.min.mjs", "ort.wasm.min.mjs"].concat(
   readdirSync(DIST).filter(function (item) {
     return item.startsWith("ort-wasm-simd-threaded");
   }),
@@ -21,7 +22,8 @@ const FITTING =
 
 mkdirSync("public/ort", { recursive: true });
 FILES.forEach(function (item) {
-  if (!item.endsWith(".mjs") || item === "ort.webgpu.min.mjs") {
+  if (!item.endsWith(".mjs") || item.startsWith("ort.")) {
+    // the entry points (ort.webgpu / ort.wasm) load the patched ort-wasm-simd-threaded*.mjs below
     copyFileSync(DIST + item, "public/ort/" + item);
     return;
   }
