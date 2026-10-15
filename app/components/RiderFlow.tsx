@@ -5,6 +5,7 @@
 // is spoken in Mongolian: its message, then its options (VoiceMenu), so a blind rider always knows
 // what they can do. Anything the rider can say can also be typed (iPhone has no Mongolian speech
 // recognition), and a phone number is always read back digit by digit to confirm.
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import type { AskResponse, BoardStop, PlanResponse, PlanStop, VoiceLocateResponse } from "../../shared/contract";
@@ -23,6 +24,7 @@ import { loadOcr } from "../lib/ocr";
 import type { DoorGuide } from "../lib/door";
 import { phrase, prefetch, rememberClips, say, stopSpeaking, unlockAudio, vibrate, type PhraseKey } from "../lib/speech";
 import { onSpeedReport, showSpeed, speedCancel, speedMark, speedStart } from "../lib/speed";
+import { wantsReader } from "../lib/reader/commands";
 import BusCamera, { doorSpeech } from "./BusCamera";
 import RideGuide, { leftSpeech, type RideInfo } from "./RideGuide";
 import Tutorial, { tutorialNeeded } from "./Tutorial";
@@ -91,6 +93,7 @@ function testPosition(): Position | null {
 }
 
 export default function RiderFlow() {
+  const router = useRouter();
   const [step, setStep] = useState<Step>("start");
   const [mode, setMode] = useState<Mode>("voice");
   const [serverOcr, setServerOcr] = useState(true); // false on free hosting: the phone reads the signs
@@ -710,6 +713,11 @@ export default function RiderFlow() {
           }
           return;
         }
+        if (wantsReader(text)) {
+          speedCancel();
+          openReader(); // "энийг уншаад өг", "ном унших": the reader, not the bus assistant
+          return;
+        }
         sayWaitIfSlow();
         result = await askByText(text, pos.lat, pos.lon, context);
       } else {
@@ -739,6 +747,10 @@ export default function RiderFlow() {
         return;
       }
       speedMark("answer");
+      if (result.heard && wantsReader(result.heard)) {
+        openReader();
+        return;
+      }
       rememberClips(result.speech, result.clips);
       setMessage(result.heard && result.answer ? "“" + result.heard + "” — " + result.answer : result.answer || "“" + result.heard + "”");
       doAction(result);
@@ -748,6 +760,12 @@ export default function RiderFlow() {
     if (talk.current) {
       talk.current.stop();
     }
+  }
+
+  // The reader (/read): same tab, so sound stays unlocked and it starts at once.
+  function openReader(): void {
+    stopSpeaking();
+    router.push("/read?from=app");
   }
 
   function doAction(result: AskResponse): void {
@@ -873,6 +891,7 @@ export default function RiderFlow() {
       { ...label("say-dest", "menu_say_destination"), onActivate: sayDestination },
       { ...label("type-dest", "menu_type_destination"), onActivate: typeDestination },
       { ...label("sos-number", "menu_sos_number"), onActivate: changeNumber },
+      { ...label("read", "menu_read"), onActivate: openReader },
     ];
   } else if (step === "number") {
     title = "Яаралтай тусламжийн дугаар";

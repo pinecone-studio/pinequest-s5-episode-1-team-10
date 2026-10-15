@@ -14,13 +14,13 @@ Rider journey:
 5. **Ask** — voice questions answered by an LLM using real bus API data.
 6. **Stay safe** — warnings and help run in the background.
 
-**Second part — Reader (next version, after the 10/16 final):** the same app reads printed text aloud: books, newspapers, letters, labels, medicine boxes. Free, on the phone, works offline.
+**Second part — Reader (`/read`, built 2026-10-15, its own page):** the same app reads printed text aloud: books, newspapers, letters, labels, medicine boxes. Free, everything on the phone, works offline after the first visit. The bus flow only gained one home option.
 Reader journey:
-1. **Open** — hold and say "унш" (or the "Унших" button in screen-reader mode).
-2. **Aim by sound** — the camera finds the page; short directions ("дээшээ", "холдуул", "зүүн тийш хазайлга", "хөдлөхгүй байгаарай") until the whole page is in frame and sharp.
-3. **Auto-capture** — the app takes a full-resolution photo itself; the rider never has to find a shutter button.
-4. **Read** — text is read in reading order (columns for newspapers), starting within ~2 s while the rest is still being recognised.
-5. **Control** — double tap = pause/resume; swipe right/left = next/previous sentence; hold and say "дараагийн хуудас", "дахин", "хаана хүрсэн бэ".
+1. **Open** — "Бичиг унших" on the bus home screen, or say "ном унш" / "энийг уншаад өг" to the assistant, or open `/read`.
+2. **Aim by sound** — soft ticks get higher as the page comes into view; short directions ("Холдуулаарай", "Ойртуулаарай", "Зүүн тийш", "Хөдөлгөхгүй барина уу"); the light turns on by itself in the dark.
+3. **Auto-capture** — the app takes the photo itself (double tap = take it now); upside-down or sideways pages are turned automatically.
+4. **Read** — reading order (newspaper columns too), sentence by sentence, starting while the rest of the page is still being recognised. Only the Mongolian voice: never the phone's (Russian) voice; a soft loading sound until the Mongolian voice is ready.
+5. **Control** — double tap = pause/play (at page end: next page); swipe right/left = next/previous sentence; one tap = where am I; hold and say "дараагийн хуудас", "дахин", "өмнөх", "эхнээс", "хурдан", "удаан", "хаана", "тусламж", "буцах". Screen-reader mode: plain buttons.
 
 ## Deadlines
 - **Fri 2026-10-09** — idea pitch (no deploy needed)
@@ -28,7 +28,7 @@ Reader journey:
 - **Mon 2026-10-12** — full flow working on recorded video
 - **Thu 2026-10-15 noon** — feature freeze
 - **Fri 2026-10-16** — deployed app + final presentation
-- **After 10/16** — Reader (next version); pitch it as the roadmap on 10/16, don't build it before the final
+- **2026-10-15** — Reader built on `/read` (separate page, after the freeze on purpose: the bus demo is untouched apart from one home option); deploy with the bus app after the final
 
 ## Priorities
 | Feature | Priority |
@@ -44,17 +44,17 @@ Reader journey:
 
 **Cut (next version):** night, snow/rain, transfers, rear doors, on-bus stop announcements. Don't build these.
 
-Reader priorities (next version, after 10/16):
-| Feature | Priority |
-|---|---|
-| Guided auto-capture by sound (page in frame + sharp → photo) | Must |
-| On-phone Mongolian Cyrillic OCR + reading order | Must |
-| On-phone Mongolian voice for any text | Must |
-| Pause / resume / next / previous sentence, multi-page | Must |
-| "Unclear" for low-confidence lines (never guessed) | Must |
-| Short text live (labels, prices, medicine, door signs) | Should |
-| Summary / questions about the page (free LLM tier, optional, online only) | Could |
-| Handwriting, banknotes, colours | Next-next version |
+Reader priorities:
+| Feature | Priority | Status 2026-10-15 |
+|---|---|---|
+| Guided auto-capture by sound (page in frame + sharp → photo) | Must | done |
+| On-phone Mongolian Cyrillic OCR + reading order | Must | done |
+| On-phone Mongolian voice for any text | Must | done |
+| Pause / resume / next / previous sentence, multi-page | Must | done |
+| "Unclear" for low-confidence lines (never guessed) | Must | done |
+| Short text live (labels, prices, medicine, door signs) | Should | — |
+| Summary / questions about the page (free LLM tier, optional, online only) | Could | — |
+| Handwriting, banknotes, colours | Next-next version | — |
 
 ## Accuracy, speed, safety
 Goal: **never confidently wrong.** Prefer "not sure" over guessing.
@@ -67,7 +67,8 @@ Speed targets: detection 5+ FPS on phone; sign readable → verdict < 2 s; guida
 
 Reader accuracy (same rule: **never confidently wrong**):
 - Read only what OCR saw: no LLM "fixing" of the text that is read aloud. Lines below the confidence threshold → "энэ мөр тодорхойгүй", never a guess.
-- Targets, measured on a fixed test set (20 book pages, 10 newspaper pages, 10 labels photographed by the auto-capture): **≥95% characters correct on book pages, ≥90% on newspapers**, 0 invented words; reading order correct on ≥9/10 newspaper pages.
+- Targets: **≥95% characters correct on book pages, ≥90% on newspapers**, 0 invented words; reading order correct on ≥9/10 newspaper pages. Measured 2026-10-15 on 22 synthetic phone photos (real Mongolian text, 6 fonts, tilt, blur, uneven light, JPEG): books 99.6%, 3-column newspapers 98.9%, labels 99.5%; all columns in order; upside-down and sideways pages turned automatically. Still to do: the same on real phone photos.
+- Line confidence ≥0.8 → read (95-99% of its characters right); 0.6-0.8 → read after a soft "unsure" tone; <0.6 → "Тодорхойгүй мөр" instead (~70% right).
 - Speed: first sentence spoken ≤2 s after capture; capture guidance updates every 0.5 s; everything works offline after the first download.
 
 Safety: "Step back, bus moving" overrides all other audio; "Stop, bus leaving" if bus moves during boarding; one earbud / bone conduction only; cane first (app guides direction, cane handles obstacles); SOS long-press if time.
@@ -88,10 +89,11 @@ Two languages only: **TypeScript** (app) and **Python** (model + server).
 | Bus API + fusion | FastAPI | Server (Render/Railway) |
 | Destination → bus | Nearest stop from bus API stop list; direct routes | Server |
 | AI assistant | LLM with tool calling over our bus API functions (no guessing) | Server |
-| Reader: page capture | Text detection (PP-OCR det, already in `lib/ocr.ts`) for page coverage + edge contact; Laplacian sharpness; `ImageCapture.takePhoto()` full-res; deskew + contrast in canvas | Phone |
-| Reader: OCR | **PaddleOCR `cyrillic_PP-OCRv5_mobile_rec` ONNX** (Apache-2.0, 8 MB, has ө/ү), same onnxruntime-web queue as bus signs; fallback/compare: Tesseract.js `mon` (tessdata_best, 8.6 MB) | Phone |
-| Reader: reading order | Own column/line ordering from text boxes (cluster by x, then y); later PP-DocLayout if needed | Phone |
-| Reader: voice | Pre-made OronTTS clips for app phrases (as now) + **Meta MMS-TTS `facebook/mms-tts-mon`** (VITS, CC-BY-NC-4.0: free, non-commercial) exported to ONNX, int8 (~40 MB), run on the phone sentence by sentence; its alphabet writes ө as ѳ, so map ө→ѳ first | Phone |
+| Reader: page capture | The bus sign reader's text detector (`/models/ocr_det.onnx`, PP-OCRv4 DB) on 960 px frames: text area, edges cut, line height, brightness, Laplacian sharpness (`lib/reader/aim.ts`); `ImageCapture.takePhoto()` full-res (≤3000 px); torch | Phone |
+| Reader: OCR | Same detector at 1280 px + **PaddleOCR `cyrillic_PP-OCRv5_mobile_rec`** (Apache-2.0, 8 MB, has ө/ү); lines cut along their own angle, 6 at a time (`lib/reader/pageOcr.ts`); Tesseract not needed (PaddleOCR already 99%+) | Phone (worker) |
+| Reader: reading order | Deskewed XY-cut: columns may lean (tilted photos), cut only between paragraph text, rows of the same column layout merged first (`lib/reader/layout.ts`) | Phone |
+| Reader: voice | **Meta MMS-TTS `facebook/mms-tts-mon`** (VITS, CC-BY-NC-4.0: free, non-commercial) → ONNX, weights packed 114 → 35 MB (`deploy/reader_models.py`); ш→щ, ө→ѳ (its training alphabet); numbers/units in words (`lib/reader/speechText.ts`); WebGPU when the phone has it (~15x faster than real time), else WASM (~1.7x); spoken piece by piece; never the phone's own voice. Fixed reader sentences: pre-made OronTTS clips when made | Phone (worker) |
+| Reader: offline | `public/read-sw.js` keeps the page, code and onnxruntime; models in Cache Storage (`lib/reader/modelStore.ts`) | Phone |
 | Reader: summary / questions (optional) | Free LLM tier (e.g. Gemini Flash free tier; limits change, check AI Studio) — only when asked, never for the read-aloud text | Cloud |
 
 ## Architecture & data contract
@@ -108,10 +110,9 @@ If the server doesn't answer within **1 second**, the app says "Not sure, please
 |---|---|---|
 | Lead | Lead + backend | FastAPI, bus API, PaddleOCR, fusion, destination suggestion, AI assistant backend, data contract, integration, deploy |
 | Khaliun | Model + AI UI | YOLO11n training, ONNX on phone, IoU tracker, 5-of-7 voting, accuracy; AI assistant voice UI |
-| Chuluunbat | App | Next.js PWA screens, camera, Mongolian voice input, choose → wait → verify → board flow |
+| Chuluunbat | App + Reader | Next.js PWA screens, camera, Mongolian voice input, choose → wait → verify → board flow; Reader (`/read`): capture, OCR, reading order, voice, offline |
 | Uranzul | Guidance + safety | Beacon, clock directions, compass lock, moving-bus warning, bus-leaving, SOS |
 | Otgonjargal | Data + support | Filming, Roboflow labeling, Mongolian voice lines, 10 assistant test questions, help with user tests + demo video |
-| *(TBD)* | Reader (next version) | Page capture guidance, OCR, reading order, on-phone voice, reader test set + accuracy numbers |
 
 User interviews and pitch are shared by Chuluunbat and Otgonjargal. Task tracker: https://claude.ai/code/artifact/677ebbd7-ff83-4db8-9599-3a0facb1cf15
 
