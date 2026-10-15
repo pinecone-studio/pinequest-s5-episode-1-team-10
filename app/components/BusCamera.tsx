@@ -4,11 +4,12 @@
 // /verify (PaddleOCR + Hamuga on the server), and 5 of the last 7 answers must agree.
 // Once it's the rider's bus, the camera keeps following that bus and guides them to its front door:
 // a beacon panned toward the door, clock direction + steps, "bus moving, step back".
-import { useEffect, useRef, useState, type MutableRefObject } from "react";
-import type { Verdict } from "../../shared/contract";
-import { verifySign } from "../lib/api";
+import { useEffect, useRef, type MutableRefObject } from "react";
+import type { Verdict, VerifyResponse } from "../../shared/contract";
+import { verifySign, verifyTexts } from "../lib/api";
 import { aimBeacon, startBeacon, stopBeacon } from "../lib/beacon";
-import { MIN_BUS_WIDTH, signCrop } from "../lib/crop";
+import { MIN_BUS_WIDTH, signCanvas, signCrop } from "../lib/crop";
+import { loadOcr, readSign } from "../lib/ocr";
 import { detectBuses, loadDetector, type Box } from "../lib/detector";
 import { detectFrontDoor, loadDoorDetector } from "../lib/doorDetector";
 import { frontIsRight, guideToDoor, type DoorGuide } from "../lib/door";
@@ -22,6 +23,7 @@ interface Props {
   onFound: () => void;
   onError: () => void;
   guide: MutableRefObject<DoorGuide | null>; // latest door guidance, for the "where is the door?" option
+  phoneOcr: boolean; // the server has no OCR (free hosting): read the sign on the phone, send only the texts
 }
 
 const GUIDE_EVERY_MS = 4000; // repeat "door at 2 o'clock, 9 steps" this often
@@ -121,11 +123,9 @@ function draw(
   }
 }
 
-export default function BusCamera({ stopId, route, foundSpeech, onFound, onError, guide }: Props) {
+export default function BusCamera({ stopId, route, foundSpeech, onFound, onError, guide, phoneOcr }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
-  const [status, setStatus] = useState("Камер асааж байна…");
-  const [fps, setFps] = useState(0);
 
   useEffect(
     function () {
@@ -135,8 +135,6 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
       let pending = 0;
       let lastSeenSpoken = 0;
       let lastNoSpoken = 0;
-      let frames = 0;
-      let fpsStart = performance.now();
       let target: Track | null = null; // the rider's bus, once confirmed
       let foundAt = 0;
       let talking = false;
@@ -246,26 +244,35 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
 
       function ask(video: HTMLVideoElement, track: Track, now: number, others: Box[]): void {
         // Other tracked buses are masked too, not only the weak detections.
-        const crop = signCrop(
-          video,
-          track.box,
-          others.concat(
-            tracks
-              .filter(function (item) {
-                return item !== track && item.lastSeen === now;
-              })
-              .map(function (item) {
-                return item.box;
-              }),
-          ),
+        const masked = others.concat(
+          tracks
+            .filter(function (item) {
+              return item !== track && item.lastSeen === now;
+            })
+            .map(function (item) {
+              return item.box;
+            }),
         );
-        if (!crop) {
-          return;
+        let answer: Promise<VerifyResponse | null>;
+        if (phoneOcr) {
+          const canvas = signCanvas(video, track.box, masked);
+          if (!canvas) {
+            return;
+          }
+          answer = readSign(canvas).then(function (texts) {
+            return verifyTexts(texts, stopId, route);
+          });
+        } else {
+          const crop = signCrop(video, track.box, masked);
+          if (!crop) {
+            return;
+          }
+          answer = verifySign({ sign_crop: crop, stop_id: stopId, wanted_route: route });
         }
         track.pending = true;
         track.lastAsked = now;
         pending++;
-        verifySign({ sign_crop: crop, stop_id: stopId, wanted_route: route }).then(function (res) {
+        answer.then(function (res) {
           track.pending = false;
           pending--;
           if (stopped) {
@@ -331,13 +338,6 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
       }
 
       function requestNext(): void {
-        frames++;
-        const now = performance.now();
-        if (now - fpsStart >= 1000) {
-          setFps(Math.round((frames * 1000) / (now - fpsStart)));
-          frames = 0;
-          fpsStart = now;
-        }
         // Browsers pause animation frames in hidden tabs; keep going (slowly) for desktop testing.
         if (document.hidden) {
           setTimeout(tick, 100);
@@ -385,14 +385,18 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
           return;
         }
         sayPhrase("camera_on");
-        setStatus("Загвар ачаалж байна…");
         const provider = await loadDetector();
+        if (phoneOcr) {
+          // Nothing read yet ("unsure"): wakes the free server and fetches this stop's routes, so the
+          // first real read isn't the one that waits for them.
+          verifyTexts([], stopId, route);
+          await loadOcr(); // reads the signs here; 15 MB, cached by the browser after the first time
+        }
         // Door model in the background, needed only once the bus is found. Without WebGPU both models
         // share one CPU queue, so it waits for the "yes" instead of slowing the sign reading.
         if (provider === "webgpu") {
           loadDoorDetector();
         }
-        setStatus("Автобус хайж байна (" + provider + ")");
         tick();
       }
 
@@ -408,16 +412,13 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         }
       };
     },
-    [stopId, route, foundSpeech, onFound, onError, guide],
+    [stopId, route, foundSpeech, onFound, onError, guide, phoneOcr],
   );
 
   return (
     <div className="camera">
       <video ref={videoRef} playsInline muted className="camera-video" />
       <canvas ref={overlayRef} className="camera-overlay" aria-hidden="true" />
-      <p className="camera-status">
-        {status} · {fps} FPS
-      </p>
     </div>
   );
 }

@@ -3,7 +3,7 @@
 // confirmed bus, so the middle door is never in its view.
 // Checked on tov_nomyn_san_{1,2}.png: front door 0.28 / 0.20, middle door <= 0.10, rear end none.
 import type * as Ort from "onnxruntime-web";
-import { exclusive, runtime, type Box } from "./detector";
+import { exclusive, modelBytes, runtime, type Box } from "./detector";
 
 const MODEL_URL = "/models/door.onnx";
 const SIZE = 320; // model input is SIZE x SIZE (the crop is small, 320 keeps it fast)
@@ -18,10 +18,10 @@ const canvas = typeof document === "undefined" ? null : document.createElement("
 // Loads once in the background while the camera looks for the bus, so it's ready when the bus is found.
 export function loadDoorDetector(): Promise<void> {
   if (!loading) {
-    loading = runtime()
-      .then(function (rt) {
+    loading = Promise.all([runtime(), modelBytes(MODEL_URL)])
+      .then(function ([rt, bytes]) {
         return exclusive(function () {
-          return rt.ort.InferenceSession.create(MODEL_URL, { executionProviders: rt.providers });
+          return rt.ort.InferenceSession.create(bytes, { executionProviders: rt.providers });
         });
       })
       .then(async function (s) {

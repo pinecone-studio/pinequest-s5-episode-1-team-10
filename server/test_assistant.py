@@ -60,7 +60,6 @@ def test_commands_need_a_trip_and_then_act():
     assert ask("Хэдэн зогсоол үлдсэн бэ?", **trip)["action"] == "stops_left"
     assert ask("Би автобусанд суулаа", **trip)["action"] == "boarded"
     assert ask("Би буулаа", **trip)["action"] == "got_off"
-    assert ask("Зогсоол руу хөтлөөч", **trip)["action"] == "walk"
     mine = ask("Миний автобус аль нь вэ?", **trip)
     assert mine["action"] == "repeat_route" and mine["speech"] == ["Та 75-р автобус хүлээж байна.", "Буух зогсоол: Сансар ШТС."]
     assert ask("Шинээр эхлэх")["action"] == "start_over" and ask("Заавар сонсох")["action"] == "tutorial"
@@ -70,8 +69,10 @@ def test_arrival_time_help_thanks_and_emergency():
     assert ask("Автобус хэзээ ирэх вэ?")["speech"] == assistant.NO_ETA
     assert ask("Юу хийж чадах вэ?")["speech"] == assistant.HELP
     assert ask("Баярлалаа")["speech"] == assistant.THANKS
-    em = ask("Би төөрсөн, тусламж хэрэгтэй")["speech"]
-    assert em[0] == assistant.EMERGENCY_FIRST and "Home зогсоолоос" in em[1]
+    em = ask("Би төөрсөн, тусламж хэрэгтэй")
+    assert em["action"] == "sos" and em["speech"][0] == assistant.SOS_FIRST and "Home зогсоолоос" in em["speech"][1]
+    assert ask("Ээждээ залгаач")["action"] == "call_family"
+    assert ask("Гэр бүлдээ залга")["action"] == "call_family"
 
 
 def test_other_questions_are_not_guessed():

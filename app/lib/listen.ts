@@ -18,6 +18,19 @@ interface Recognition {
 
 type RecognitionClass = new () => Recognition;
 
+// Why nothing came back, so the rider hears what to do instead of "not heard" again and again:
+//   no-mic       microphone blocked or missing
+//   unsupported  this browser can't recognise Mongolian (iPhone Safari, Firefox, Samsung Internet...)
+//   network      the browser's recognition service (online) didn't answer
+//   not-heard    nothing said
+export type ListenError = "" | "no-mic" | "unsupported" | "network" | "not-heard";
+
+export interface Heard {
+  text: string;
+  error: ListenError;
+  code: string; // the browser's own error name, shown on screen for whoever is helping
+}
+
 function recognitionClass(): RecognitionClass | null {
   const w = window as unknown as { SpeechRecognition?: RecognitionClass; webkitSpeechRecognition?: RecognitionClass };
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
@@ -27,31 +40,54 @@ export function canListenInBrowser(): boolean {
   return typeof window !== "undefined" && recognitionClass() !== null;
 }
 
-// What the rider said, "" if nothing was heard or recognition isn't available.
-export function listenInBrowser(): { done: Promise<string>; stop: () => void } {
+function kind(code: string): ListenError {
+  if (code === "not-allowed" || code === "audio-capture") {
+    return "no-mic";
+  }
+  // iPhone says service-not-allowed when its recognizer doesn't do the language (or Siri is off).
+  if (code === "language-not-supported" || code === "service-not-allowed" || code === "no-recognition") {
+    return "unsupported";
+  }
+  if (code === "network") {
+    return "network";
+  }
+  return "not-heard"; // no-speech, aborted
+}
+
+// What the rider said, or why nothing was heard.
+export function listenInBrowser(): { done: Promise<Heard>; stop: () => void } {
   const Rec = recognitionClass();
   if (!Rec) {
     return {
-      done: Promise.resolve(""),
+      done: Promise.resolve({ text: "", error: "unsupported", code: "no-recognition" }),
       stop: function () {},
     };
   }
   const rec = new Rec();
-  const done = new Promise<string>(function (resolve) {
+  const done = new Promise<Heard>(function (resolve) {
     let heard = "";
+    let code = "";
     rec.lang = "mn-MN";
     rec.interimResults = false;
     rec.maxAlternatives = 1;
     rec.onresult = function (e) {
       heard = e.results[0][0].transcript.trim();
     };
-    rec.onerror = function () {
-      resolve("");
+    rec.onerror = function (e) {
+      code = e.error;
     };
     rec.onend = function () {
-      resolve(heard);
+      if (heard) {
+        resolve({ text: heard, error: "", code: "" });
+      } else {
+        resolve({ text: "", error: kind(code || "no-speech"), code: code || "no-speech" });
+      }
     };
-    rec.start();
+    try {
+      rec.start();
+    } catch (e) {
+      resolve({ text: "", error: "unsupported", code: e instanceof Error ? e.name : "start-failed" });
+    }
   });
   return {
     done,

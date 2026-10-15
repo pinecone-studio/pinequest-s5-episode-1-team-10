@@ -76,14 +76,15 @@ export interface AskResponse {
 export type AskAction =
   | "plan"
   | "open_camera"
-  | "walk"
   | "door"
   | "stops_left"
   | "boarded"
   | "got_off"
   | "repeat_route"
   | "start_over"
-  | "tutorial";
+  | "tutorial"
+  | "sos" // text the family: SMS app opens prefilled (speech[1:] = where the rider is)
+  | "call_family";
 
 // POST /locate/voice with a WAV body (or GET /locate?text=): the rider says where they are,
 // when GPS is off or imprecise.

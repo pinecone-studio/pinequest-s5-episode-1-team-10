@@ -1,8 +1,9 @@
 """Lightweight server for free hosts (Vercel Python functions): no GPU models.
 
-Live Hamuga planning, location, ride stops and the pre-made Mongolian voice clips (served as static
-MP3s next to the app). Speech recognition runs in the rider's browser instead (/health says
-"stt": false) and sign reading isn't available ("ocr": false), so the camera answers "unsure".
+Live Hamuga planning, location, ride stops, the assistant, and the pre-made Mongolian voice clips
+(served as static files next to the app). The heavy parts run on the rider's phone instead:
+speech recognition in the browser (/health "stt": false) and sign reading with PaddleOCR in the
+browser ("ocr": false -> the app reads the sign and sends only the texts to /api/verify/texts).
 Routes carry the /api prefix because Vercel passes the original path through.
 """
 import hashlib
@@ -14,13 +15,15 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import RedirectResponse
 
 import bus_api
+import fusion
 import planner
 import tts
 import assistant
-from contract import AskResponse, NearestStop, PlanRequest, PlanResponse, RideResponse, VerifyRequest, VerifyResponse, VoiceLocateResponse
+from contract import AskResponse, NearestStop, VerifyTextsRequest, PlanRequest, PlanResponse, RideResponse, VerifyRequest, VerifyResponse, VoiceLocateResponse
 
 HERE = Path(__file__).parent
 bus_api.ROUTE_CACHE = HERE / "hamuga_cache"  # read-only on Vercel; new routes are fetched, not saved
+bus_api.SNAPSHOT = HERE / "stops_snapshot.json"  # made by deploy/vercel.sh
 CLIPS = set(json.loads((HERE / "tts_manifest.json").read_text())) if (HERE / "tts_manifest.json").exists() else set()
 
 app = FastAPI(title="Bus Boarding Guide (lite)")
@@ -102,6 +105,18 @@ def speak(text: str = Query(min_length=1, max_length=tts.MAX_CHARS)):
 @app.post("/api/verify", response_model=VerifyResponse)
 def verify(req: VerifyRequest):
     return VerifyResponse(verdict="unsure", confidence=0.0, eta_seconds=None)  # no OCR here: never a guess
+
+
+@app.post("/api/verify/texts", response_model=VerifyResponse)
+def verify_texts(req: VerifyTextsRequest):
+    """The phone read the sign (lib/ocr.ts); same decision as the full server's /verify."""
+    try:
+        routes_here = bus_api.routes_at_stop(req.stop_id)
+        city_numbers = bus_api.city_route_numbers()
+    except (httpx.HTTPError, RuntimeError):
+        routes_here = city_numbers = None  # without bus data, never "yes"
+    verdict, confidence = fusion.decide([(t.text, t.confidence) for t in req.texts], req.wanted_route, routes_here, city_numbers)
+    return VerifyResponse(verdict=verdict, confidence=confidence, eta_seconds=None)
 
 
 @app.post("/api/plan/voice")

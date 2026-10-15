@@ -23,9 +23,9 @@ def fake_hamuga(monkeypatch, tmp_path):
 
     monkeypatch.setattr(bus_api, "_get", fake_get)
     monkeypatch.setattr(bus_api, "ROUTE_CACHE", tmp_path / "routes")
-    bus_api._stops.cache_clear(); bus_api._stations.cache_clear(); bus_api.route_directions.cache_clear()
+    bus_api._stops.cache_clear(); bus_api._stations.cache_clear(); bus_api.route_directions.cache_clear(); bus_api._snapshot.cache_clear()
     yield
-    bus_api._stops.cache_clear(); bus_api._stations.cache_clear(); bus_api.route_directions.cache_clear()
+    bus_api._stops.cache_clear(); bus_api._stations.cache_clear(); bus_api.route_directions.cache_clear(); bus_api._snapshot.cache_clear()
 
 
 def test_health_says_what_runs_in_the_browser():
@@ -51,3 +51,18 @@ def test_no_sign_reading_means_unsure_and_no_voice_endpoints():
     r = client.post("/api/verify", json={"sign_crop": "aGk=", "stop_id": "1", "wanted_route": "Ч:75"})
     assert r.json()["verdict"] == "unsure"
     assert client.post("/api/plan/voice", params={"lat": 47.9, "lon": 106.9}, content=b"x").status_code == 503
+
+
+def test_stop_lists_come_from_the_deploy_snapshot(monkeypatch, tmp_path):
+    bus_api.save_snapshot(tmp_path / "stops_snapshot.json")
+    bus_api._stops.cache_clear(); bus_api._stations.cache_clear(); bus_api.route_directions.cache_clear()
+
+    def no_calls(path, params=None):
+        if path == "/api/bus/v1/rot_stop_by_route":
+            return {"busRouteInfo": {}, **DIRECTIONS[params["route_id"]]}
+        raise AssertionError("station / stop lists must come from the snapshot")
+
+    monkeypatch.setattr(bus_api, "_get", no_calls)
+    monkeypatch.setattr(bus_api, "SNAPSHOT", tmp_path / "stops_snapshot.json")
+    bus_api._snapshot.cache_clear()
+    assert client.post("/api/plan", json={"text": "Сансар", "lat": 47.9003, "lon": 106.9}).json()["route"] == "Ч:75"

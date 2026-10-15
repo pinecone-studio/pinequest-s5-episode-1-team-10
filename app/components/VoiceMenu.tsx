@@ -4,6 +4,8 @@
 //   swipe right / left  -> next / previous option, read aloud (Mongolian TTS)
 //   one tap             -> read the current option again
 //   double tap          -> choose it (with nothing chosen yet: the screen's main action)
+//   press and hold      -> talk to the voice assistant while holding, release when done; the same
+//                          on every screen, so it's never confused with choosing an option
 // Keyboard (desktop testing, Bluetooth keyboards): arrows move, Enter/Space choose, R repeats.
 // Options are also real buttons with labels, so the phone's own screen reader can use them.
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
@@ -19,13 +21,17 @@ export interface MenuItem {
 interface Props {
   items: MenuItem[];
   primary?: number; // option a double tap chooses before any is reached; none = just give the hint
+  menuId?: string; // a different value = a different menu on the same screen (SOS): start from its top again
+  onHoldStart?: () => void; // finger held still HOLD_MS: start listening
+  onHoldEnd?: () => void; // finger lifted after a hold: stop listening
   children?: ReactNode; // shown inside the touch surface (plan card, camera)
 }
 
 export const SWIPE_PX = 40;
 export const DOUBLE_TAP_MS = 350;
+export const HOLD_MS = 500;
 
-export default function VoiceMenu({ items, primary, children }: Props) {
+export default function VoiceMenu({ items, primary, menuId, onHoldStart, onHoldEnd, children }: Props) {
   const [index, setIndexState] = useState(-1); // -1: nothing reached yet
   // Fast swipes arrive before React re-renders, so the live position is kept in a ref too.
   const at = useRef(-1);
@@ -36,6 +42,8 @@ export default function VoiceMenu({ items, primary, children }: Props) {
   const down = useRef<{ x: number; y: number } | null>(null);
   const lastTap = useRef(0);
   const tapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const holding = useRef(false);
 
   useEffect(function () {
     return function () {
@@ -45,12 +53,23 @@ export default function VoiceMenu({ items, primary, children }: Props) {
     };
   }, []);
 
+  // A new menu on the same screen (the screen itself, e.g. the camera, keeps running): the next
+  // gesture starts from its top.
+  const menuSeen = useRef(menuId);
+  function syncMenu(): void {
+    if (menuSeen.current !== menuId) {
+      menuSeen.current = menuId;
+      setIndex(-1);
+    }
+  }
+
   function speak(i: number): void {
     const item = items[i];
     say(item.speech ?? [item.label]);
   }
 
   function move(step: number): void {
+    syncMenu();
     if (!items.length) {
       say([phrase("wait")]);
       return;
@@ -68,6 +87,7 @@ export default function VoiceMenu({ items, primary, children }: Props) {
   }
 
   function activate(): void {
+    syncMenu();
     const i = at.current >= 0 ? at.current : primary;
     if (i === undefined || !items[i]) {
       say([phrase(items.length ? "choose_hint" : "wait")]);
@@ -78,6 +98,7 @@ export default function VoiceMenu({ items, primary, children }: Props) {
   }
 
   function repeat(): void {
+    syncMenu();
     if (at.current >= 0 && items[at.current]) {
       speak(at.current);
     } else {
@@ -85,12 +106,44 @@ export default function VoiceMenu({ items, primary, children }: Props) {
     }
   }
 
+  function cancelHold(): void {
+    if (holdTimer.current) {
+      clearTimeout(holdTimer.current);
+      holdTimer.current = null;
+    }
+  }
+
   function onPointerDown(e: PointerEvent): void {
     unlockAudio();
     down.current = { x: e.clientX, y: e.clientY };
+    cancelHold();
+    if (onHoldStart) {
+      holdTimer.current = setTimeout(function () {
+        holdTimer.current = null;
+        holding.current = true;
+        vibrate([30]);
+        onHoldStart();
+      }, HOLD_MS);
+    }
+  }
+
+  function onPointerMove(e: PointerEvent): void {
+    const start = down.current;
+    if (start && Math.hypot(e.clientX - start.x, e.clientY - start.y) > SWIPE_PX / 2) {
+      cancelHold(); // it's a swipe
+    }
   }
 
   function onPointerUp(e: PointerEvent): void {
+    cancelHold();
+    if (holding.current) {
+      holding.current = false;
+      down.current = null;
+      if (onHoldEnd) {
+        onHoldEnd();
+      }
+      return; // a hold is never also a tap
+    }
     const start = down.current;
     down.current = null;
     if (!start) {
@@ -127,10 +180,19 @@ export default function VoiceMenu({ items, primary, children }: Props) {
       activate();
     } else if (e.key === "r" || e.key === "R") {
       repeat();
+    } else if ((e.key === "v" || e.key === "V") && !e.repeat && onHoldStart) {
+      onHoldStart(); // desktop testing: hold V = hold the screen
     } else {
       return;
     }
     e.preventDefault();
+  }
+
+  function onKeyUp(e: KeyboardEvent): void {
+    if ((e.key === "v" || e.key === "V") && onHoldEnd) {
+      e.preventDefault();
+      onHoldEnd();
+    }
   }
 
   const current = index >= 0 ? items[index] : undefined;
@@ -139,13 +201,16 @@ export default function VoiceMenu({ items, primary, children }: Props) {
       className="voice-menu"
       tabIndex={0}
       onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
       onKeyDown={onKeyDown}
+      onKeyUp={onKeyUp}
       aria-label="Шудрах, товших талбай"
     >
       {children}
       <p className="voice-current" aria-hidden="true">
-        {current ? current.label : items.length ? "→ шудрах · 2× товших" : "…"}
+        {current ? current.label : items.length ? "→ шудрах · 2× товших · дараад барих = асуух" : "…"}
       </p>
       <ul className="voice-items">
         {items.map(function (item, i) {

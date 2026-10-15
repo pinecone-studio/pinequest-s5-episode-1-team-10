@@ -12,6 +12,18 @@ class VerifyRequest(BaseModel):
     wanted_route: str = Field(min_length=1, max_length=16, description='Hamuga busRouteNo the rider chose, e.g. "Ч:81"')
 
 
+class SignText(BaseModel):
+    text: str = Field(max_length=200)
+    confidence: float = Field(ge=0, le=1)
+
+
+class VerifyTextsRequest(BaseModel):
+    """/verify when the phone read the sign itself (free hosting has no OCR): just the texts."""
+    texts: list[SignText] = Field(max_length=50)
+    stop_id: str = Field(min_length=1, max_length=64)
+    wanted_route: str = Field(min_length=1, max_length=16)
+
+
 class VerifyResponse(BaseModel):
     verdict: Verdict
     confidence: float = Field(ge=0, le=1)
@@ -98,8 +110,9 @@ class AskResponse(BaseModel):
     heard: str = Field(description="The question as heard (or typed); '' if nothing was heard")
     answer: str = Field(description="The whole answer, for the screen")
     speech: list[str] = Field(description="Mongolian sentences to speak in order; fetch each from /tts")
-    action: Optional[Literal["plan", "open_camera", "walk", "door", "stops_left", "boarded", "got_off", "repeat_route",
-                             "start_over", "tutorial"]] = Field(default=None, description="What the app should do")
+    action: Optional[Literal["plan", "open_camera", "door", "stops_left", "boarded", "got_off", "repeat_route",
+                             "start_over", "tutorial", "sos", "call_family"]] = Field(
+        default=None, description='What the app should do. "sos": text the family (speech[1:] = where the rider is)')
     plan: Optional["PlanResponse"] = Field(default=None, description='The trip, when action is "plan"')
 
 

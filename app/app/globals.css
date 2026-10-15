@@ -1,9 +1,11 @@
-/* High contrast, huge tap targets: the rider may see nothing, a little, or rely on a helper. */
+/* Minimal and high contrast: black, white, one yellow for things you can press. No decoration.
+   Every screen: a heading, one status line, big full-width buttons in reading order. */
 :root {
   --bg: #000;
   --fg: #fff;
+  --muted: #c8c8c8;
   --accent: #ffd400;
-  --ok: #00e676;
+  --line: #5a5a5a;
 }
 
 * {
@@ -15,190 +17,127 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-  font-family: system-ui, sans-serif;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 18px;
+  line-height: 1.45;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+/* One clear focus ring everywhere (screen readers, keyboards, switch access). */
+:focus-visible {
+  outline: 4px solid var(--accent);
+  outline-offset: 3px;
 }
 
 .flow {
   min-height: 100dvh;
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 16px;
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding: 16px;
-  max-width: 720px;
-  margin: 0 auto;
 }
 
-.message {
-  min-height: 3em;
-  font-size: 1.3rem;
-  line-height: 1.4;
+.title {
   margin: 0;
+  font-size: 2rem;
+  line-height: 1.2;
+  font-weight: 800;
+}
+
+.title:focus {
+  outline: none; /* focused only so screen readers announce the new screen */
+}
+
+.status {
+  margin: 0;
+  font-size: 1.35rem;
+  color: var(--fg);
+}
+
+/* Screen-reader mode */
+.screen {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.action {
+  width: 100%;
+  min-height: 72px;
+  padding: 16px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--accent);
+  color: #000;
+  font-size: 1.4rem;
+  font-weight: 800;
+  text-align: center;
+}
+
+.action[aria-pressed="false"] {
+  background: transparent;
+  color: var(--fg);
+  border: 3px solid var(--line);
+}
+
+/* First screen: a screen-reader button first, then the whole rest of the screen is "start". */
+.start-screen {
+  padding-bottom: 16px;
 }
 
 .big {
   flex: 1;
-  min-height: 45dvh;
-  font-size: 2.4rem;
-  font-weight: 800;
-  border-radius: 24px;
+  width: 100%;
   border: 0;
+  border-radius: 16px;
   background: var(--accent);
   color: #000;
-  padding: 24px;
-  margin: 0;
+  font-size: 2.6rem;
+  font-weight: 900;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  text-align: center;
-}
-
-.big:disabled {
-  opacity: 0.6;
-}
-
-.busy {
-  background: #333;
-  color: var(--fg);
-}
-
-.found {
-  background: var(--ok);
-  font-size: 3rem;
-}
-
-.small {
-  font-size: 1.3rem;
-  padding: 16px;
-  border-radius: 16px;
-  border: 2px solid var(--fg);
-  background: transparent;
-  color: var(--fg);
-}
-
-.typed {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  font-size: 1.1rem;
-}
-
-.typed input {
-  flex: 1;
-  min-width: 0;
-  font-size: 1.2rem;
-  padding: 12px;
-  border-radius: 12px;
-  border: 2px solid var(--fg);
-  background: #111;
-  color: var(--fg);
-}
-
-.typed button {
-  font-size: 1.2rem;
-  padding: 12px 20px;
-  border-radius: 12px;
-  border: 0;
-  background: var(--fg);
-  color: #000;
-}
-
-.card {
-  border: 3px solid var(--accent);
-  border-radius: 24px;
-  padding: 16px 20px;
-  font-size: 1.3rem;
-}
-
-.card p {
-  margin: 8px 0;
-}
-
-.route,
-.route-banner {
-  font-size: 3.5rem;
-  font-weight: 900;
-  color: var(--accent);
-  margin: 0;
-}
-
-.route-banner {
-  text-align: center;
-}
-
-.camera {
-  position: relative;
-  width: 100%;
-}
-
-.camera-video,
-.camera-overlay {
-  width: 100%;
-  border-radius: 16px;
-  display: block;
-}
-
-.camera-overlay {
-  position: absolute;
-  inset: 0;
-  height: auto;
-}
-
-.camera-status {
-  font-size: 1rem;
-  opacity: 0.8;
-}
-
-.listening {
-  background: #ff1744;
-  color: #fff;
-}
-
-.heard {
-  opacity: 0.8;
-  font-style: italic;
-}
-
-.start {
-  min-height: calc(100dvh - 32px);
-  flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
 .hint {
   font-size: 1.1rem;
-  font-weight: 500;
+  font-weight: 600;
+  max-width: 24ch;
 }
 
-.place {
-  margin: 0;
-  font-size: 1.1rem;
-}
-
-/* The VoiceMenu touch surface: the whole middle of the screen. */
+/* App-reads mode: the whole middle of the screen is one touch surface. */
 .voice-menu {
   flex: 1;
   min-height: 55dvh;
   display: flex;
   flex-direction: column;
   gap: 12px;
-  border: 3px solid #333;
-  border-radius: 24px;
+  border: 3px solid var(--line);
+  border-radius: 16px;
   padding: 16px;
-  touch-action: none; /* swipes are ours, not scrolling */
+  touch-action: none; /* swipes and holds are ours, not scrolling */
   user-select: none;
   -webkit-user-select: none;
-  outline: none;
-}
-
-.voice-menu:focus-visible {
-  border-color: var(--accent);
 }
 
 .voice-current {
   margin: auto 0 0;
   min-height: 2.4em;
-  font-size: 2.2rem;
+  font-size: 2rem;
   font-weight: 800;
   color: var(--accent);
   text-align: center;
@@ -215,14 +154,14 @@ body {
 
 .voice-item {
   width: 100%;
-  font-size: 1.2rem;
-  padding: 12px 16px;
-  border-radius: 14px;
-  border: 2px solid #444;
-  background: #111;
+  min-height: 56px;
+  padding: 12px;
+  border: 2px solid var(--line);
+  border-radius: 10px;
+  background: transparent;
   color: var(--fg);
+  font-size: 1.15rem;
   text-align: left;
-  pointer-events: none; /* taps go to the surface: one tap reads, two taps choose */
 }
 
 .voice-item.focused {
@@ -232,161 +171,90 @@ body {
   font-weight: 800;
 }
 
-.found {
-  margin: 0;
-  padding: 24px;
-  border-radius: 24px;
-  background: var(--ok);
-  color: #000;
-  font-size: 3rem;
-  font-weight: 900;
-  text-align: center;
+.helper-link {
+  align-self: center;
+  padding: 12px 20px;
+  border: 2px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
 }
 
-.ride {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-height: 0;
+/* Camera (for a sighted helper; everything it finds is spoken) */
+.camera {
+  position: relative;
+  width: 100%;
 }
 
+.camera-video,
+.camera-overlay {
+  width: 100%;
+  border-radius: 12px;
+  display: block;
+}
+
+.camera-overlay {
+  position: absolute;
+  inset: 0;
+  height: auto;
+}
+
+/* On the bus: one line, big */
 .ride-left {
   margin: 0;
   font-size: 1.8rem;
-  font-weight: 900;
+  font-weight: 800;
   color: var(--accent);
-  text-align: center;
 }
 
 .ride-error {
   margin: 0;
-  color: #ff9100;
+  font-size: 1.2rem;
 }
 
-.ride-stops {
+/* Settings */
+.field {
   margin: 0;
-  padding-left: 1.6em;
-  max-height: 34dvh;
-  overflow-y: auto;
-  font-size: 1rem;
+  padding: 0;
+  border: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 10px;
 }
 
-.ride-stops .passed {
-  opacity: 0.45;
+.field legend,
+.field label {
+  font-size: 1.2rem;
+  font-weight: 700;
+  padding: 0;
 }
 
-.ride-stops .here {
-  color: var(--accent);
-  font-weight: 800;
-}
-
-.ride-stops .off {
-  color: var(--ok);
-  font-weight: 800;
-}
-
-/* Pitch demo: a still preview in the bottom-right corner; a tap opens it full screen and starts it. */
-.demo-corner {
-  position: fixed;
-  right: 12px;
-  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
-  width: 120px;
-  height: 230px;
-  z-index: 50;
-  border-radius: 18px;
-  overflow: hidden;
-  border: 2px solid var(--accent);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
-  background: #0d1117;
-  transition: all 0.3s ease;
-}
-
-.demo-corner iframe {
-  /* rendered at phone size, shown at 1/3: a true miniature instead of squeezed text */
-  width: 360px;
-  height: 690px;
-  transform: scale(0.3333);
-  transform-origin: top left;
-  border: 0;
-  display: block;
-  pointer-events: none; /* the corner preview only plays; the button on top takes the tap */
-}
-
-.demo-corner.open {
-  right: 0;
-  bottom: 0;
-  width: 100vw;
-  height: 100dvh;
-  border-radius: 0;
-  border: 0;
-}
-
-.demo-corner.open iframe {
+.field input {
   width: 100%;
-  height: 100%;
-  transform: none;
-  pointer-events: auto;
-}
-
-.demo-tap {
-  position: absolute;
-  inset: 0;
-  border: 0;
-  background: transparent;
-  cursor: pointer;
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  padding: 6px;
-}
-
-.demo-tap span {
-  font-size: 0.85rem;
-  font-weight: 800;
-  color: #000;
-  background: var(--accent);
-  border-radius: 999px;
-  padding: 3px 10px;
-}
-
-.demo-close {
-  position: absolute;
-  top: calc(10px + env(safe-area-inset-top, 0px));
-  right: 10px;
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  border: 2px solid #fff;
-  background: rgba(0, 0, 0, 0.7);
-  color: #fff;
+  min-height: 56px;
+  padding: 12px;
+  border: 3px solid var(--line);
+  border-radius: 10px;
+  background: #111;
+  color: var(--fg);
   font-size: 1.3rem;
-  cursor: pointer;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .demo-corner {
-    transition: none;
-  }
-}
-
-/* First-use lesson (Tutorial.tsx): big current instruction, the spoken text under it. */
+/* First-use lesson */
 .tutorial {
+  position: relative;
   justify-content: center;
   text-align: center;
 }
 
 .tutorial-step {
   margin: 0;
-  font-size: 1rem;
-  color: #aaa;
+  color: var(--muted);
 }
 
 .tutorial-title {
   margin: 0;
-  font-size: 2.2rem;
+  font-size: 2rem;
   font-weight: 800;
   line-height: 1.2;
   color: var(--accent);
@@ -395,64 +263,33 @@ body {
 .tutorial-text {
   margin: 0 auto;
   max-width: 32ch;
-  font-size: 1.15rem;
-  line-height: 1.5;
-}
-
-.tutorial {
-  position: relative;
+  font-size: 1.2rem;
 }
 
 .tutorial-skip {
   position: absolute;
   top: 12px;
   right: 12px;
-  padding: 10px 22px;
-  border: 2px solid #555;
+  padding: 10px 18px;
+  border: 2px solid var(--line);
   border-radius: 999px;
   background: transparent;
-  color: #ddd;
-  font-size: 1rem;
+  color: var(--fg);
 }
 
-/* Walking to the boarding stop (WalkGuide.tsx) */
-.walk {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  text-align: center;
+/* For screen readers only */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
-.walk-stop {
-  margin: 0;
-  font-size: 1.2rem;
-}
-
-.walk-dist {
-  margin: 0;
-  font-size: 3.2rem;
-  font-weight: 800;
-  color: var(--accent);
-  font-variant-numeric: tabular-nums;
-}
-
-.walk-dir {
-  margin: 0;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  font-size: 1.6rem;
-  font-weight: 700;
-}
-
-.walk-arrow {
-  display: inline-block;
-  font-size: 3rem;
-  transition: transform 0.3s;
-}
-
-/* Two-bus trip on the plan card: "Ч:58 → Ч:49" */
-.route-then {
-  color: var(--accent);
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
 }

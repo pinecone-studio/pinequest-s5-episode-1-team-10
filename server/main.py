@@ -18,7 +18,7 @@ import stt
 import tts
 from bus_api import get_eta_seconds
 import assistant
-from contract import (AskResponse, NearestStop, PlanRequest, PlanResponse, RideResponse, VerifyRequest, VerifyResponse,
+from contract import (AskResponse, NearestStop, VerifyTextsRequest, PlanRequest, PlanResponse, RideResponse, VerifyRequest, VerifyResponse,
                       VoiceLocateResponse, VoicePlanResponse)
 
 @asynccontextmanager
@@ -188,6 +188,22 @@ def speak(text: str = Query(min_length=1, max_length=tts.MAX_CHARS)):
     return FileResponse(path, media_type="audio/wav", headers={"Cache-Control": "public, max-age=31536000"})
 
 
+def _decide(texts, stop_id, wanted_route):
+    try:
+        routes_here = bus_api.routes_at_stop(stop_id)
+        city_numbers = bus_api.city_route_numbers()
+    except (httpx.HTTPError, RuntimeError):
+        routes_here = city_numbers = None  # without bus data, fusion can never say "yes"
+    verdict, confidence = fusion.decide(texts, wanted_route, routes_here, city_numbers)
+    return VerifyResponse(verdict=verdict, confidence=confidence, eta_seconds=get_eta_seconds(stop_id, wanted_route))
+
+
+@app.post("/verify/texts", response_model=VerifyResponse)
+def verify_texts(req: VerifyTextsRequest):
+    """The phone read the sign itself (lib/ocr.ts): same decision as /verify, from its texts."""
+    return _decide([(t.text, t.confidence) for t in req.texts], req.stop_id, req.wanted_route)
+
+
 @app.post("/verify", response_model=VerifyResponse)
 def verify(req: VerifyRequest):
     try:
@@ -198,14 +214,4 @@ def verify(req: VerifyRequest):
         texts = ocr.read_texts(jpeg)
     except Exception:  # never a 500 on the phone; unsure is always safe
         return VerifyResponse(verdict="unsure", confidence=0.0, eta_seconds=None)
-    try:
-        routes_here = bus_api.routes_at_stop(req.stop_id)
-        city_numbers = bus_api.city_route_numbers()
-    except (httpx.HTTPError, RuntimeError):
-        routes_here = city_numbers = None  # without bus data, fusion can never say "yes"
-    verdict, confidence = fusion.decide(texts, req.wanted_route, routes_here, city_numbers)
-    return VerifyResponse(
-        verdict=verdict,
-        confidence=confidence,
-        eta_seconds=get_eta_seconds(req.stop_id, req.wanted_route),
-    )
+    return _decide(texts, req.stop_id, req.wanted_route)

@@ -43,14 +43,26 @@ export function exclusive<T>(job: () => Promise<T>): Promise<T> {
   return result;
 }
 
+// Model files are downloaded outside the queue: on a slow phone connection the door model (40 MB)
+// took ~45 s, and while it downloaded inside the queue the bus model and sign reading had to wait.
+export async function modelBytes(url: string): Promise<Uint8Array> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(url + ": " + response.status);
+  }
+  return new Uint8Array(await response.arrayBuffer());
+}
+
 async function load(): Promise<string> {
+  const download = modelBytes(MODEL_URL);
   // Loaded from public/ort as-is (copied by scripts/copy-ort.mjs) so the bundler never touches it.
   ort = (await import(/* turbopackIgnore: true */ /* webpackIgnore: true */ "/ort/ort.webgpu.min.mjs" as string)) as OrtModule;
   ort.env.wasm.wasmPaths = "/ort/";
   const providers = "gpu" in navigator ? ["webgpu", "wasm"] : ["wasm"];
   const o = ort;
+  const bytes = await download;
   session = await exclusive(function () {
-    return o.InferenceSession.create(MODEL_URL, { executionProviders: providers });
+    return o.InferenceSession.create(bytes, { executionProviders: providers });
   });
   // The first run compiles the GPU shaders (~1 s on a phone): do it now, not on the first camera frame.
   const s = session;
