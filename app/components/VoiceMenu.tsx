@@ -9,10 +9,12 @@
 //   double tap          -> choose it (with nothing chosen yet: the screen's main action)
 //   press and hold      -> talk to the voice assistant while holding, release when done; the same
 //                          on every screen, so it's never confused with choosing an option
+//   two fingers, hold   -> SOS (onSos): a loud tone after ~1 s, let go = the family is called
 // Keyboard (desktop testing, Bluetooth keyboards): arrows move, Enter/Space choose, R repeats.
 // Options are also real buttons with labels, so the phone's own screen reader can use them.
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { phrase, say, sayAfter, unlockAudio, vibrate, type PhraseKey } from "../lib/speech";
+import { createSosHold } from "../lib/sosHold";
 
 export interface MenuItem {
   id: string;
@@ -27,6 +29,7 @@ interface Props {
   menuId?: string; // a different value = a different menu on the same screen (SOS): start from its top again
   onHoldStart?: () => void; // finger held still HOLD_MS: start listening
   onHoldEnd?: () => void; // finger lifted after a hold: stop listening
+  onSos?: () => void; // two fingers held until the SOS tone, then lifted (lib/sosHold.ts)
   intro?: boolean; // read the options out when the screen (or menu) opens, after its message
   children?: ReactNode; // shown inside the touch surface (plan card, camera)
 }
@@ -48,7 +51,7 @@ function ordinal(i: number): string[] {
   return i < NUMBERED ? [phrase(("button_" + (i + 1)) as PhraseKey)] : [];
 }
 
-export default function VoiceMenu({ items, primary, menuId, onHoldStart, onHoldEnd, intro, children }: Props) {
+export default function VoiceMenu({ items, primary, menuId, onHoldStart, onHoldEnd, onSos, intro, children }: Props) {
   const [index, setIndexState] = useState(-1); // -1: nothing reached yet
   // Fast swipes arrive before React re-renders, so the live position is kept in a ref too.
   const at = useRef(-1);
@@ -61,14 +64,19 @@ export default function VoiceMenu({ items, primary, menuId, onHoldStart, onHoldE
   const tapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const holding = useRef(false);
+  const [sosHold] = useState(createSosHold);
+  useEffect(function () {
+    sosHold.setHandler(onSos);
+  });
 
   useEffect(function () {
     return function () {
       if (tapTimer.current) {
         clearTimeout(tapTimer.current);
       }
+      sosHold.cancel();
     };
-  }, []);
+  }, [sosHold]);
 
   // Everything on the screen is spoken: after the screen's own message, what can be done here.
   const labels = items
@@ -161,6 +169,18 @@ export default function VoiceMenu({ items, primary, menuId, onHoldStart, onHoldE
 
   function onPointerDown(e: PointerEvent): void {
     unlockAudio();
+    if (onSos && sosHold.down(e)) {
+      // A second finger: this is SOS's, not a tap / swipe / talk. Talking that already started stops.
+      cancelHold();
+      down.current = null;
+      if (holding.current) {
+        holding.current = false;
+        if (onHoldEnd) {
+          onHoldEnd();
+        }
+      }
+      return;
+    }
     down.current = { x: e.clientX, y: e.clientY };
     cancelHold();
     if (onHoldStart) {
@@ -174,6 +194,7 @@ export default function VoiceMenu({ items, primary, menuId, onHoldStart, onHoldE
   }
 
   function onPointerMove(e: PointerEvent): void {
+    sosHold.move(e);
     const start = down.current;
     if (start && Math.hypot(e.clientX - start.x, e.clientY - start.y) > SWIPE_PX / 2) {
       cancelHold(); // it's a swipe
@@ -182,6 +203,10 @@ export default function VoiceMenu({ items, primary, menuId, onHoldStart, onHoldE
 
   function onPointerUp(e: PointerEvent): void {
     cancelHold();
+    if (sosHold.up(e)) {
+      down.current = null;
+      return; // a lift of a two-finger touch is never a tap
+    }
     if (holding.current) {
       holding.current = false;
       down.current = null;

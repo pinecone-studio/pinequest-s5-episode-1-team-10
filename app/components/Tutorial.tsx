@@ -1,23 +1,25 @@
 "use client";
 
-// First-use lesson, all spoken: the best headphones, how to wear the phone, then practice the two
-// gestures every screen uses (swipe right, double tap, press-and-hold to talk) and check left/right
-// ears with the door beacon.
+// First-use lesson, all spoken: the best headphones, how to wear the phone, then practice the
+// gestures every screen uses (swipe right, double tap, press-and-hold to talk, two fingers held = SOS,
+// which only plays the tone here and calls nobody) and check left/right ears with the door beacon.
 // One tap repeats the current step; a double tap skips a step that isn't waiting for practice.
 // Plays once per phone (localStorage); Help -> "Заавар дахин сонсох" replays it. ?tutorial forces it.
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { aimBeacon, startBeacon, stopBeacon } from "../lib/beacon";
 import { phrase, say, stopSpeaking, unlockAudio, vibrate, type PhraseKey } from "../lib/speech";
 import type { Mode } from "../lib/mode";
+import { createSosHold } from "../lib/sosHold";
 import { DOUBLE_TAP_MS, HOLD_MS, SWIPE_PX } from "./VoiceMenu";
 
-type Gesture = "right" | "left" | "tap" | "double" | "hold";
+type Gesture = "right" | "left" | "tap" | "double" | "hold" | "sos";
 
 interface Lesson {
   key: PhraseKey;
   title: string;
   wait?: Gesture; // practice: the step ends only when the rider does this
   beacon?: number; // play the door beacon from this angle (degrees, + = right) after speaking
+  only?: Mode; // a step for one mode only (the screen-reader mode has a button instead of the gesture)
 }
 
 const LESSONS: Lesson[] = [
@@ -27,6 +29,8 @@ const LESSONS: Lesson[] = [
   { key: "learn_swipe", title: "Баруун тийш шудраарай →", wait: "right" },
   { key: "learn_double", title: "Хоёр товшоорой ● ●", wait: "double" },
   { key: "learn_hold", title: "Дараад барьж ярина = асуух", wait: "hold" },
+  { key: "learn_sos", title: "Тусламж: хоёр хуруугаар барина", wait: "sos", only: "voice" },
+  { key: "learn_sos_sr", title: "Тусламж: Яаралтай тусламж товч", only: "sr" },
   { key: "learn_sound_right", title: "Баруун чих ▶", beacon: 40 },
   { key: "learn_sound_left", title: "◀ Зүүн чих", beacon: -40 },
   { key: "learn_beacon", title: "Хоёр чихэнд адилхан = хаалга урд тань", beacon: 0 },
@@ -64,9 +68,10 @@ interface Props {
 }
 
 export default function Tutorial({ onDone, mode }: Props) {
-  const lessons = mode === "sr" ? LESSONS.filter(function (item) {
-    return !item.wait;
-  }) : LESSONS;
+  const lessons = LESSONS.filter(function (item) {
+    // a screen reader takes the gestures: no practice steps, only the spoken tips and the ear check
+    return (!item.only || item.only === mode) && (mode !== "sr" || !item.wait);
+  });
   const [at, setAt] = useState(0);
   const step = useRef(0);
   const waiting = useRef<Gesture | null>(null);
@@ -78,6 +83,8 @@ export default function Tutorial({ onDone, mode }: Props) {
   const finished = useRef(false);
   const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const held = useRef(false);
+  // Two fingers held until the tone, then lifted: practice only, nobody is called.
+  const [sosHold] = useState(createSosHold);
 
   function finish(): void {
     if (finished.current) {
@@ -163,6 +170,12 @@ export default function Tutorial({ onDone, mode }: Props) {
   }
 
   useEffect(function () {
+    sosHold.setHandler(function () {
+      gesture("sos");
+    });
+  });
+
+  useEffect(function () {
     const runs = run; // a counter, not a DOM node: the cleanup must bump the live value
     play(0);
     return function () {
@@ -177,6 +190,7 @@ export default function Tutorial({ onDone, mode }: Props) {
       if (beaconTimer.current) {
         clearTimeout(beaconTimer.current);
       }
+      sosHold.cancel();
     };
     // play() reads refs only; run the lesson once per mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -184,6 +198,16 @@ export default function Tutorial({ onDone, mode }: Props) {
 
   function onPointerDown(e: PointerEvent): void {
     unlockAudio();
+    if (sosHold.down(e)) {
+      // a second finger: SOS practice, not a tap, swipe or hold
+      if (holdTimer.current) {
+        clearTimeout(holdTimer.current);
+        holdTimer.current = null;
+      }
+      held.current = false;
+      down.current = null;
+      return;
+    }
     down.current = { x: e.clientX, y: e.clientY };
     held.current = false;
     if (holdTimer.current) {
@@ -197,6 +221,7 @@ export default function Tutorial({ onDone, mode }: Props) {
   }
 
   function onPointerMove(e: PointerEvent): void {
+    sosHold.move(e);
     const start = down.current;
     if (start && holdTimer.current && Math.hypot(e.clientX - start.x, e.clientY - start.y) > SWIPE_PX / 2) {
       clearTimeout(holdTimer.current);
@@ -205,6 +230,10 @@ export default function Tutorial({ onDone, mode }: Props) {
   }
 
   function onPointerUp(e: PointerEvent): void {
+    if (sosHold.up(e)) {
+      down.current = null;
+      return; // a lift of a two-finger touch is never a tap
+    }
     if (holdTimer.current) {
       clearTimeout(holdTimer.current);
       holdTimer.current = null;
@@ -246,7 +275,7 @@ export default function Tutorial({ onDone, mode }: Props) {
 
   // Desktop testing / Bluetooth keyboards, same keys as VoiceMenu.
   function onKeyDown(e: KeyboardEvent): void {
-    const keys: Record<string, Gesture> = { ArrowRight: "right", ArrowLeft: "left", Enter: "double", " ": "double", r: "tap", R: "tap", v: "hold", V: "hold" };
+    const keys: Record<string, Gesture> = { ArrowRight: "right", ArrowLeft: "left", Enter: "double", " ": "double", r: "tap", R: "tap", v: "hold", V: "hold", s: "sos", S: "sos" };
     const g = keys[e.key];
     if (g) {
       e.preventDefault();
