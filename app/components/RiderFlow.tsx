@@ -590,10 +590,7 @@ export default function RiderFlow() {
 
   const onFound = useCallback(function () {
     setFound(true);
-    const p = planRef.current;
-    if (p) {
-      setMessage(legOf(p, legRef.current).foundSpeech + " " + phrase("door_intro"));
-    }
+    // The camera already wrote the door sentence, including the side it actually saw.
   }, []);
   const onArrived = useCallback(function () {
     const p = planRef.current;

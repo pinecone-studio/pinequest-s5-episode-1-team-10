@@ -315,7 +315,12 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
           console.info("[bus] yes after " + Math.round(now - openedAt) + " ms from camera open, " + track.votes.length + " reads");
           lastGuideSpoken = now; // the intro below already guides; first clock direction comes after it
           vibrate([400, 100, 400]);
-          speak([foundSpeech, phrase("door_intro")]);
+          // The side is known only once the bus is moving. Standing still used to say "on your right".
+          let intro: PhraseKey = "door_intro_plain";
+          if (Math.abs(track.vx) > track.box.w * 0.0002) {
+            intro = track.vx > 0 ? "door_intro_right" : "door_intro_left";
+          }
+          speak([foundSpeech, phrase(intro)]);
           startBeacon();
           onFound();
         } else if (track.decision === "no" && now - lastNoSpoken > REPEAT_AFTER_MS) {
