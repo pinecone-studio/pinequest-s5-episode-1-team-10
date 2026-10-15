@@ -104,4 +104,4 @@ if __name__ == "__main__":
         ok += got == want
         if got != want:
             print(f"WORDING MISS {q!r}: wanted {want}, got {got}")
-    print(f"wordings {ok}/{len(WORDINGS)} understood")
+print(f"wordings {ok}/{len(WORDINGS)} understood")
