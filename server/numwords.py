@@ -75,14 +75,21 @@ def words(n):
     return " ".join(out)
 
 
+# Used when shared/route_speech.json isn't there. deploy/vercel.sh copies only server/*.py into the lite
+# server (api/_server), not shared/, so the deployed voice says routes with THIS copy: keep it equal to the
+# file (test_numwords_route.py checks), or the app's VoiceOver words and the voice drift apart.
+_ROUTE_SPEECH_COPY = {"prefix": {"М": "М", "Ч": "Ч", "Ү": "Ү", "Х": "Х", "Д": "Д", "ШҮ": "ШҮ"},
+                      "suffix": {"А": "А", "Б": "Б", "ӨВ": "ӨВ"}}
+
+
 def _route_speech_config():
     """shared/route_speech.json: how each route letter is said (also read by app/lib/route.ts). Next to
-    this file on the lite server if the deploy copied it there; plain letters if it is missing."""
+    this file on the lite server if the deploy copied it there; _ROUTE_SPEECH_COPY if it is missing."""
     here = Path(__file__).resolve().parent
     for path in (here.parent / "shared" / "route_speech.json", here / "route_speech.json"):
         if path.exists():
             return json.loads(path.read_text(encoding="utf-8"))
-    return {"prefix": {p: p for p in ("М", "Ч", "Ү", "Х", "Д", "ШҮ")}, "suffix": {s: s for s in ("А", "Б", "ӨВ")}}
+    return _ROUTE_SPEECH_COPY
 
 
 _ROUTE_SPEECH = _route_speech_config()

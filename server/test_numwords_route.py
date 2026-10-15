@@ -62,3 +62,10 @@ def test_route_sentences_have_no_digits():
     assert planner.take_speech("Ч:57") == "Ч тавин долоо автобусанд суугаарай."
     assert planner.found_speech("Ч:29Б-Ма") == "Ч хорин ес Б автобус ирлээ. Энэ таны автобус."
     assert planner.take_speech("test1000") == "автобусанд суугаарай."
+
+
+def test_the_deployed_copy_of_route_speech_matches_the_file():
+    # The lite server on Vercel has no shared/ folder (deploy/vercel.sh copies server/*.py only), so it
+    # says route letters with numwords._ROUTE_SPEECH_COPY: it must say them the way the file (and the app) does.
+    shared = json.loads((ROOT / "shared" / "route_speech.json").read_text(encoding="utf-8"))
+    assert numwords._ROUTE_SPEECH_COPY == {"prefix": shared["prefix"], "suffix": shared["suffix"]}
