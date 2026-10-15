@@ -1,5 +1,6 @@
 // Records one spoken destination as a 16 kHz mono WAV, stopping by itself shortly after the
 // rider stops talking, so the answer comes as fast as possible.
+import { audioContext } from "./speech";
 
 const RATE = 16000;
 const END_SILENCE_MS = 700; // this much quiet after speech ends the recording
@@ -157,17 +158,19 @@ export function beep(): Promise<void> {
     }
     setTimeout(finish, BEEP_MAX_MS);
     try {
-      const ctx = new AudioContext();
+      // The shared context the last touch unlocked (a new one starts suspended on iPhone: no beep).
+      const ctx = audioContext();
+      if (!ctx) {
+        finish();
+        return;
+      }
       ctx.resume().catch(function () {});
       const osc = ctx.createOscillator();
       osc.frequency.value = 880;
       osc.connect(ctx.destination);
       osc.start();
       osc.stop(ctx.currentTime + 0.15);
-      osc.onended = function () {
-        ctx.close();
-        finish();
-      };
+      osc.onended = finish;
     } catch {
       finish(); // no audio at all: record anyway
     }

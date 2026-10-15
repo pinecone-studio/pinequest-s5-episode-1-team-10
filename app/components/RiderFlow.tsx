@@ -82,6 +82,14 @@ function spokenStop(name: string): string {
   return name.replace(/\/[^/]*\/|\([^)]*\)/g, " ").split(/\s+/).filter(Boolean).join(" ") + ".";
 }
 
+// "Төв номын сан /Зүүн/" -> ["Төв номын сан.", "Зүүн тал."]: the two pre-made clips (planner.stop_pieces).
+const SIDES: Record<string, string> = { урд: "Урд тал.", хойд: "Хойд тал.", зүүн: "Зүүн тал.", баруун: "Баруун тал." };
+function stopPieces(name: string): string[] {
+  const m = /\/\s*(Урд|Хойд|Зүүн|Баруун)\s*\//i.exec(name);
+  const side = m ? SIDES[m[1].toLowerCase()] : "";
+  return [spokenStop(name)].concat(side ? [side] : []);
+}
+
 // ?lat=47.91&lon=106.92 overrides GPS, for testing away from the stop.
 function testPosition(): Position | null {
   const q = new URLSearchParams(window.location.search);
@@ -141,7 +149,10 @@ export default function RiderFlow() {
   function confirmPlace(name: string): void {
     setPlace(name);
     setStep("confirmPlace");
-    announce(["your_location_is", { text: name }, modeRef.current === "sr" ? "place_confirm_sr" : "place_confirm"]);
+    const pieces = stopPieces(name).map(function (item) {
+      return { text: item };
+    });
+    announce((["your_location_is"] as (PhraseKey | { text: string })[]).concat(pieces, modeRef.current === "sr" ? "place_confirm_sr" : "place_confirm"));
   }
   function placeConfirmed(): void {
     setStep("ask");
