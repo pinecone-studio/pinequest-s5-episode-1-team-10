@@ -14,6 +14,7 @@ import bus_api
 import fusion
 import ocr
 import planner
+import chimege
 import speechmatics
 import stt
 import tts
@@ -47,7 +48,21 @@ app = FastAPI(title="Bus Boarding Guide", lifespan=lifespan)
 def health():
     # "speech": the phones recognise speech with Speechmatics (/stt/token); this server's Whisper stays
     # for the older voice endpoints.
-    return {"ok": True, "speech": speechmatics.configured()}
+    return {"ok": True, "speech": speechmatics.configured(), "chimege": chimege.configured()}
+
+
+@app.post("/stt/chimege")
+async def speech_text(request: Request):
+    """The phone's recording of one thing the rider said (WAV) -> Chimege's Mongolian text. Paid per
+    call: the phone sends only real speech, once (server/chimege.py)."""
+    wav = await request.body()
+    if len(wav) > chimege.MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Audio too long")
+    try:
+        text = await run_in_threadpool(chimege.transcribe, wav)
+    except (httpx.HTTPError, RuntimeError):
+        raise HTTPException(status_code=503, detail="Chimege unavailable")
+    return {"text": text}
 
 
 @app.post("/stt/token", response_model=SpeechToken)

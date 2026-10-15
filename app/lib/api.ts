@@ -59,15 +59,16 @@ export interface ServerCaps {
   stt: boolean; // this server runs Whisper (the Mac); the app itself listens with lib/listen.ts
   ocr: boolean; // false: the phone reads the signs (lib/ocr.ts)
   speech: boolean; // Speechmatics keys from /api/stt/token: every phone can talk, iPhone included
+  chimege: boolean; // final text from Chimege (/api/stt/chimege), Speechmatics as the backup
 }
 
 export async function serverCaps(): Promise<ServerCaps> {
   try {
     const res = await fetch("/api/health");
-    const body = (await res.json()) as { stt?: boolean; ocr?: boolean; speech?: boolean };
-    return { stt: body.stt !== false, ocr: body.ocr !== false, speech: body.speech === true };
+    const body = (await res.json()) as { stt?: boolean; ocr?: boolean; speech?: boolean; chimege?: boolean };
+    return { stt: body.stt !== false, ocr: body.ocr !== false, speech: body.speech === true, chimege: body.chimege === true };
   } catch {
-    return { stt: true, ocr: true, speech: false };
+    return { stt: true, ocr: true, speech: false, chimege: false };
   }
 }
 

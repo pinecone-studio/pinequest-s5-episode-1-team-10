@@ -5,7 +5,7 @@
 //      couldn't start (network, account busy).
 //   3. Neither (iPhone without Speechmatics): "unsupported" -> the app offers typing.
 import { speedMark } from "./speed";
-import { listenWithSpeechmatics } from "./speechmatics";
+import { listenWithSpeechmatics, setChimege, type ListenOptions } from "./speechmatics";
 
 interface RecognitionResultEvent {
   results: { length: number; [index: number]: { isFinal: boolean; [index: number]: { transcript: string } } };
@@ -30,6 +30,7 @@ type RecognitionClass = new () => Recognition;
 // have to double tap to stop it. Instead the app watches the words as they come: this long without a
 // new word after the rider has spoken = they are done, and Chrome is asked for its final text.
 const SILENCE_MS = 1200;
+const NUMBER_SILENCE_MS = 2000; // a phone number is said with pauses between the pairs
 const NO_SPEECH_MS = 7000; // nothing said at all -> "not heard"
 const MAX_MS = 12000;
 
@@ -91,17 +92,22 @@ export function enableSpeechmatics(on: boolean): void {
   speechmatics = on;
 }
 
+// From /api/health "chimege": the final text comes from Chimege (lib/speechmatics.ts).
+export function enableChimege(on: boolean): void {
+  setChimege(on);
+}
+
 // Can the rider talk at all on this phone?
 export function canListen(): boolean {
   return speechmatics || canListenInMongolian();
 }
 
 // What the rider said, or why nothing was heard. onWords: the words so far, while they talk.
-export function listen(onWords?: (text: string) => void): Listening {
+export function listen(onWords?: (text: string) => void, options?: ListenOptions): Listening {
   if (!speechmatics) {
-    return listenInBrowser();
+    return listenInBrowser(options);
   }
-  let current: Listening = listenWithSpeechmatics(onWords);
+  let current: Listening = listenWithSpeechmatics(onWords, options);
   let stopped = false;
   const done = current.done.then(function (heard) {
     // Speechmatics couldn't start (network, both free sessions busy): the browser's own recognizer,
@@ -109,7 +115,7 @@ export function listen(onWords?: (text: string) => void): Listening {
     if (heard.text || heard.error !== "network" || stopped || !canListenInMongolian()) {
       return heard;
     }
-    current = listenInBrowser();
+    current = listenInBrowser(options);
     return current.done;
   });
   return {
@@ -122,7 +128,8 @@ export function listen(onWords?: (text: string) => void): Listening {
 }
 
 // The browser's own recognizer.
-export function listenInBrowser(): Listening {
+export function listenInBrowser(options?: ListenOptions): Listening {
+  const silenceMs = options && options.digits ? NUMBER_SILENCE_MS : SILENCE_MS;
   const Rec = recognitionClass();
   if (!Rec) {
     return {
@@ -179,7 +186,7 @@ export function listenInBrowser(): Listening {
         finish({ text: heard, error: "", code: "" });
         return;
       }
-      silence = setTimeout(stopNow, SILENCE_MS);
+      silence = setTimeout(stopNow, silenceMs);
     };
     rec.onerror = function (e) {
       code = e.error;
