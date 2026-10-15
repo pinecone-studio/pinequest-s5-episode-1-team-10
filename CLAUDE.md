@@ -55,7 +55,7 @@ Two languages only: **TypeScript** (app) and **Python** (model + server).
 | Detection (bus, door, route_sign) | YOLO11n fine-tuned → ONNX → onnxruntime-web | Phone |
 | Tracking + stopping logic | Own IoU box tracker | Phone |
 | Guidance audio | Web Audio API (PannerNode), recorded Mongolian voice clips | Phone |
-| Voice input (Mongolian) | Chrome speech recognition `mn-MN`; backup Chimege API; last resort tap zones + voice menu | Phone + cloud |
+| Voice input (Mongolian) | Speechmatics real-time (`mn`), streamed from the phone, 60 s key from our server; backup Chrome speech recognition `mn-MN`; last resort typing + voice menu | Phone + cloud |
 | Model training | Ultralytics YOLO11n, Colab/Kaggle GPU | Cloud notebook |
 | Labeling | Roboflow | Browser |
 | Route-number OCR | PaddleOCR on sign crops | Server |

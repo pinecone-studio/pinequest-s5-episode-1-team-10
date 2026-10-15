@@ -1,6 +1,7 @@
 import hashlib
 import json
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -28,8 +29,33 @@ def fake_hamuga(monkeypatch, tmp_path):
     bus_api._stops.cache_clear(); bus_api._stations.cache_clear(); bus_api.route_directions.cache_clear(); bus_api._snapshot.cache_clear()
 
 
-def test_health_says_what_runs_in_the_browser():
-    assert client.get("/api/health").json() == {"ok": True, "stt": False, "ocr": False}
+def test_health_says_what_runs_in_the_browser(monkeypatch):
+    monkeypatch.delenv("SPEECHMATICS_API_KEY", raising=False)
+    assert client.get("/api/health").json() == {"ok": True, "stt": False, "ocr": False, "speech": False}
+    monkeypatch.setenv("SPEECHMATICS_API_KEY", "secret")
+    assert client.get("/api/health").json()["speech"] is True
+
+
+def test_speech_token_hands_out_a_temporary_key_never_the_account_key(monkeypatch):
+    import speechmatics
+    sent = {}
+
+    def fake_post(url, json, headers, timeout):
+        sent.update(url=url, json=json, auth=headers["Authorization"])
+        return httpx.Response(201, json={"apikey_id": None, "key_value": "temp-jwt"}, request=httpx.Request("POST", url))
+
+    monkeypatch.setenv("SPEECHMATICS_API_KEY", "account-secret")
+    monkeypatch.setattr(speechmatics.httpx, "post", fake_post)
+    r = client.post("/api/stt/token")
+    assert r.status_code == 200
+    assert r.json() == {"jwt": "temp-jwt", "url": speechmatics.URL, "ttl": 60}
+    assert "account-secret" not in r.text and r.headers["cache-control"] == "no-store"
+    assert sent == {"url": speechmatics.KEY_URL, "json": {"ttl": 60}, "auth": "Bearer account-secret"}
+
+    monkeypatch.setattr(speechmatics.httpx, "post", lambda *a, **k: httpx.Response(401, request=httpx.Request("POST", speechmatics.KEY_URL)))
+    assert client.post("/api/stt/token").status_code == 503  # refused: the app falls back, never crashes
+    monkeypatch.delenv("SPEECHMATICS_API_KEY")
+    assert client.post("/api/stt/token").status_code == 503  # not configured
 
 
 def test_plan_and_ride_work_without_gpu_models():
