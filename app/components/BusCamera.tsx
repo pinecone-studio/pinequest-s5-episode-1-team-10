@@ -13,6 +13,7 @@ import { loadOcr, readSign } from "../lib/ocr";
 import { detectBuses, loadDetector, type Box } from "../lib/detector";
 import { detectFrontDoor, loadDoorDetector } from "../lib/doorDetector";
 import { frontIsRight, guideToDoor, type DoorGuide } from "../lib/door";
+import { explainPermission } from "../lib/permissions";
 import { cue, phrase, vibrate, type PhraseKey } from "../lib/speech";
 import { addVote, updateTracks, VOTE_WINDOW, type Track } from "../lib/tracker";
 
@@ -514,10 +515,24 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
             stream = fresh;
             video.srcObject = fresh;
           } catch (e) {
-            stats.error = "camera " + (e instanceof Error ? e.name : "");
-            speak([phrase("camera_failed")]);
-            onError();
-            return;
+            stats.error = "camera restart " + (e instanceof Error ? e.name : "");
+          }
+        }
+        video.play().catch(function () {});
+        // Bus already confirmed: the door directions follow by themselves; else: looking again.
+        speak([target ? phrase("app_resumed") : phrase("camera_resumed")]);
+      }
+      document.addEventListener("visibilitychange", onVisibility);
+
+      async function start(): Promise<void> {
+        if (!photo && !recorded) {
+          await explainPermission("camera"); // the first time the phone asks for the camera
+        }
+        // While the phone's camera box waits for an answer, repeat what to press (a blind rider may
+        // not find it at once; nothing else happens until it's answered).
+        const askAgain = setInterval(function () {
+          if (!stopped) {
+            speak([phrase("camera_permission")]);
           }
         }, 15000);
         try {
@@ -526,7 +541,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
           });
         } catch (e) {
           stats.error = "camera " + (e instanceof Error ? e.name : "");
-          sayPhrase("camera_failed");
+          speak([phrase("camera_failed")]);
           onError();
           return;
         }

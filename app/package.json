@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "predev": "node scripts/copy-ort.mjs",
+    "predev": "node scripts/copy-ort.mjs && node scripts/build-reader-worker.mjs",
     "dev": "next dev",
-    "prebuild": "node scripts/copy-ort.mjs",
+    "prebuild": "node scripts/copy-ort.mjs && node scripts/build-reader-worker.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
@@ -20,6 +20,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "esbuild": "^0.25.5",
     "eslint": "^9",
     "eslint-config-next": "16.4.0",
     "typescript": "^5"
