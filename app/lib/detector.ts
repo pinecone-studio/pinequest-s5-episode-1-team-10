@@ -123,7 +123,8 @@ async function load(): Promise<string> {
     ort.env.wasm.numThreads = 1;
     // The runtime reserves memory up front (scripts/copy-ort.mjs tries 4 GB first): on iPhone start at
     // 512 MB, plenty for the bus model + sign reader (~250 MB), so Safari isn't pushed to reload.
-    (globalThis as { ortMaxPages?: number }).ortMaxPages = 8192;
+    // 256 MB. 512 MB plus the camera was enough for Safari to kill the tab after a minute or two.
+    (globalThis as { ortMaxPages?: number }).ortMaxPages = 4096;
   }
   const o = ort;
   const threads = wasmThreads(o);

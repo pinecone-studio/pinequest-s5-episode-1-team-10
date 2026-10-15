@@ -11,6 +11,7 @@ import { decideSign, routeNumber } from "../lib/fusion";
 import { cityNumbers, prefetchStopRoutes, routesFor } from "../lib/stopRoutes";
 import { aimBeacon, startBeacon, stopBeacon } from "../lib/beacon";
 import { MIN_BUS_WIDTH, signCanvas, signCrop, signScore } from "../lib/crop";
+import { loadOcr, readSign } from "../lib/ocr";
 import { detectBuses, loadDetector, type Box } from "../lib/detector";
 import { detectFrontDoor, loadDoorDetector } from "../lib/doorDetector";
 import { frontIsRight, guideToDoor, type DoorGuide } from "../lib/door";
@@ -173,6 +174,8 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
       let pending = 0;
       let ocrWorker: Worker | null = null;
       let workerReady = false;
+      // iPhone: the sign is read on the detector's runtime. A second one is another 256 MB and Safari kills the tab.
+      const phoneReadsHere = phoneOcr && isIOS();
       const flying = new Set<number>();
       const held = new Map<number, { score: number; frame: number; width: number; height: number; pixels: Uint8ClampedArray }>();
       let lastSeenSpoken = 0;
@@ -431,6 +434,50 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
       // Full-resolution sign crop. The best (bright, complete, sharp) frame is the one the worker reads.
       function keepCrop(video: HTMLVideoElement, track: Track, now: number, others: Box[], frame: number): void {
         if (track.locked || track.decision === "no" || !steady(track)) {
+          return;
+        }
+        if (phoneReadsHere) {
+          if (flying.has(track.id)) {
+            return;
+          }
+          const masked = others.concat(
+            tracks
+              .filter(function (item) {
+                return item !== track && item.lastSeen === now;
+              })
+              .map(function (item) {
+                return item.box;
+              }),
+          );
+          const canvas = signCanvas(video, track.box, masked);
+          if (!canvas) {
+            return;
+          }
+          flying.add(track.id);
+          const id = track.id;
+          const readAt = performance.now();
+          readSign(canvas).then(function (texts) {
+            flying.delete(id);
+            stats.ocrMs = Math.round(performance.now() - readAt);
+            const found = tracks.find(function (item) {
+              return item.id === id;
+            });
+            if (!found || stopped || target || found.locked || found.decision === "yes" || found.decision === "no") {
+              return;
+            }
+            stats.reads++;
+            stats.lastText = texts
+              .map(function (item) {
+                return item[0];
+              })
+              .join(" ")
+              .slice(0, 40);
+            found.lastAnswer = performance.now();
+            const decided = decideSign(texts, route, routesFor(stopId), cityNumbers());
+            verifyTexts(texts, stopId, route);
+            addVote(found, decided.verdict, decided.confidence, decided.number, frame);
+            announce(found);
+          });
           return;
         }
         const masked = others.concat(
@@ -741,19 +788,24 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
           if (!routesFor(stopId)) {
             prefetchStopRoutes(stopId, [], "");
           }
-          try {
-            ocrWorker = new Worker("/bus-ocr-worker.js");
-            ocrWorker.onmessage = onOcr;
-            ocrWorker.postMessage({ type: "load" });
-          } catch (e) {
-            stats.error = "sign reader " + (e instanceof Error ? e.message : String(e));
-            if (!stopped) {
-              speak([phrase("ocr_failed")]);
+          if (!phoneReadsHere) {
+            try {
+              ocrWorker = new Worker("/bus-ocr-worker.js");
+              ocrWorker.onmessage = onOcr;
+              ocrWorker.postMessage({ type: "load" });
+            } catch (e) {
+              stats.error = "sign reader " + (e instanceof Error ? e.message : String(e));
+              if (!stopped) {
+                speak([phrase("ocr_failed")]);
+              }
             }
           }
         }
         try {
           provider = await loadDetector();
+          if (phoneReadsHere) {
+            loadOcr();
+          }
         } catch (e) {
           clearInterval(loadingTimer);
           clearTimeout(firstLoadingSay);

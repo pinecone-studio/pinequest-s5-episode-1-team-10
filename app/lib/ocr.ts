@@ -65,15 +65,18 @@ export function loadOcr(): Promise<boolean> {
 
 // [(text, confidence)] read on the sign crop; [] if the models aren't loaded.
 export async function readSign(crop: HTMLCanvasElement): Promise<[string, number][]> {
+  // Copy first. The camera reuses this canvas, and the model load below would otherwise overwrite it.
+  const w = crop.width;
+  const h = crop.height;
+  const snap = crop.getContext("2d", { willReadFrequently: true }) as CanvasRenderingContext2D;
+  const px = new Uint8ClampedArray(snap.getImageData(0, 0, w, h).data);
   if (!(await loadOcr()) || !det || !rec) {
     return [];
   }
   const { ort } = await runtime();
-  const ctx = crop.getContext("2d", { willReadFrequently: true }) as CanvasRenderingContext2D;
-  const px = ctx.getImageData(0, 0, crop.width, crop.height).data;
   const d = det;
   const r = rec;
-  return recognize(px, crop.width, crop.height, {
+  return recognize(px, w, h, {
     keys: keys,
     detect: function (data, height, width) {
       return exclusive(function () {
