@@ -12,6 +12,12 @@ import type { PageLine } from "./sentences";
 
 type OrtModule = typeof Ort;
 export type Source = ImageBitmap | OffscreenCanvas;
+interface Area {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
 // Runs one model call when it's this job's turn (higher priority first): onnxruntime's WASM backend
 // must never run two at once.
 export type Gate = <T>(priority: number, job: () => Promise<T>) => Promise<T>;
@@ -27,6 +33,11 @@ export const PAGE_DET = 1280; // longest side for detection on a captured page (
 // For aiming: where the text is. Measured on whole-page frames: 480 px finds 19% of the lines (small
 // print vanishes), 800 px 88%, 960 px 99.9%.
 export const AIM_DET = 960;
+export const AIM_FRAME = 1920; // camera frames sent for aiming (detail for AIM_FINE)
+const AIM_FINE = 1440; // a second look for small print when nothing was seen at AIM_DET
+const ZOOM_BELOW = 12; // median line height (detection pixels) below which the text area is zoomed
+const ZOOM_LINE = 22; // line height aimed for when zooming
+const ZOOM_MAX = 2560; // longest side for the zoomed detection (time and memory on a phone)
 const REC_H = 48;
 const REC_MAX_W = 3200;
 export const BATCH = 6;
@@ -52,6 +63,8 @@ export class PageOcr {
   private rec: Ort.InferenceSession;
   private keys: string[];
   private gate: Gate;
+  private misses = 0; // aiming frames with no text seen
+  private fine = false; // small print: aiming frames are looked at with AIM_FINE pixels
 
   constructor(ort: OrtModule, det: Ort.InferenceSession, rec: Ort.InferenceSession, keysText: string, gate: Gate) {
     this.ort = ort;
@@ -62,15 +75,17 @@ export class PageOcr {
   }
 
   // Text lines on the source, in source pixels; also the scaled pixels (for brightness / sharpness).
-  async detect(source: Source, maxSide: number, priority: number): Promise<{ regions: Region[]; px: Uint8ClampedArray; w: number; h: number }> {
-    const sw = source.width;
-    const sh = source.height;
+  // `area`: only this part of the source (the text, zoomed in); regions are still in source pixels.
+  async detect(source: Source, maxSide: number, priority: number, area?: Area): Promise<{ regions: Region[]; px: Uint8ClampedArray; w: number; h: number }> {
+    const a = area ?? { x: 0, y: 0, w: source.width, h: source.height };
+    const sw = a.w;
+    const sh = a.h;
     const s = maxSide / Math.max(sw, sh);
     const w = Math.max(32, Math.round((sw * s) / 32) * 32);
     const h = Math.max(32, Math.round((sh * s) / 32) * 32);
     const ctx = canvas(w, h);
     ctx.imageSmoothingQuality = "high";
-    ctx.drawImage(source, 0, 0, w, h);
+    ctx.drawImage(source, a.x, a.y, a.w, a.h, 0, 0, w, h);
     const px = ctx.getImageData(0, 0, w, h).data;
     const data = new Float32Array(3 * w * h);
     planarBgr(px, w * h, MEAN, STD, data, 0);
@@ -80,17 +95,93 @@ export class PageOcr {
       return det.run({ [det.inputNames[0]]: input });
     });
     const prob = out[this.det.outputNames[0]].data as Float32Array;
-    return { regions: regionsOf(prob, w, h, sw / w, sh / h), px, w, h };
+    const regions = regionsOf(prob, w, h, sw / w, sh / h);
+    if (a.x || a.y) {
+      regions.forEach(function (item) {
+        item.cx += a.x;
+        item.cy += a.y;
+      });
+    }
+    return { regions, px, w, h };
+  }
+
+  // Small print (a page held far away, or a newspaper): lines only a few pixels high at PAGE_DET are
+  // found in broken pieces, and the reading order falls apart. Then the lines are found again on the
+  // text area only, enlarged so a line is ~ZOOM_LINE pixels high (at most ZOOM_MAX; never past the
+  // photo's own pixels). Measured on a book page photographed small (4K frame, 22 px print): words
+  // were right but split and out of order at 1280 px.
+  async detectPage(source: Source): Promise<Region[]> {
+    const found = await this.detect(source, PAGE_DET, PAGE_PRIORITY);
+    const text = found.regions.filter(function (item) {
+      return item.len > 2 * item.thick;
+    });
+    if (text.length < 3) {
+      return found.regions;
+    }
+    const scale = found.w / source.width; // detection pixels per photo pixel
+    const thick = text
+      .map(function (item) {
+        return item.thick;
+      })
+      .sort(function (a, b) {
+        return a - b;
+      })[Math.floor(text.length / 2)];
+    if (thick * scale >= ZOOM_BELOW) {
+      return found.regions;
+    }
+    let x0 = source.width;
+    let y0 = source.height;
+    let x1 = 0;
+    let y1 = 0;
+    text.forEach(function (item) {
+      const b = corners(item);
+      x0 = Math.min(x0, b.x0);
+      y0 = Math.min(y0, b.y0);
+      x1 = Math.max(x1, b.x1);
+      y1 = Math.max(y1, b.y1);
+    });
+    const pad = 3 * thick;
+    const area = {
+      x: Math.max(0, Math.floor(x0 - pad)),
+      y: Math.max(0, Math.floor(y0 - pad)),
+      w: 0,
+      h: 0,
+    };
+    area.w = Math.min(source.width, Math.ceil(x1 + pad)) - area.x;
+    area.h = Math.min(source.height, Math.ceil(y1 + pad)) - area.y;
+    const longest = Math.max(area.w, area.h);
+    const side = Math.min(ZOOM_MAX, longest, Math.max(PAGE_DET, (longest * ZOOM_LINE) / thick));
+    if (side <= (longest * scale) * 1.15) {
+      return found.regions; // no real gain
+    }
+    const zoomed = await this.detect(source, side, PAGE_PRIORITY, area);
+    return zoomed.regions.length ? zoomed.regions : found.regions;
   }
 
   // One camera frame, for aiming.
   async check(frame: Source): Promise<FrameCheck> {
-    const { regions, px, w, h } = await this.detect(frame, AIM_DET, AIM_PRIORITY);
+    // Small print is too fine to see at AIM_DET: every other frame with no text is looked at again with
+    // more pixels (AIM_FINE), and once that found the text, the next frames are looked at that way too
+    // (otherwise a book held at arm's length is never "in view" and the photo never taken).
+    const fineFirst = this.fine && frame.width > AIM_DET;
+    let { regions, px, w, h } = await this.detect(frame, fineFirst ? AIM_FINE : AIM_DET, AIM_PRIORITY);
     const fw = frame.width;
     const fh = frame.height;
-    const text = regions.filter(function (item) {
-      return item.len > 2 * item.thick;
-    });
+    function long(list: Region[]): Region[] {
+      return list.filter(function (item) {
+        return item.len > 2 * item.thick;
+      });
+    }
+    let text = long(regions);
+    this.fine = fineFirst && text.length >= 2;
+    if (!fineFirst && text.length < 2 && frame.width > AIM_DET && ++this.misses % 2 === 0) {
+      const fine = await this.detect(frame, AIM_FINE, AIM_PRIORITY);
+      if (long(fine.regions).length >= 2) {
+        ({ regions, px, w, h } = fine);
+        text = long(regions);
+        this.fine = true;
+      }
+    }
     let x0 = 1;
     let y0 = 1;
     let x1 = 0;
@@ -192,9 +283,9 @@ export class PageOcr {
   async read(photo: ImageBitmap, each: (lines: PageLine[], done: boolean, turned: number, total: number) => Promise<boolean>): Promise<void> {
     let source: Source = photo;
     let turned = 0;
-    let found = await this.detect(source, PAGE_DET, PAGE_PRIORITY);
+    let regions = await this.detectPage(source);
     // Sideways (lines run up and down): turn a quarter and look again.
-    const long = found.regions.filter(function (item) {
+    const long = regions.filter(function (item) {
       return item.len > 3 * item.thick;
     });
     const upright = long.filter(function (item) {
@@ -203,9 +294,8 @@ export class PageOcr {
     if (long.length >= 3 && upright.length > 0.6 * long.length) {
       source = turn(source, 90);
       turned = 90;
-      found = await this.detect(source, PAGE_DET, PAGE_PRIORITY);
+      regions = await this.detectPage(source);
     }
-    let regions = found.regions;
     let { order, breakAfter } = readingOrder(regions);
     // The first lines are needed anyway; if they read poorly, the page may be upside down: try them
     // turned around (only then: a normal page pays nothing for the check).

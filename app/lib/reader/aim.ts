@@ -146,12 +146,23 @@ export async function openCamera(first: HTMLVideoElement): Promise<Camera> {
     stream = t.stream;
     still = t.img;
   } else {
-    // A page needs detail: the highest resolution the phone streams (the photo itself is full size
-    // where the phone can take one).
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } },
-      audio: false,
-    });
+    // A page needs detail. Where the phone can take a real photo (ImageCapture, Android Chrome) the
+    // photo is full size and 1080p video is enough for aiming. Safari can't, so the page photo is a
+    // video frame: ask for 4K there (a 1080p frame lost small print), else the best the phone gives.
+    const canPhoto = "ImageCapture" in window;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: canPhoto
+          ? { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } }
+          : { facingMode: "environment", width: { ideal: 3840 }, height: { ideal: 2160 } },
+        audio: false,
+      });
+    } catch {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } },
+        audio: false,
+      });
+    }
   }
   await startVideo(video, stream);
   const track = stream.getVideoTracks()[0];
@@ -166,7 +177,8 @@ export async function openCamera(first: HTMLVideoElement): Promise<Camera> {
       }
     },
     torch: Boolean(caps.torch),
-    minLine: still || capture ? 0.003 : 0.0045,
+    // smallest line height (share of the frame) that still reads well in the photo
+    minLine: still || capture || Math.max(video.videoWidth, video.videoHeight) >= 3000 ? 0.003 : 0.0045,
     frame: function (maxSide: number) {
       if (!video.videoWidth) {
         return Promise.resolve(null);

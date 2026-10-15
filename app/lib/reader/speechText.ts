@@ -215,8 +215,11 @@ function idsOf(text: string): number[] {
 }
 
 // One sentence -> model inputs, split at punctuation (shorter inputs: faster first sound, natural
-// pauses) and at MAX_CHARS.
+// pauses), at MAX_CHARS, and the first piece at FIRST_MAX.
 const MAX_CHARS = 140;
+// The first piece of a sentence is cut shorter, so its first words play sooner (the rest is made while
+// they play; the pieces are queued back to back, lib/reader/player.ts).
+const FIRST_MAX = 60;
 export function speechChunks(sentence: string): SpeechChunk[] {
   const spoken = spokenText(sentence);
   const out: SpeechChunk[] = [];
@@ -240,8 +243,8 @@ export function speechChunks(sentence: string): SpeechChunk[] {
       push(0.2); // a dash between words
     } else {
       buf += ch;
-      if (buf.length > MAX_CHARS && /\s/.test(ch)) {
-        push(0.08);
+      if ((buf.length > MAX_CHARS || (!out.length && buf.length > FIRST_MAX)) && /\s/.test(ch)) {
+        push(out.length ? 0.08 : 0.03);
       }
     }
   }

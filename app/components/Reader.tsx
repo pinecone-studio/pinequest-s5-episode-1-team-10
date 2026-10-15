@@ -19,7 +19,7 @@ import { advise, openCamera, quality, type Advice, type Camera } from "../lib/re
 import { readerCommand, type ReaderCommand } from "../lib/reader/commands";
 import { startRemoteLog } from "../lib/reader/remoteLog";
 import { analyze, isReady, keepOffline, listen, loadModels, lowMemoryPhone, readPage, releasePart, synthesize, type Reading, type SpeechStream } from "../lib/reader/engine";
-import { AIM_DET } from "../lib/reader/pageOcr";
+import { AIM_FRAME } from "../lib/reader/pageOcr";
 import { errorTone, loadingSound, pageEndChime, playStream, prompt, releasePlayer, shutter, stopPlayer, tick, unlockPlayer, unsureTone, waitForVoice, type Playing } from "../lib/reader/player";
 import { SentenceBuilder, UNCLEAR, type Sentence } from "../lib/reader/sentences";
 import { spokenText } from "../lib/reader/speechText";
@@ -36,6 +36,7 @@ const WAIT_EVERY_MS = 9000;
 
 const SPEEDS = [0.8, 1, 1.25, 1.5, 1.75, 2];
 const SPEED_KEY = "avtobus.readSpeed";
+const VOICE_AHEAD = 4; // sentences made ahead of the one being read
 const AIM_EVERY_MS = 400;
 const GIVE_UP_AIMING_MS = 9000; // text in view this long but never "ready": take the photo anyway
 const SAY_EVERY_MS = 2500;
@@ -320,7 +321,7 @@ export default function Reader() {
     while (aimRun.current === run) {
       const started = performance.now();
       const cam = camera.current;
-      const frame = cam ? await cam.frame(AIM_DET) : null;
+      const frame = cam ? await cam.frame(AIM_FRAME) : null;
       const check = frame ? await analyze(frame) : null;
       if (aimRun.current !== run) {
         return;
@@ -608,6 +609,15 @@ export default function Reader() {
         }
       }
       setAppReading(true);
+      // This one first, then the next ones are made while it plays (the voice makes speech ~3x faster
+      // than it plays, so it stays ahead and the next sentence starts with no wait). Asked before the
+      // button names below, so they're made while those are said.
+      const stream = sentence.text ? audioFor(s, s.index, true) : null;
+      for (let k = 1; k <= VOICE_AHEAD; k++) {
+        if (s.index + k < s.sentences.length && s.sentences[s.index + k].text) {
+          audioFor(s, s.index + k, false);
+        }
+      }
       // Once, before the first sentence: name the buttons. Clips only, so an iPhone never uses its Russian voice.
       if (modeRef.current === "voice" && !controlsSaid.current && s.index === 0) {
         controlsSaid.current = true;
@@ -627,13 +637,6 @@ export default function Reader() {
           introducing.current = false;
         }
       }
-      // This one first, then the next two are made while it plays.
-      const stream = sentence.text ? audioFor(s, s.index, true) : null;
-      [1, 2].forEach(function (item) {
-        if (s.index + item < s.sentences.length && s.sentences[s.index + item].text) {
-          audioFor(s, s.index + item, false);
-        }
-      });
       if (sentence.unclear) {
         await prompt(phrase("read_unclear_line"));
         if (!alive()) {
