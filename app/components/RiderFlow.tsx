@@ -30,6 +30,7 @@ type Step =
   | "start"
   | "learn" // first-use lesson: headphones, wearing the phone, gestures, ear check
   | "locating"
+  | "confirmPlace" // "Таны байршил: X. Зөв үү?" after GPS or a said place: a wrong place means a wrong bus
   | "where"
   | "whereListening"
   | "ask"
@@ -78,6 +79,7 @@ export default function RiderFlow() {
   function welcome(): PhraseKey {
     return modeRef.current === "sr" ? "welcome_sr" : "welcome";
   }
+  const [place, setPlace] = useState(""); // the stop the app thinks the rider is at, for the confirm screen
   const [message, setMessage] = useState("");
   const [plan, setPlan] = useState<PlanResponse | null>(null);
   const [leg, setLeg] = useState(0); // 0: first bus, 1: second bus after the transfer
@@ -105,6 +107,18 @@ export default function RiderFlow() {
 
   function setPlaceName(name: string): void {
     prefetch([name]); // so "Миний байршил" can say it at once
+  }
+
+  // Always say where the app thinks the rider is and let them correct it: GPS can be off by a street,
+  // and speech recognition can mishear a stop name.
+  function confirmPlace(name: string): void {
+    setPlace(name);
+    setStep("confirmPlace");
+    announce(["your_location_is", { text: name }, modeRef.current === "sr" ? "place_confirm_sr" : "place_confirm"]);
+  }
+  function placeConfirmed(): void {
+    setStep("ask");
+    announce([welcome()]);
   }
 
   function showPlan(found: PlanResponse): void {
@@ -144,8 +158,12 @@ export default function RiderFlow() {
     position.current = pos;
     fromGps.current = true;
     const near = await nearestStop(pos.lat, pos.lon);
-    setPlaceName(near ? near.name : "GPS ±" + Math.round(pos.accuracy) + " м");
-    setStep("ask");
+    if (near) {
+      setPlaceName(near.name);
+      confirmPlace(near.name);
+      return;
+    }
+    setStep("ask"); // no stop name to say (bus data down): planning will say so
     announce(["location_ok", welcome()]);
   }
 
@@ -187,7 +205,7 @@ export default function RiderFlow() {
   async function hearInBrowser(listeningStep: Step): Promise<Heard> {
     stopSpeaking();
     setStep(listeningStep);
-    setMessage(phrase("menu_stop_listening"));
+    setMessage(phrase("listening")); // stops by itself when the rider stops talking
     await beep();
     const rec = listenInBrowser();
     browserListening.current = rec;
@@ -230,8 +248,7 @@ export default function RiderFlow() {
       position.current = { lat: result.stop.lat, lon: result.stop.lon, accuracy: 0 };
       fromGps.current = false;
       setPlaceName(result.stop.name);
-      setStep("ask");
-      announce(["location_ok", welcome()]);
+      confirmPlace(result.stop.name);
     } else {
       setStep("where");
       setMessage((result.heard ? "“" + result.heard + "” — " : "") + result.message);
@@ -607,6 +624,14 @@ export default function RiderFlow() {
   const cur = plan ? legOf(plan, leg) : null; // the bus the rider is taking now
   if (step === "locating" || step === "working") {
     title = step === "locating" ? "Байршил тогтоож байна" : "Түр хүлээнэ үү";
+  } else if (step === "confirmPlace") {
+    title = place.replace(/\s*\/[^/]*\//g, "") + ": зөв үү?";
+    const yes = { ...label("place-yes", "menu_place_yes"), onActivate: placeConfirmed };
+    const sayWhere = { ...label("say-where", "menu_say_where"), onActivate: sayWhereIAm };
+    // "Буруу бол баруун тийш шудраад": the first swipe right must land on saying the place, and a
+    // double tap before any swipe means "yes". A screen reader meets "Тийм" first.
+    actions = mode === "sr" ? [yes, sayWhere] : [sayWhere, yes];
+    primary = mode === "sr" ? 0 : 1;
   } else if (step === "where") {
     title = "Та хаана байна?";
     actions = [{ ...label("say-where", "menu_say_where"), onActivate: sayWhereIAm }, { ...label("gps", "menu_retry_gps"), onActivate: retryGps }];
