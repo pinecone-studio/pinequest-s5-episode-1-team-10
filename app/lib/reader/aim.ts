@@ -149,17 +149,18 @@ export async function openCamera(first: HTMLVideoElement): Promise<Camera> {
     // A page needs detail. Where the phone can take a real photo (ImageCapture, Android Chrome) the
     // photo is full size and 1080p video is enough for aiming. Safari can't, so the page photo is a
     // video frame: ask for 4K there (a 1080p frame lost small print), else the best the phone gives.
+    // Upright (9:16), like the phone and a book page (user: the wide 16:9 view wasted the sides).
     const canPhoto = "ImageCapture" in window;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
         video: canPhoto
-          ? { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } }
-          : { facingMode: "environment", width: { ideal: 3840 }, height: { ideal: 2160 } },
+          ? { facingMode: "environment", width: { ideal: 1080 }, height: { ideal: 1920 } }
+          : { facingMode: "environment", width: { ideal: 2160 }, height: { ideal: 3840 } },
         audio: false,
       });
     } catch {
       stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } },
+        video: { facingMode: "environment", width: { ideal: 1080 }, height: { ideal: 1920 } },
         audio: false,
       });
     }

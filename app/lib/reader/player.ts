@@ -180,7 +180,7 @@ export function playStream(stream: SpeechStream, speed: number): Playing {
         }
         return;
       }
-      const samples = stretch(next.samples, speed);
+      const samples = stretch(next.samples, speed, next.rate);
       if (debugOn) {
         console.log("[reader] piece " + i + ": " + (samples.length / next.rate).toFixed(1) + " s at " + speed + "x" + (i > 0 && endsAt < ctx.currentTime ? ", " + Math.round((ctx.currentTime - endsAt) * 1000) + " ms late" : ""));
       }

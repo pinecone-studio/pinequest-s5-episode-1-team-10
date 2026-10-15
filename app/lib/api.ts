@@ -60,15 +60,16 @@ export interface ServerCaps {
   ocr: boolean; // false: the phone reads the signs (lib/ocr.ts)
   speech: boolean; // Speechmatics keys from /api/stt/token: every phone can talk, iPhone included
   chimege: boolean; // final text from Chimege (/api/stt/chimege), Speechmatics as the backup
+  readerVoice?: boolean; // the Reader's ElevenLabs voice (/api/reader/voice); else the phone's own
 }
 
 export async function serverCaps(): Promise<ServerCaps> {
   try {
     const res = await fetch("/api/health");
-    const body = (await res.json()) as { stt?: boolean; ocr?: boolean; speech?: boolean; chimege?: boolean };
-    return { stt: body.stt !== false, ocr: body.ocr !== false, speech: body.speech === true, chimege: body.chimege === true };
+    const body = (await res.json()) as { stt?: boolean; ocr?: boolean; speech?: boolean; chimege?: boolean; reader_voice?: boolean };
+    return { stt: body.stt !== false, ocr: body.ocr !== false, speech: body.speech === true, chimege: body.chimege === true, readerVoice: body.reader_voice === true };
   } catch {
-    return { stt: true, ocr: true, speech: false, chimege: false };
+    return { stt: true, ocr: true, speech: false, chimege: false, readerVoice: false };
   }
 }
 

@@ -2,26 +2,28 @@
 // little to where it lines up best with the last, so the voice doesn't buzz). Blind readers often
 // listen at 1.5-2x. Done here because the reading voice plays through Web Audio (gapless), where a
 // faster playback rate would also raise the pitch.
-const WINDOW = 640; // 40 ms at 16 kHz
-const HOP = WINDOW / 2;
-const SEEK = 160; // +-10 ms searched for the best fit
-
-let hann: Float32Array | null = null;
-function hannWindow(): Float32Array {
+// Window 40 ms, half overlapping; +-10 ms searched for the best fit (16 kHz phone voice, 44.1 kHz cloud).
+const hanns = new Map<number, Float32Array>();
+function hannWindow(n: number): Float32Array {
+  let hann = hanns.get(n);
   if (!hann) {
-    hann = new Float32Array(WINDOW);
-    for (let i = 0; i < WINDOW; i++) {
-      hann[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / WINDOW);
+    hann = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      hann[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / n);
     }
+    hanns.set(n, hann);
   }
   return hann;
 }
 
-export function stretch(input: Float32Array, speed: number): Float32Array {
+export function stretch(input: Float32Array, speed: number, rate = 16000): Float32Array {
+  const WINDOW = 2 * Math.round(rate * 0.02);
+  const HOP = WINDOW / 2;
+  const SEEK = Math.round(rate * 0.01);
   if (Math.abs(speed - 1) < 0.01 || input.length < WINDOW * 2) {
     return input;
   }
-  const w = hannWindow();
+  const w = hannWindow(WINDOW);
   const outLength = Math.floor(input.length / speed);
   const out = new Float32Array(outLength + WINDOW);
   let prev = 0; // where the last window was taken from
