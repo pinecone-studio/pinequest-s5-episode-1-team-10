@@ -42,9 +42,11 @@ export function sosMessage(lat: number, lon: number, where: string): string {
   return "Тусламж хэрэгтэй байна! " + (where ? where + " " : "") + "Байршил: https://maps.google.com/?q=" + lat.toFixed(6) + "," + lon.toFixed(6);
 }
 
-// "?&body=" works on both Android and iPhone.
+// Android opens sms:NUMBER?body= . iPhone opens sms:NUMBER&body= and drops the message if a "?" is there.
 export function smsUrl(number: string, body: string): string {
-  return "sms:" + number + "?&body=" + encodeURIComponent(body);
+  const text = encodeURIComponent(body);
+  const ios = typeof navigator !== "undefined" && /iPad|iPhone|iPod/.test(navigator.userAgent);
+  return "sms:" + number + (ios ? "&body=" : "?body=") + text;
 }
 
 export function telUrl(number: string): string {
@@ -55,7 +57,6 @@ export function telUrl(number: string): string {
 export function openLink(url: string): void {
   const a = document.createElement("a");
   a.href = url;
-  a.rel = "noopener";
   document.body.appendChild(a);
   a.click();
   a.remove();

@@ -8,6 +8,7 @@ Routes carry the /api prefix because Vercel passes the original path through.
 """
 import json
 from pathlib import Path
+from typing import Optional
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query
@@ -65,10 +66,11 @@ def locate(text: str = Query(min_length=1, max_length=200)):
 
 @app.get("/api/ask", response_model=AskResponse)
 def ask(text: str = Query(min_length=1, max_length=200), lat: float = Query(ge=-90, le=90), lon: float = Query(ge=-180, le=180),
-        step: str = "", route: str = "", alight: str = ""):
+        step: str = "", route: str = "", alight: str = "", board: str = "",
+        walk_m: Optional[int] = Query(default=None, ge=0, le=20000)):
     """Voice assistant, text in (the browser recognises the speech here): answers from bus data only."""
     try:
-        r = assistant.reply(text, lat, lon, {"step": step, "route": route, "alight": alight})
+        r = assistant.reply(text, lat, lon, {"step": step, "route": route, "alight": alight, "board": board, "walk_m": walk_m})
     except (httpx.HTTPError, RuntimeError):
         raise HTTPException(status_code=503, detail=UNAVAILABLE)
     return AskResponse(heard=text, answer=" ".join(r["speech"]), clips=[clip_name(s) for s in r["speech"]], **r)

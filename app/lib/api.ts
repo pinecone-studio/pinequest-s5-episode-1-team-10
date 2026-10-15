@@ -46,11 +46,15 @@ export interface AskContext {
   step: string;
   route: string;
   alight: string;
+  board: string; // boarding stop name, so "guide me to the stop" can say which one
+  walkM: number | null; // straight-line metres to that stop; null when no trip is planned
 }
 
 function askQuery(lat: number, lon: number, context: AskContext): string {
+  const walk = context.walkM === null ? "" : "&walk_m=" + context.walkM;
   return "lat=" + lat + "&lon=" + lon + "&step=" + encodeURIComponent(context.step) + "&route=" +
-    encodeURIComponent(context.route) + "&alight=" + encodeURIComponent(context.alight);
+    encodeURIComponent(context.route) + "&alight=" + encodeURIComponent(context.alight) +
+    "&board=" + encodeURIComponent(context.board) + walk;
 }
 
 export async function askByVoice(wav: Blob, lat: number, lon: number, context: AskContext): Promise<AskResponse | null> {
@@ -93,7 +97,8 @@ export async function serverCaps(): Promise<ServerCaps> {
     const body = (await res.json()) as { stt?: boolean; ocr?: boolean };
     return { stt: body.stt !== false, ocr: body.ocr !== false };
   } catch {
-    return { stt: true, ocr: true };
+    // Health didn't answer. A free host has no Whisper and no sign reader, so stay on the phone.
+    return { stt: false, ocr: false };
   }
 }
 
