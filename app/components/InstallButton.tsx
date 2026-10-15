@@ -1,7 +1,8 @@
 "use client";
 
-// Top of the start screen, only until the app is on the home screen (lib/install.ts). Nothing opens or
-// speaks by itself: a popup confuses VoiceOver/TalkBack users.
+// On the app's home, after "Автобус" and "Ном унших" (so it never costs a screen-reader swipe before
+// them), only until the app is on the phone's home screen (lib/install.ts). Nothing opens or speaks by
+// itself: a popup confuses VoiceOver/TalkBack users.
 //   Android Chrome: "Апп болгож суулгах" opens Chrome's own install dialog.
 //   iPhone: "Хэрхэн суулгах вэ" says the steps in the app's voice and shows them under the button.
 //   The steps are not a live region (VoiceOver would talk over the app's voice): swipe to read them.
