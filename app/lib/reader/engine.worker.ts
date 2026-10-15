@@ -33,14 +33,17 @@ function runtime(): Promise<OrtModule> {
   if (!ortModule) {
     ortModule = (async function () {
       if (lowMemory) {
-        // 1 GB at most for this runtime's memory (scripts/copy-ort.mjs): measured ~240 MB needed
-        (self as unknown as { ortMaxPages: number }).ortMaxPages = 16384;
+        // 512 MB. 1 GB, and the 27 MB WebGPU build, are what got the iPhone tab killed.
+        (self as unknown as { ortMaxPages: number }).ortMaxPages = 8192;
       }
-      const ort = (await import(/* turbopackIgnore: true */ /* webpackIgnore: true */ "/ort/ort.webgpu.min.mjs" as string)) as OrtModule;
+      const ort = (
+        lowMemory
+          ? await import(/* turbopackIgnore: true */ /* webpackIgnore: true */ "/ort/ort.wasm.min.mjs" as string)
+          : await import(/* turbopackIgnore: true */ /* webpackIgnore: true */ "/ort/ort.webgpu.min.mjs" as string)
+      ) as OrtModule;
       ort.env.wasm.wasmPaths = "/ort/";
       if (lowMemory) {
-        // Each WASM thread is another worker with its own copy of the runtime: on iPhones two
-        // runtimes x several threads, plus the voice's weights, get the tab closed.
+        // One thread. Each extra thread is another copy of the runtime.
         ort.env.wasm.numThreads = 1;
       }
       return ort;
@@ -149,7 +152,8 @@ function loadVoice(): Promise<void> {
       const [ort, graph, pack] = await Promise.all([runtime(), modelFile(MODELS.voiceGraph, report(0)), modelFile(MODELS.voicePack, report(1))]);
       const t = performance.now();
       log("voice files in hand", t);
-      const gpu = voiceGpu && "gpu" in self.navigator && Boolean(await (self.navigator as unknown as { gpu: { requestAdapter: () => Promise<unknown> } }).gpu.requestAdapter().catch(function () {
+      // iPhone: the plain WASM build has no GPU voice. A failed GPU session would sit next to the CPU one.
+      const gpu = !lowMemory && voiceGpu && "gpu" in self.navigator && Boolean(await (self.navigator as unknown as { gpu: { requestAdapter: () => Promise<unknown> } }).gpu.requestAdapter().catch(function () {
         return null;
       }));
       log("voice: GPU " + (gpu ? "yes" : "no") + ", threads " + (ort.env.wasm.numThreads ?? "default"), t);
