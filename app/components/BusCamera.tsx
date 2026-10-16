@@ -14,11 +14,15 @@ import { MIN_BUS_WIDTH, signCanvas, signCrop, signScore } from "../lib/crop";
 import { loadOcr, readSign } from "../lib/ocr";
 import { detectBuses, loadDetector, type Box } from "../lib/detector";
 import { detectFrontDoor, loadDoorDetector } from "../lib/doorDetector";
-import { frontIsRight, guideToDoor, type DoorGuide } from "../lib/door";
+import { frontIsRight, guideToDoor, MAIN_FOV_DEG, type DoorGuide } from "../lib/door";
+import { openBusCamera } from "../lib/camera";
 import { isIOS } from "../lib/device";
 import { explainPermission } from "../lib/permissions";
-import { cue, phrase, vibrate, type PhraseKey } from "../lib/speech";
-import { addVote, updateTracks, VOTE_WINDOW, type Track } from "../lib/tracker";
+import { buzz, phrase, prepareInstant, vibrate, type Earcon, type PhraseKey } from "../lib/speech";
+import { addVote, decideNow, updateTracks, VOTE_WINDOW, type Track } from "../lib/tracker";
+import { candidatesNear, loadRouteData, routeKey } from "../lib/candidates";
+import { matchSign as matchCandidates } from "../lib/signMatch";
+import { latencyText, markDecided } from "../lib/latency";
 
 interface Props {
   stopId: string;
@@ -28,7 +32,7 @@ interface Props {
   onError: () => void;
   guide: MutableRefObject<DoorGuide | null>; // latest door guidance, for the "where is the door?" option
   phoneOcr: boolean; // the server has no OCR (free hosting): read the sign on the phone, send only the texts
-  onAnnounce: (texts: string[]) => Promise<void>; // status text and speech, so a hint is never only spoken
+  onAnnounce: (texts: string[], earcon?: Earcon) => Promise<void>; // status text and speech, so a hint is never only spoken
   screenReader: boolean; // door-close sentence names the button instead of a double tap
 }
 
@@ -145,6 +149,7 @@ interface CamStats {
   stage: string;
   provider: string;
   video: string;
+  camera: string; // which back camera (lib/camera.ts): "ultrawide-label Back Ultra Wide Camera"
   frames: number;
   fps: number;
   buses: number;
@@ -154,6 +159,7 @@ interface CamStats {
   error: string;
   detectMs: number;
   ocrMs: number;
+  match: string; // the last fast-path verdict (lib/signMatch.ts): "yes Ч:55 margin 0.42"
   decideMs: number; // first frame of the confirmed bus -> "yes"
 }
 
@@ -189,24 +195,26 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
       let lastAheadBuzz = 0;
       let closeSaid = false;
       const openedAt = performance.now(); // for the "[bus] yes after N ms" log (speed checks)
+      const frameTimes = new Map<number, number>(); // frame number -> when it was taken (lib/latency.ts)
+      let fovDeg = MAIN_FOV_DEG; // the open camera's field of view, for the door guidance
       let doorFromFront: number | null = null; // smoothed door-model position, share of the bus length
       let doorSeenAt = 0;
       let doorBox: Box | null = null;
       let lastDoorRun = 0;
-      const stats: CamStats = { stage: "starting", provider: "", video: "", frames: 0, fps: 0, buses: 0, widest: 0, reads: 0, lastText: "", error: "", detectMs: 0, ocrMs: 0, decideMs: 0 };
+      const stats: CamStats = { stage: "starting", provider: "", video: "", camera: "", frames: 0, fps: 0, buses: 0, widest: 0, reads: 0, lastText: "", error: "", detectMs: 0, ocrMs: 0, decideMs: 0 , match: "" };
       (window as unknown as { __cam: CamStats }).__cam = stats;
       let fpsFrom = performance.now();
       let fpsFrames = 0;
       const debugTimer = setInterval(function () {
         if (debugRef.current) {
           debugRef.current.textContent =
-            stats.stage + " · " + stats.provider + " · " + stats.video + " · " + stats.fps + " fps · buses " + stats.buses + " (widest " + stats.widest + " px) · reads " + stats.reads + (stats.lastText ? " «" + stats.lastText + "»" : "") + " · detect " + stats.detectMs + " ms · ocr " + stats.ocrMs + " ms · decide " + stats.decideMs + " ms" + (stats.error ? " · ERROR " + stats.error : "");
+            stats.stage + " · " + stats.provider + " · " + stats.video + (stats.camera ? " " + stats.camera : "") + " · " + stats.fps + " fps · buses " + stats.buses + " (widest " + stats.widest + " px) · reads " + stats.reads + (stats.lastText ? " «" + stats.lastText + "»" : "") + " · detect " + stats.detectMs + " ms · ocr " + stats.ocrMs + " ms · decide " + stats.decideMs + " ms" + (stats.match ? " · match " + stats.match : "") + (latencyText() ? " · " + latencyText() : "") + (stats.error ? " · ERROR " + stats.error : "");
         }
       }, 500);
 
-      function speak(texts: string[]): void {
+      function speak(texts: string[], earcon?: Earcon): void {
         talking = true;
-        announceRef.current(texts).then(function () {
+        announceRef.current(texts, earcon).then(function () {
           talking = false;
         });
       }
@@ -274,7 +282,7 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         if (!recent) {
           doorBox = null;
         }
-        const g = guideToDoor(bus.box, video.videoWidth, video.videoHeight, frontIsRight(bus.vx, bus.box), recent ? doorFromFront : null);
+        const g = guideToDoor(bus.box, video.videoWidth, video.videoHeight, frontIsRight(bus.vx, bus.box), recent ? doorFromFront : null, fovDeg);
         guide.current = g;
         aimBeacon(g.angle);
         // Safety first: a moving bus overrides everything else.
@@ -331,20 +339,23 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
           foundAt = now;
           stats.decideMs = Math.round(now - track.seenAt);
           console.info("[bus] yes after " + Math.round(now - openedAt) + " ms from camera open, " + stats.decideMs + " ms from first sight, " + track.votes.length + " reads");
+          const lastRead = track.reads.length ? track.reads[track.reads.length - 1].frame : -1;
+          markDecided("bus camera", now, frameTimes.get(lastRead) ?? null);
           lastGuideSpoken = now; // the intro below already guides; first clock direction comes after it
-          cue("bus", [400, 100, 400]);
+          buzz([200, 100, 200]);
           // The side is known only once the bus is moving. Standing still used to say "on your right".
           let intro: PhraseKey = "door_intro_plain";
           if (Math.abs(track.vx) > track.box.w * 0.0002) {
             intro = track.vx > 0 ? "door_intro_right" : "door_intro_left";
           }
-          speak([foundSpeech, phrase(intro)]);
+          // Earcon at once, then "Ч:55 ирлээ. Энэ таны автобус." and the door sentence, all from memory.
+          speak([foundSpeech, phrase(intro)], "match");
           startBeacon();
           onFound();
         } else if (track.decision === "no" && now - lastNoSpoken > REPEAT_AFTER_MS) {
           lastNoSpoken = now;
           vibrate([100, 80, 100]);
-          speak([phrase("not_your_bus")]);
+          speak([phrase("not_your_bus")], "wrong");
         } else if (track.decision === "unsure") {
           speak([phrase("not_sure")]);
         }
@@ -425,10 +436,38 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         dispatch(data.trackId);
         track.lastAnswer = performance.now();
         // The verdict is decided here. The server is told only so the read is logged.
-        const decided = decideSign(texts, route, routesFor(stopId), cityNumbers());
         verifyTexts(texts, stopId, route);
-        addVote(track, decided.verdict, decided.confidence, decided.number, data.frame);
+        judge(track, texts, data.frame);
         announce(track);
+      }
+
+      // Fast path first: one read that clearly picks the rider's route among the routes near this stop
+      // decides on this frame (lib/signMatch.ts); otherwise the usual two agreeing reads.
+      const wantedKey = routeKey(route);
+      function judge(track: Track, texts: [string, number][], frame: number): void {
+        const pool = wantedKey ? candidatesNear(stopId) : null;
+        if (pool) {
+          const quick = matchCandidates(
+            texts
+              .map(function (item) {
+                return item[0];
+              })
+              .join(" "),
+            wantedKey as string,
+            pool.near,
+            pool.all,
+          );
+          stats.match = quick.verdict + " " + (quick.best ?? "-") + " margin " + quick.margin.toFixed(2);
+          if (quick.verdict === "yes") {
+            decideNow(track, routeNumber(route), quick.score, frame);
+            return;
+          }
+        }
+        const decided = decideSign(texts, route, routesFor(stopId), cityNumbers());
+        // With route data, the number rules alone never vote yes: signMatch (above) must agree, as it
+        // ignores a bare number (a stray "72" by an advert). Stricter only (lib/signVerdict.ts, same rule).
+        const verdict = pool && decided.verdict === "yes" ? "unsure" : decided.verdict;
+        addVote(track, verdict, decided.confidence, decided.number, frame);
       }
 
       // Full-resolution sign crop. The best (bright, complete, sharp) frame is the one the worker reads.
@@ -473,9 +512,8 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
               .join(" ")
               .slice(0, 40);
             found.lastAnswer = performance.now();
-            const decided = decideSign(texts, route, routesFor(stopId), cityNumbers());
             verifyTexts(texts, stopId, route);
-            addVote(found, decided.verdict, decided.confidence, decided.number, frame);
+            judge(found, texts, frame);
             announce(found);
           });
           return;
@@ -567,6 +605,8 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
         }
         const now = performance.now();
         stats.frames++;
+        frameTimes.set(stats.frames, performance.now());
+        frameTimes.delete(stats.frames - 300); // the deciding read is from a recent frame
         fpsFrames++;
         if (now - fpsFrom > 2000) {
           stats.fps = Math.round((fpsFrames * 10000) / (now - fpsFrom)) / 10;
@@ -647,22 +687,23 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
       const params = new URLSearchParams(window.location.search);
       const recorded = params.get("video");
       const photo = params.get("image");
-      function openStream(): Promise<MediaStream | null> {
+      // ?cam=main: the default back camera, not the ultra-wide (to compare at a real stop).
+      const mainCamera = params.get("cam") === "main";
+      async function openStream(): Promise<MediaStream | null> {
         if (photo) {
           return photoStream(photo);
         }
         if (recorded) {
-          return Promise.resolve(null);
+          return null;
         }
-        return navigator.mediaDevices.getUserMedia({
-          // 1080p: the route number on an LED sign is a few dozen pixels; more pixels, further away.
-          // iPhone: 720p (Safari reloads the page when the camera step uses too much memory; 720p
-          // still reads the sign since each word is read on its own, lib/ocr.ts).
-          video: isIOS()
-            ? { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } }
-            : { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } },
-          audio: false,
-        });
+        // The ultra-wide where the phone has one (the whole bus fits in the frame up close).
+        // 1080p: the route number on an LED sign is a few dozen pixels; more pixels, further away.
+        // iPhone: 720p (Safari reloads the page when the camera step uses too much memory; 720p
+        // still reads the sign since each word is read on its own, lib/ocr.ts).
+        const opened = await openBusCamera(isIOS() ? { width: { ideal: 1280 }, height: { ideal: 720 } } : { width: { ideal: 1920 }, height: { ideal: 1080 } }, mainCamera);
+        fovDeg = opened.fovDeg;
+        stats.camera = opened.choice + " " + opened.label;
+        return opened.stream;
       }
 
       // #2 Back from a locked screen / a call / another app: iPhone stops the camera while the page is
@@ -769,6 +810,9 @@ export default function BusCamera({ stopId, route, foundSpeech, onFound, onError
           return;
         }
         speak([phrase("camera_on")]);
+        loadRouteData(); // the routes near this stop, for the first-frame match (lib/candidates.ts)
+        // The verdict sentences into memory now (earcons too), so a match plays with no download or decode.
+        prepareInstant([foundSpeech, phrase("door_intro_plain"), phrase("door_intro_right"), phrase("door_intro_left"), phrase("not_your_bus"), phrase("not_sure")]);
         stats.stage = "loading";
         // Models still loading (first time: ~25 MB): say so, so the rider knows to wait.
         let loadingSaid = false;

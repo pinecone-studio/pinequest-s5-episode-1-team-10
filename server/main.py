@@ -4,17 +4,21 @@ import os
 from contextlib import asynccontextmanager
 
 import httpx
+from pydantic import BaseModel
 import cv2
 import numpy as np
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 import bus_api
 import fusion
 import ocr
 import planner
 import chimege
+import elevenlabs
+import vision
+import gemini_ocr
 import speechmatics
 import stt
 import tts
@@ -48,7 +52,7 @@ app = FastAPI(title="Bus Boarding Guide", lifespan=lifespan)
 def health():
     # "speech": the phones recognise speech with Speechmatics (/stt/token); this server's Whisper stays
     # for the older voice endpoints.
-    return {"ok": True, "speech": speechmatics.configured(), "chimege": chimege.configured()}
+    return {"ok": True, "speech": speechmatics.configured(), "chimege": chimege.configured(), "reader_voice": elevenlabs.configured(), "reader_ocr": gemini_ocr.configured() or vision.configured()}
 
 
 @app.post("/stt/chimege")
@@ -63,6 +67,41 @@ async def speech_text(request: Request):
     except (httpx.HTTPError, RuntimeError):
         raise HTTPException(status_code=503, detail="Chimege unavailable")
     return {"text": text}
+
+
+class ReaderVoiceRequest(BaseModel):
+    text: str
+    previous: str = ""
+    next: str = ""
+
+
+@app.post("/reader/voice")
+async def reader_voice(req: ReaderVoiceRequest):
+    """One sentence of a page -> MP3 in the ElevenLabs Eleven v4 Mongolian voice (server/elevenlabs.py).
+    Paid by characters: the phone asks only for sentences it is about to read."""
+    try:
+        mp3 = await run_in_threadpool(elevenlabs.speak, req.text, req.previous, req.next)
+    except elevenlabs.Busy:
+        raise HTTPException(status_code=429, detail="Reader voice busy")
+    except (httpx.HTTPError, RuntimeError) as e:
+        print("reader voice failed:", len(req.text), "chars,", bool(req.previous), bool(req.next), e)
+        raise HTTPException(status_code=503, detail="Reader voice unavailable")
+    return Response(mp3, media_type="audio/mpeg", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/reader/ocr")
+async def reader_ocr(request: Request):
+    """A page photo (JPEG) -> its lines in reading order: Gemini (server/gemini_ocr.py, free tier) when
+    its key is set, else Google Cloud Vision (server/vision.py)."""
+    jpeg = await request.body()
+    if len(jpeg) > vision.MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Photo too big")
+    try:
+        lines = await run_in_threadpool(gemini_ocr.read_page if gemini_ocr.configured() else vision.read_page, jpeg)
+    except (httpx.HTTPError, RuntimeError) as e:
+        print("reader ocr failed:", len(jpeg), "bytes,", e)
+        raise HTTPException(status_code=503, detail="Reader OCR unavailable")
+    return {"lines": lines}
 
 
 @app.post("/stt/token", response_model=SpeechToken)

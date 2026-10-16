@@ -43,8 +43,11 @@ function runtime(): Promise<OrtModule> {
       ) as OrtModule;
       ort.env.wasm.wasmPaths = "/ort/";
       if (lowMemory) {
-        // One thread. Each extra thread is another copy of the runtime.
-        ort.env.wasm.numThreads = 1;
+        // iPhone: the page reader on one thread. The voice gets 3: on one thread it made speech only
+        // ~1.4x faster than real time on a Mac (slower on a phone), so reading at 1.5x paused between
+        // phrases; 3 threads made it ~3-4x. The page reader is closed before the voice loads, so only
+        // one runtime is in memory (threads share its memory).
+        ort.env.wasm.numThreads = ROLE === "voice" ? 3 : 1;
       }
       return ort;
     })();

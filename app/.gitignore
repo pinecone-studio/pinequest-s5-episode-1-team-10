@@ -39,3 +39,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# playwright e2e: fixtures show bystanders (e2e/make-fixtures.py), the bypass cookie, run output
+/e2e/fixtures/
+/e2e/.auth/
+/test-results/
+/playwright-report/
+/blob-report/

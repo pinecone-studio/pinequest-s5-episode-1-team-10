@@ -69,11 +69,11 @@ def test_plan_suggests_direct_route_in_riding_direction():
     assert body["alight_stop"]["stop_id"] == "3"
     assert body["stops_to_ride"] == 2
     assert body["routes_at_stop"] == ["Ч:30", "Ч:75"]
-    assert body["speech"][0] == "75-р автобусанд суугаарай."
+    assert body["speech"][0] == "Ч далан тав автобусанд суугаарай."
     # Home stop is ~33 m away; every piece is a pre-recordable clip
-    assert body["speech"] == ["75-р автобусанд суугаарай.", "Суух зогсоол:", "Home.", "Хойд тал.", "Зогсоол руу 30 метр алхана.",
+    assert body["speech"] == ["Ч далан тав автобусанд суугаарай.", "Суух зогсоол:", "Home.", "Хойд тал.", "Зогсоол руу 30 метр алхана.",
                               "2 зогсоол явна.", "Буух зогсоол:", "Сансар ШТС.", "Урд тал."]
-    assert body["found_speech"] == "75-р автобус ирлээ. Энэ таны автобус."
+    assert body["found_speech"] == "Ч далан тав автобус ирлээ. Энэ таны автобус."
 
 
 def test_plan_matches_suffixed_words():
@@ -98,10 +98,10 @@ def test_plan_transfer_when_no_direct_bus(monkeypatch):
     t = body["transfer"]
     assert t["route"] == "Х:9" and t["board_stop"]["stop_id"] == "2" and t["board_stop"]["distance_m"] == 0
     assert t["alight_stop"]["stop_id"] == "4" and t["stops_to_ride"] == 1
-    assert t["found_speech"] == "9-р автобус ирлээ. Энэ таны автобус."
-    assert t["speech"] == ["9-р автобусанд дамжин суугаарай.", "1 зогсоол явна.", "Буух зогсоол:", "Улсын Их Дэлгүүр.", "Урд тал."]
-    assert body["speech"] == ["75-р автобусанд суугаарай.", "Суух зогсоол:", "Home.", "Хойд тал.", "Зогсоол руу 30 метр алхана.",
-                              "1 зогсоол явна.", "Дамжин суух зогсоол:", "Mid.", "9-р автобусанд дамжин суугаарай.",
+    assert t["found_speech"] == "Х ес автобус ирлээ. Энэ таны автобус."
+    assert t["speech"] == ["Х ес автобусанд дамжин суугаарай.", "1 зогсоол явна.", "Буух зогсоол:", "Улсын Их Дэлгүүр.", "Урд тал."]
+    assert body["speech"] == ["Ч далан тав автобусанд суугаарай.", "Суух зогсоол:", "Home.", "Хойд тал.", "Зогсоол руу 30 метр алхана.",
+                              "1 зогсоол явна.", "Дамжин суух зогсоол:", "Mid.", "Х ес автобусанд дамжин суугаарай.",
                               "1 зогсоол явна.", "Буух зогсоол:", "Улсын Их Дэлгүүр.", "Урд тал."]
 
 
@@ -128,9 +128,9 @@ def test_test_stops_are_ignored():
 
 
 def test_spoken_route_and_stop():
-    assert planner.spoken_route("М:3Ма") == "3-р автобус"
-    assert planner.spoken_route("М:1А-Ма") == "1 А автобус"
-    assert planner.spoken_route("Ч:30_copy") == "30-р автобус"
+    assert planner.spoken_route("М:3Ма") == "М гурав автобус"
+    assert planner.spoken_route("М:1А-Ма") == "М нэг А автобус"
+    assert planner.spoken_route("Ч:30_copy") == "Ч гуч автобус"
     assert planner.spoken_key("Ч:55") == ("55", "")
     assert planner.spoken_key("Ч:55_copy") == ("55", "")
     assert planner.spoken_key("Ч:55Б") == ("55", "Б")
@@ -161,8 +161,8 @@ def test_plan_by_bus_number_boards_the_nearest_stop_that_bus_leaves():
     assert body["destination"]["stop_id"] == "3"
     assert body["stops_to_ride"] == 2
     assert body["transfer"] is None
-    assert body["found_speech"] == "75-р автобус ирлээ. Энэ таны автобус."
-    assert body["speech"] == ["75-р автобусанд суугаарай.", "Суух зогсоол:", "Home.", "Хойд тал.",
+    assert body["found_speech"] == "Ч далан тав автобус ирлээ. Энэ таны автобус."
+    assert body["speech"] == ["Ч далан тав автобусанд суугаарай.", "Суух зогсоол:", "Home.", "Хойд тал.",
                               "Зогсоол руу 30 метр алхана.", "2 зогсоол явна.", "Буух зогсоол:", "Сансар ШТС.", "Урд тал."]
     assert plan("75-р автобус").json()["route"] == "Ч:75"
     assert plan("Ч:75").json()["route"] == "Ч:75"
@@ -189,7 +189,7 @@ def test_plan_by_bus_number_ignores_a_terminus_and_the_wrong_letter(monkeypatch)
     assert plan("75а").json()["detail"] == planner.MSG_NO_BUS_NEAR
     assert plan("Х:75").json()["detail"] == planner.MSG_NO_BUS_NEAR
     assert plan("75б").json()["route"] == "Ч:75Б"
-    assert plan("75б").json()["found_speech"] == "75 Б автобус ирлээ. Энэ таны автобус."
+    assert plan("75б").json()["found_speech"] == "Ч далан тав Б автобус ирлээ. Энэ таны автобус."
     assert plan("55").status_code == 404
 
 
@@ -534,3 +534,75 @@ def test_plan_asks_about_the_closest_stop_instead_of_not_found():
     assert guess["alight_stop"]["stop_id"] == "3"
     assert guess["sure"] is False
     assert plan("цаг агаар ямар байна").status_code == 404  # nothing like a stop: still "not found"
+
+
+# Which stop and bus is suggested (_best_direct): the shortest walk (50 m steps), then the fewest stops.
+# "Зайсан" (stop 15) is reached by new routes from stops around Home; the stops in between (11-14) only
+# exist in the route orders.
+ZAISAN = {"busStopId": "15", "busStopName": "Зайсан /Урд/", "routeList": []}
+
+
+def add_stops(monkeypatch, stops, directions):
+    """stops: (id, name, lat, lon, [route numbers]); a route's id is its number ("Ч:20" -> "20")."""
+    info = [dict(ZAISAN, routeList=[{"busRouteId": r.split(":")[1], "busRouteNo": r} for r in directions])]
+    stations = [{"busStopId": "15", "gpxY": "47.9300", "gpxX": "106.9500"}]
+    for sid, name, lat, lon, routes in stops:
+        info.append({"busStopId": sid, "busStopName": name,
+                     "routeList": [{"busRouteId": r.split(":")[1], "busRouteNo": r} for r in routes]})
+        stations.append({"busStopId": sid, "gpxY": str(lat), "gpxX": str(lon)})
+    monkeypatch.setattr(__import__(__name__), "GROUP_INFO", GROUP_INFO + info)
+    monkeypatch.setattr(__import__(__name__), "STATIONS", STATIONS + stations)
+    for route, order in directions.items():
+        monkeypatch.setitem(DIRECTIONS, route.split(":")[1], {
+            "rotStopList": [{"busStopId": s, "busStopSeq": str(i)} for i, s in enumerate(order)], "reverseRotStopList": []})
+    bus_api._stops.cache_clear(); bus_api._stations.cache_clear()
+    planner._stops_by_id.cache_clear(); planner._neighbours.cache_clear(); planner._names_by_fold.cache_clear()
+
+
+def test_closer_stop_with_more_stops_beats_a_farther_stop_with_fewer(monkeypatch):
+    # Home (33 m): Ч:20, 5 stops. "Far" (~400 m): Ч:21, 1 stop. By cost the far stop used to win
+    # (1 + 400/150 < 5 + 33/150); the rider now walks 33 m and rides longer.
+    add_stops(monkeypatch, [("16", "Far", 47.9039, 106.9000, ["Ч:21"])],
+              {"Ч:20": ["1", "11", "12", "13", "14", "15"], "Ч:21": ["16", "15"]})
+    monkeypatch.setitem(GROUP_INFO[0], "routeList", GROUP_INFO[0]["routeList"] + [{"busRouteId": "20", "busRouteNo": "Ч:20"}])
+    bus_api._stops.cache_clear(); planner._stops_by_id.cache_clear()
+    body = plan("Зайсан").json()
+    assert body["board_stop"]["stop_id"] == "1" and body["route"] == "Ч:20"
+    assert body["stops_to_ride"] == 5 and body["transfer"] is None
+    assert body["speech"][:5] == ["Ч хорь автобусанд суугаарай.", "Суух зогсоол:", "Home.", "Хойд тал.", "Зогсоол руу 30 метр алхана."]
+
+
+def test_equal_walk_fewer_stops_wins(monkeypatch):
+    # Home 33 m and "Across" 45 m are the same 50 m step: Across's Ч:22 (2 stops) beats Home's Ч:20 (5).
+    add_stops(monkeypatch, [("17", "Across", 47.9003, 106.9006, ["Ч:22"])],
+              {"Ч:20": ["1", "11", "12", "13", "14", "15"], "Ч:22": ["17", "13", "15"]})
+    monkeypatch.setitem(GROUP_INFO[0], "routeList", GROUP_INFO[0]["routeList"] + [{"busRouteId": "20", "busRouteNo": "Ч:20"}])
+    bus_api._stops.cache_clear(); planner._stops_by_id.cache_clear()
+    body = plan("Зайсан").json()
+    assert body["board_stop"]["stop_id"] == "17" and body["route"] == "Ч:22"
+    assert body["stops_to_ride"] == 2
+
+
+def test_a_cheaper_direct_bus_still_beats_a_transfer(monkeypatch):
+    # Direct: Home Ч:20 (10 stops, cost 10.2, suggested) and Far Ч:21 (1 stop, cost 3.7). The transfer
+    # Home -Ч:75-> Mid -Х:29-> Зайсан (1 + 1 + 6 = 8.2) is cheaper than the suggested bus but not than
+    # the cheapest one: a transfer still has to beat every direct bus, so the direct bus is kept.
+    long_way = ["1"] + [str(i) for i in range(101, 110)] + ["15"]
+    add_stops(monkeypatch, [("16", "Far", 47.9039, 106.9000, ["Ч:21"])],
+              {"Ч:20": long_way, "Ч:21": ["16", "15"], "Х:29": ["2", "15"]})
+    monkeypatch.setitem(GROUP_INFO[0], "routeList", GROUP_INFO[0]["routeList"] + [{"busRouteId": "20", "busRouteNo": "Ч:20"}])
+    monkeypatch.setitem(GROUP_INFO[1], "routeList", GROUP_INFO[1]["routeList"] + [{"busRouteId": "29", "busRouteNo": "Х:29"}])
+    bus_api._stops.cache_clear(); planner._stops_by_id.cache_clear(); planner._neighbours.cache_clear()
+    body = plan("Зайсан").json()
+    assert body["transfer"] is None
+    assert body["board_stop"]["stop_id"] == "1" and body["route"] == "Ч:20" and body["stops_to_ride"] == 10
+
+
+def test_direct_bus_from_a_stop_beyond_the_8_closest_within_the_walk(monkeypatch):
+    # Eight stops ~110 m away have only Х:9; the one bus to Зайсан leaves from a stop ~500 m away, the
+    # 10th closest. Before, only the 8 closest stops were tried: "no bus goes there".
+    fillers = [(str(30 + i), "Filler", 47.9013, 106.8996 + 0.0001 * i, ["Х:9"]) for i in range(8)]
+    add_stops(monkeypatch, fillers + [("18", "Tenth", 47.9048, 106.9000, ["Ч:23"])], {"Ч:23": ["18", "13", "15"]})
+    body = plan("Зайсан").json()
+    assert body["board_stop"]["stop_id"] == "18" and body["route"] == "Ч:23"
+    assert body["board_stop"]["distance_m"] == 500

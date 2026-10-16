@@ -184,6 +184,25 @@ input {
   font-weight: 800;
 }
 
+/* Install (components/InstallButton.tsx): above the start halves, full width, smaller than them. */
+.install-button {
+  width: 100%;
+  min-height: 64px;
+  padding: 12px 16px;
+  border: 3px solid var(--accent);
+  border-radius: 16px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 1.35rem;
+  font-weight: 700;
+}
+
+.install-steps {
+  margin: 8px 0 0;
+  padding-left: 1.6em;
+  font-size: 1.25rem;
+}
+
 .helper-link {
   align-self: center;
   padding: 12px 20px;
@@ -312,9 +331,12 @@ input {
   overflow: hidden;
 }
 
+/* The whole picture, never cropped or stretched (cover cut a 16:9 stream down to a third of its width);
+   any space left over is black. Not mirrored: it's the back camera. */
 .reader-video {
   max-height: 60dvh;
-  object-fit: cover;
+  object-fit: contain;
+  background: #000;
 }
 
 .reader-video-hidden {
@@ -382,8 +404,15 @@ input {
   flex: 0 1 auto;
 }
 
+/* Upright like a book page (9:16), centred; lib/reader/aim.ts sets the real stream's shape once
+   the video has its size. */
 .reader-aim .reader-video {
-  max-height: 28dvh;
+  aspect-ratio: 9 / 16;
+  height: 46dvh;
+  max-height: 46dvh;
+  width: auto;
+  max-width: 100%;
+  margin: 0 auto;
 }
 
 .reader .reader-text {

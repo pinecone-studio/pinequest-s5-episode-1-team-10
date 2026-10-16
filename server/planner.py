@@ -30,6 +30,10 @@ WALK_COST_M = 150  # walking this far to the first stop costs as much as riding 
 TRANSFER_PENALTY = 6
 TRANSFER_WALK_M = 200  # the second bus may leave from another stop this close (other side of the street)
 TRANSFER_WALK_COST_M = 60
+# Which direct bus is suggested: the shortest walk to its stop first, then the fewest stops. Walks are
+# compared in WALK_STEP_M steps (metres // 50): GPS is off by tens of metres, so 33 m and 45 m are the
+# same walk and the bus with fewer stops wins; 30 m beats 400 m even if the 400 m stop saves stops.
+WALK_STEP_M = 50
 CLOSE_WALK_M = 250  # the rider is this close to the place they named: walking beats any bus
 SHORT_WORD = 6  # words shorter than this ("муис", "марал") are only fixed by a near-perfect spelling match
 SHORT_WORD_CUTOFF = 0.92
@@ -232,17 +236,25 @@ def _neighbours(stop_id):
 
 
 def _best_direct(origins, dests):
-    """(cost, origin, route, dest, stops) of the cheapest one-bus trip, or None."""
+    """(cost, origin, route, dest, stops) of the one-bus trip to suggest, or None.
+
+    The trip: shortest walk to the boarding stop (WALK_STEP_M steps), then fewest stops, then the
+    lower cost. `cost` is the cheapest one-bus trip's, not this one's: a transfer is chosen only when it
+    beats every direct bus, as before."""
     best = None
+    cheapest = None
     for o in origins:
         for d in dests:
-            for route in set(o["routes"]) & set(d["routes"]):
+            for route in sorted(set(o["routes"]) & set(d["routes"])):
                 n = bus_api.stops_between(o["route_ids"][route], o["stop_id"], d["stop_id"])
                 if n is not None:
                     cost = n + o["distance_m"] / WALK_COST_M
-                    if best is None or cost < best[0]:
-                        best = (cost, o, route, d, n)
-    return best
+                    rank = (o["distance_m"] // WALK_STEP_M, n, cost)
+                    if best is None or rank < best[0]:
+                        best = (rank, o, route, d, n)
+                    if cheapest is None or cost < cheapest:
+                        cheapest = cost
+    return None if best is None else (cheapest,) + best[1:]
 
 
 def _best_transfer(origins, dests):
@@ -272,7 +284,7 @@ def _best_transfer(origins, dests):
                         if t1["stop_id"] not in reach:
                             continue
                         c1, o, r1, n1 = reach[t1["stop_id"]]
-                        if spoken_route(r1) == spoken_route(r2):
+                        if (spoken_key(r1) or r1.strip()) == (spoken_key(r2) or r2.strip()):
                             continue  # same number on the sign (Ч:29Б / Ч:29Б-Z variants): not a real transfer
                         cost = c1 + (k - j) + TRANSFER_PENALTY + walk / TRANSFER_WALK_COST_M
                         if best is None or cost < best[0]:
@@ -372,16 +384,15 @@ def spoken_key(route_no):
 
 
 def spoken_route(route_no):
-    """'Ч:75' -> '75-р автобус', 'М:1А-Ма' -> '1 А автобус'."""
-    key = spoken_key(route_no)
-    if not key:
-        return f"{route_no.strip()} автобус"
-    num, letter = key
-    return f"{num} {letter} автобус" if letter else f"{num}-р автобус"
+    """'Ч:75' -> 'Ч далан тав автобус', 'М:1А-Ма' -> 'М нэг А автобус': the route in words (numwords.route_words,
+    letters as shared/route_speech.json says them), never digits or the raw code. Just 'автобус' if it has
+    no route number. Only for speech: which routes are the same bus is spoken_key."""
+    words = numwords.route_words(route_no)
+    return f"{words} автобус" if words else "автобус"
 
 
 def transfer_speech(route_no):
-    """'29-р автобусанд дамжин суугаарай.' -- per route, pre-recordable like take_speech."""
+    """'Ч хорин ес автобусанд дамжин суугаарай.' -- per route, pre-recordable like take_speech."""
     return f"{spoken_route(route_no)}анд дамжин суугаарай."
 
 
@@ -416,9 +427,9 @@ def _plan(o, route, n, d, named, exact, transfer=None):
         leg1_off = t1
     else:
         leg1_off = d
-    # Pieces, all pre-recordable: "29 Б автобусанд суугаарай." "Суух зогсоол:" "Вокзал." "Хойд тал."
+    # Pieces, all pre-recordable: "Ч хорин ес Б автобусанд суугаарай." "Суух зогсоол:" "Вокзал." "Хойд тал."
     # "Зогсоол руу 460 метр алхана." "6 зогсоол явна." then either "Буух зогсоол:" ... or
-    # "Дамжин суух зогсоол:" "МУИС." ["Зогсоол руу 120 метр алхана."] "3-р автобусанд дамжин суугаарай." "4 зогсоол явна." "Буух зогсоол:" ...
+    # "Дамжин суух зогсоол:" "МУИС." ["Зогсоол руу 120 метр алхана."] "Ч гурав автобусанд дамжин суугаарай." "4 зогсоол явна." "Буух зогсоол:" ...
     speech = [take_speech(route), "Суух зогсоол:"] + stop_pieces(o["name"]) + [walk_piece(o["distance_m"]), ride_piece(n)]
     plan = {
         "route": route,
@@ -439,7 +450,7 @@ def _plan(o, route, n, d, named, exact, transfer=None):
             "alight_stop": _stop_out(d),
             "stops_to_ride": n2,
             "found_speech": found_speech(r2),
-            # Said at the transfer stop: ["Зогсоол руу 40 метр алхана."] "29-р автобусанд дамжин суугаарай." "4 зогсоол явна." "Буух зогсоол:" ...
+            # Said at the transfer stop: ["Зогсоол руу 40 метр алхана."] "Ч хорин ес автобусанд дамжин суугаарай." "4 зогсоол явна." "Буух зогсоол:" ...
             "speech": second + ["Буух зогсоол:"] + stop_pieces(d["name"]) + near_note,
         }
     plan["speech"] = speech + ["Буух зогсоол:"] + stop_pieces(d["name"]) + near_note
@@ -658,11 +669,18 @@ def _suggest_to(words, named, nearby, lat, lon):
     # Every route through the origins and the destination: the transfer search needs their stop orders
     # (one Hamuga call per route variant the first time, then kept on disk).
     bus_api.load_route_directions(rid for st in origins + named + nearby for rids in st["route_ids"].values() for rid in rids)
+    # A direct bus may leave from any stop within the walk, not only the ORIGIN_LIMIT closest (those feed
+    # the transfer search, which tries every stop of every route). Only routes that also stop at the
+    # destination are loaded for them.
+    walkable = _within(lat, lon, WALK_MAX_M)
+    to_dest = {r for st in named + nearby for r in st["routes"]}
+    bus_api.load_route_directions(rid for st in walkable for r in st["routes"] if r in to_dest for rid in st["route_ids"][r])
 
     # Get off at the stop the rider named (direct or with one transfer); a neighbouring stop only if
-    # nothing reaches the named one. Cheapest trip wins: a transfer costs TRANSFER_PENALTY stops.
+    # nothing reaches the named one. A transfer only when it is cheaper than every direct bus (it costs
+    # TRANSFER_PENALTY stops); of the direct buses, the shortest walk, then the fewest stops.
     for dests, exact in ((named, True), (nearby, False)):
-        trips = [t for t in (_best_direct(origins, dests), _best_transfer(origins, dests)) if t]
+        trips = [t for t in (_best_direct(walkable, dests), _best_transfer(origins, dests)) if t]
         if not trips:
             continue
         trip = min(trips, key=lambda t: t[0])

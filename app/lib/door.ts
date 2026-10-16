@@ -3,7 +3,12 @@
 // front door, else from geometry (front door ~90% along the bus from its rear).
 import type { Box } from "./detector";
 
-const FOV_DEG = 65; // typical phone main camera, across the LONG side of the image (portrait or landscape)
+// Field of view across the LONG side of the image (portrait or landscape). The main camera is the
+// typical phone's. The ultra-wide (lib/camera.ts) is an ESTIMATE, to confirm on a phone at a stop:
+// a 13 mm-equivalent lens (iPhone; ~0.5x on Android) gives 2*atan(18/13) = 108 deg across the long
+// side (the advertised "120 deg" is the diagonal).
+export const MAIN_FOV_DEG = 65;
+export const ULTRA_WIDE_FOV_DEG = 108;
 const BUS_HEIGHT_M = 3.0; // UB city buses are ~3 m tall
 const CAMERA_HEIGHT_M = 1.3; // phone worn on the chest
 const EDGE_PX = 3; // a box this close to the frame edge is cut off by it
@@ -46,7 +51,9 @@ export function busDistance(box: Box, frameH: number, focal: number): number {
   return (focal * BUS_HEIGHT_M) / Math.max(1, box.h);
 }
 
-export function guideToDoor(box: Box, frameW: number, frameH: number, frontRight: boolean, fromFront: number | null): DoorGuide {
+// fovDeg: the camera's field of view across the long side (MAIN_FOV_DEG, or ULTRA_WIDE_FOV_DEG when
+// lib/camera.ts opened the ultra-wide).
+export function guideToDoor(box: Box, frameW: number, frameH: number, frontRight: boolean, fromFront: number | null, fovDeg: number = MAIN_FOV_DEG): DoorGuide {
   const at = fromFront === null ? 1 - DOOR_AT : fromFront;
   let x = frontRight ? box.x + (1 - at) * box.w : box.x + at * box.w;
   // Bus front cut off by the frame edge and no door seen: the door is past that edge, turn toward it.
@@ -56,7 +63,7 @@ export function guideToDoor(box: Box, frameW: number, frameH: number, frontRight
   }
   // Same focal length (px) for both axes; the FOV is across the long side, so a phone held upright
   // (720x1280) gets a narrower horizontal view than one held sideways.
-  const focal = Math.max(frameW, frameH) / 2 / Math.tan(((FOV_DEG / 2) * Math.PI) / 180);
+  const focal = Math.max(frameW, frameH) / 2 / Math.tan(((fovDeg / 2) * Math.PI) / 180);
   const angle = (Math.atan((x - frameW / 2) / focal) * 180) / Math.PI;
   // busDistance is straight out to the bus's side; the door is off to one side, so the walk is the diagonal.
   const distanceM = busDistance(box, frameH, focal) / Math.cos((Math.min(60, Math.abs(angle)) * Math.PI) / 180);

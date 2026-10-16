@@ -3,9 +3,10 @@
 // Reads printed text aloud: books, newspapers, letters, labels, medicine boxes. The rider points the
 // phone at the page; the app says where to move it (and ticks higher as the page comes into view),
 // takes the photo itself, then reads sentence by sentence in a Mongolian voice while the rest of the
-// page is still being recognised. Everything runs on the phone: free, and offline after the first visit.
-//   both modes, same buttons: one big action, up to three more, then Буцах and Дахин сонсох
-//   voice mode also: double tap = that big action, swipe = next / previous sentence, one tap = hear it again
+// page is still being recognised. Recognition runs on the phone; the voice is ElevenLabs (Eleven v4) when
+// the server has a key, else the phone's own Mongolian voice (offline after the first visit).
+//   both modes, same buttons: one big action (pause), speed, then Буцах and Дахин сонсох
+//   voice mode also: double tap = that big action, one tap = where am I
 //   press and hold: a spoken menu (new page, speed)     iPhone: the finger can slide and the hold still ends
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
@@ -18,10 +19,10 @@ import { keepScreenOn } from "../lib/wake";
 import { advise, openCamera, quality, type Advice, type Camera } from "../lib/reader/aim";
 import { readerCommand, type ReaderCommand } from "../lib/reader/commands";
 import { startRemoteLog } from "../lib/reader/remoteLog";
-import { analyze, isReady, keepOffline, listen, loadModels, lowMemoryPhone, readPage, releasePart, synthesize, type Reading, type SpeechStream } from "../lib/reader/engine";
-import { AIM_DET } from "../lib/reader/pageOcr";
-import { errorTone, loadingSound, pageEndChime, playStream, prompt, releasePlayer, shutter, stopPlayer, tick, unlockPlayer, unsureTone, waitForVoice, type Playing } from "../lib/reader/player";
-import { SentenceBuilder, UNCLEAR, type Sentence } from "../lib/reader/sentences";
+import { analyze, cloudOcr, cloudVoice, isReady, keepOffline, listen, loadModels, lowMemoryPhone, readPage, readPageCloud, releasePart, setCloudOcr, synthesize, setCloudVoice, type Reading, type SpeechStream } from "../lib/reader/engine";
+import { AIM_FRAME } from "../lib/reader/pageOcr";
+import { errorTone, loadingSound, pageEndChime, playStream, prompt, releasePlayer, shutter, stopPlayer, tick, unlockPlayer, waitForVoice, type Playing } from "../lib/reader/player";
+import { SentenceBuilder, UNCLEAR, type PageLine, type Sentence } from "../lib/reader/sentences";
 import { spokenText } from "../lib/reader/speechText";
 import ReaderPad from "./ReaderPad";
 import type { MenuItem } from "./VoiceMenu";
@@ -35,7 +36,8 @@ const WAIT = "Түр хүлээнэ үү.";
 const WAIT_EVERY_MS = 9000;
 
 const SPEEDS = [0.8, 1, 1.25, 1.5, 1.75, 2];
-const SPEED_KEY = "avtobus.readSpeed";
+const SPEED_STEPS = [1, 1.5, 2]; // the speed button: 1x -> 1.5x -> 2x -> back to 1x
+const VOICE_AHEAD = 4; // sentences made ahead of the one being read
 const AIM_EVERY_MS = 400;
 const GIVE_UP_AIMING_MS = 9000; // text in view this long but never "ready": take the photo anyway
 const SAY_EVERY_MS = 2500;
@@ -82,15 +84,6 @@ interface Session {
   wake: (() => void) | null; // a waiting loop: new sentences came, or play was pressed
 }
 
-function savedSpeed(): number {
-  try {
-    const v = Number(window.localStorage.getItem(SPEED_KEY));
-    return SPEEDS.indexOf(v) >= 0 ? v : 1;
-  } catch {
-    return 1;
-  }
-}
-
 // ?debug=1: what the reader is doing, in the console ("[reader] ...").
 function trace(text: string): void {
   if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debug") === "1") {
@@ -131,6 +124,7 @@ export default function Reader() {
   const lastSaidKey = useRef<PhraseKey>("read_aim_hint");
   const controlsSaid = useRef(false);
   const introducing = useRef(false);
+  const cloudChecked = useRef<Promise<void> | null>(null); // the server's answer: ElevenLabs voice or not
 
   // The <video> element is replaced when the screen changes (start -> aiming): whichever one is on
   // the page shows the camera.
@@ -146,14 +140,10 @@ export default function Reader() {
     setPhaseState(p);
   }
 
+  // Every reading starts at 1x (user: a remembered 2x was confusing); not saved.
   function setSpeed(v: number): void {
     speedRef.current = v;
     setSpeedState(v);
-    try {
-      window.localStorage.setItem(SPEED_KEY, String(v));
-    } catch {
-      // storage blocked: speed resets next time
-    }
   }
 
   // The aiming screen's <video> (class "reader-video", not the hidden one of the start screen).
@@ -193,8 +183,11 @@ export default function Reader() {
     }
     startRemoteLog();
     // Online with a speech key on the server (Speechmatics): the rider can say commands on an iPhone too.
-    serverCaps().then(function (caps) {
+    // With an ElevenLabs key on the server, pages are read in its voice (lib/reader/engine.ts).
+    cloudChecked.current = serverCaps().then(function (caps) {
       enableSpeechmatics(caps.speech);
+      setCloudVoice(caps.readerVoice === true);
+      setCloudOcr(caps.readerOcr === true);
     });
     const stop = listen(function (msg) {
       if (msg.type === "progress" && msg.part === "voice" && msg.total) {
@@ -248,13 +241,15 @@ export default function Reader() {
     modeRef.current = m;
     setMode(m);
     saveMode(m);
-    setSpeed(savedSpeed());
+    setSpeed(1);
     // An iPhone keeps one model at a time. Aiming uses the page reader; the voice starts only after
     // that reader has been dropped. Holding both is what reloads the page.
     if (lowMemoryPhone()) {
       releasePart("voice");
     }
-    loadModels(lowMemoryPhone() ? ["ocr"] : ["ocr", "voice"]);
+    // The phone's own voice (35 MB) only without the ElevenLabs voice; it loads by itself if that fails.
+    await Promise.race([cloudChecked.current, sleep(2000)]);
+    loadModels(lowMemoryPhone() || cloudVoice() ? ["ocr"] : ["ocr", "voice"]);
     if (navigator.storage && navigator.storage.persist) {
       navigator.storage.persist().catch(function () {}); // keep the 50 MB of models
     }
@@ -320,7 +315,7 @@ export default function Reader() {
     while (aimRun.current === run) {
       const started = performance.now();
       const cam = camera.current;
-      const frame = cam ? await cam.frame(AIM_DET) : null;
+      const frame = cam ? await cam.frame(AIM_FRAME) : null;
       const check = frame ? await analyze(frame) : null;
       if (aimRun.current !== run) {
         return;
@@ -478,58 +473,78 @@ export default function Reader() {
         prompt(phrase("read_reading"), "now");
       }
     }, 1500);
-    s.ocr = readPage(
-      photo,
-      function (lines, done, _turned, total) {
-        if (session.current !== s) {
-          return;
+    const onLines = function (lines: PageLine[], done: boolean, _turned: number, total: number): void {
+      if (session.current !== s) {
+        return;
+      }
+      s.lines = total;
+      lines.forEach(function (item) {
+        if (item.conf < UNCLEAR && item.text.trim()) {
+          s.unclear++;
         }
-        s.lines = total;
-        lines.forEach(function (item) {
-          if (item.conf < UNCLEAR && item.text.trim()) {
-            s.unclear++;
-          }
-        });
-        const more = s.builder.add(lines, done);
-        if (more.length) {
-          s.sentences = s.sentences.concat(more);
-          setSentences(s.sentences);
-          // the first sentences' voice is made at once
-          for (let i = s.index; i < Math.min(s.index + 2, s.sentences.length); i++) {
-            if (s.sentences[i].text) {
-              audioFor(s, i, i === s.index);
-            }
+      });
+      const more = s.builder.add(lines, done);
+      if (more.length) {
+        s.sentences = s.sentences.concat(more);
+        setSentences(s.sentences);
+        // the first sentences' voice is made at once
+        for (let i = s.index; i < Math.min(s.index + 2, s.sentences.length); i++) {
+          if (s.sentences[i].text) {
+            audioFor(s, i, i === s.index);
           }
         }
-        if (done) {
-          s.done = true;
-          s.ocr = null;
-          if (lowMemoryPhone()) {
-            releasePart("ocr");
-            if (!isReady("voice") && s.sentences.length) {
-              loadModels(["voice"]);
-            }
+      }
+      if (done) {
+        s.done = true;
+        s.ocr = null;
+        if (lowMemoryPhone()) {
+          releasePart("ocr");
+          if (!isReady("voice") && s.sentences.length) {
+            loadModels(["voice"]);
+          }
+        }
+      }
+      if (s.wake) {
+        s.wake();
+      }
+    };
+    const onFailed = function (): void {
+      if (session.current === s) {
+        s.done = true;
+        if (lowMemoryPhone()) {
+          releasePart("ocr");
+          if (!isReady("voice") && s.sentences.length) {
+            loadModels(["voice"]);
           }
         }
         if (s.wake) {
           s.wake();
         }
-      },
-      function () {
-        if (session.current === s) {
-          s.done = true;
-          if (lowMemoryPhone()) {
-            releasePart("ocr");
-            if (!isReady("voice") && s.sentences.length) {
-              loadModels(["voice"]);
-            }
-          }
-          if (s.wake) {
-            s.wake();
-          }
+      }
+    };
+    if (cloudOcr()) {
+      // Google Cloud Vision first (better ө/ү and punctuation); the phone's reader if it fails.
+      let cancelled = false;
+      s.ocr = {
+        cancel: function () {
+          cancelled = true;
+        },
+      };
+      readPageCloud(photo).then(function (lines) {
+        if (cancelled || session.current !== s) {
+          photo.close();
+          return;
         }
-      },
-    );
+        if (lines) {
+          photo.close();
+          onLines(lines, true, 0, lines.length);
+        } else {
+          s.ocr = readPage(photo, onLines, onFailed);
+        }
+      });
+    } else {
+      s.ocr = readPage(photo, onLines, onFailed);
+    }
     readFrom(s, 0);
   }
 
@@ -537,7 +552,10 @@ export default function Reader() {
   function audioFor(s: Session, i: number, urgent: boolean): SpeechStream | null {
     let a = s.audio.get(i) ?? null;
     if (!a) {
-      a = synthesize(s.sentences[i].text, urgent);
+      a = synthesize(s.sentences[i].text, urgent, {
+        previous: i > 0 ? s.sentences[i - 1].text : "",
+        next: i + 1 < s.sentences.length ? s.sentences[i + 1].text : "",
+      });
       if (a) {
         s.audio.set(i, a);
       }
@@ -574,8 +592,13 @@ export default function Reader() {
         return;
       }
       const sentence = s.sentences[s.index];
-      const shown = sentence.text || phrase("read_unclear_line");
-      // Written before the voice starts, so a missed sentence can be swiped to.
+      if (!sentence.text) {
+        // Only lines that couldn't be read: left out without a word (user: "тодорхойгүй мөр" broke the flow).
+        s.index++;
+        setAt(s.index);
+        continue;
+      }
+      const shown = sentence.text;
       setStatus(shown);
       // Never the phone's own (Russian) voice: wait for the Mongolian one, with a loading sound.
       if (!isReady("voice")) {
@@ -608,10 +631,20 @@ export default function Reader() {
         }
       }
       setAppReading(true);
+      // This one first, then the next ones are made while it plays (the voice makes speech ~3x faster
+      // than it plays, so it stays ahead and the next sentence starts with no wait). Asked before the
+      // button names below, so they're made while those are said.
+      const stream = sentence.text ? audioFor(s, s.index, true) : null;
+      // Cloud voice: 2 ahead is enough (~1-2 s per sentence) and no credit is spent on lines never read.
+      for (let k = 1; k <= (cloudVoice() ? 2 : VOICE_AHEAD); k++) {
+        if (s.index + k < s.sentences.length && s.sentences[s.index + k].text) {
+          audioFor(s, s.index + k, false);
+        }
+      }
       // Once, before the first sentence: name the buttons. Clips only, so an iPhone never uses its Russian voice.
       if (modeRef.current === "voice" && !controlsSaid.current && s.index === 0) {
         controlsSaid.current = true;
-        const names: PhraseKey[] = ["read_btn_pause", "read_btn_prev", "read_btn_next", "read_btn_back"];
+        const names: PhraseKey[] = ["read_btn_pause", "read_btn_back"];
         introducing.current = true;
         try {
           for (let i = 0; i < names.length; i++) {
@@ -627,23 +660,7 @@ export default function Reader() {
           introducing.current = false;
         }
       }
-      // This one first, then the next two are made while it plays.
-      const stream = sentence.text ? audioFor(s, s.index, true) : null;
-      [1, 2].forEach(function (item) {
-        if (s.index + item < s.sentences.length && s.sentences[s.index + item].text) {
-          audioFor(s, s.index + item, false);
-        }
-      });
-      if (sentence.unclear) {
-        await prompt(phrase("read_unclear_line"));
-        if (!alive()) {
-          return;
-        }
-      }
       if (stream) {
-        if (sentence.unsure) {
-          await unsureTone();
-        }
         trace("sentence " + s.index + ": playing as it's made");
         const playing = playStream(stream, speedRef.current);
         s.playing = playing;
@@ -766,7 +783,10 @@ export default function Reader() {
 
   function changeSpeed(direction: 1 | -1): void {
     const i = SPEEDS.indexOf(speedRef.current);
-    const next = SPEEDS[Math.max(0, Math.min(SPEEDS.length - 1, i + direction))];
+    sayNewSpeed(SPEEDS[Math.max(0, Math.min(SPEEDS.length - 1, (i < 0 ? SPEEDS.indexOf(1) : i) + direction))]);
+  }
+
+  function sayNewSpeed(next: number): void {
     setSpeed(next);
     const text = "Хурд " + spokenText(String(next)) + ".";
     setStatus("Хурд " + next + "×");
@@ -775,11 +795,15 @@ export default function Reader() {
     });
   }
 
+  // The speed button: 1x -> 1.5x -> 2x -> 1x (going round, so 2x always gets back to 1x).
   function cycleSpeed(): void {
-    const i = SPEEDS.indexOf(speedRef.current);
-    changeSpeed(i >= SPEEDS.length - 1 ? -1 : 1);
+    const next = SPEED_STEPS.find(function (item) {
+      return item > speedRef.current + 0.01;
+    });
+    sayNewSpeed(next ?? SPEED_STEPS[0]);
   }
 
+  // To the app's home ("Автобус" / "Ном унших"): the mode is saved by now, so "/" opens there.
   function back(): void {
     shutdown();
     router.push("/");
@@ -1010,9 +1034,8 @@ export default function Reader() {
   function swipe(direction: 1 | -1): void {
     if (menu.current) {
       menuStep(direction);
-    } else if (phaseRef.current === "reading" || phaseRef.current === "pageEnd") {
-      step(direction);
     }
+    // While reading, a swipe does nothing (user: next / previous sentence broke the flow).
   }
 
   function tap(): void {
@@ -1043,7 +1066,6 @@ export default function Reader() {
           const cls = (i === at ? "reader-current " : "") + (item.unsure ? "reader-unsure" : "");
           return (
             <span key={i} ref={i === at ? currentRef : undefined} className={cls || undefined}>
-              {item.unclear ? "[…] " : ""}
               {item.text}{" "}
             </span>
           );
@@ -1054,6 +1076,7 @@ export default function Reader() {
 
   if (phase === "start") {
     // Same two halves as the bus app. The screen-reader choice is first, so the first swipe lands there.
+    // "Буцах" after them: opened directly (/read), the rider can still get to the app's home.
     return (
       <main className="flow start-screen">
         <button
@@ -1074,6 +1097,9 @@ export default function Reader() {
         >
           Дэлгэц уншигчгүй
         </button>
+        <button type="button" className="action" onClick={back}>
+          {phrase("menu_back")}
+        </button>
       </main>
     );
   }
@@ -1091,8 +1117,6 @@ export default function Reader() {
   } else {
     main = [
       { id: "pause", label: phrase(paused ? "read_btn_resume" : "read_btn_pause"), onActivate: togglePause },
-      { id: "prev", label: phrase("read_btn_prev"), onActivate: function () { step(-1); } },
-      { id: "next", label: phrase("read_btn_next"), onActivate: function () { step(1); } },
       { id: "speed", label: phrase("read_btn_speed") + " " + speed + "×", onActivate: cycleSpeed },
     ];
   }

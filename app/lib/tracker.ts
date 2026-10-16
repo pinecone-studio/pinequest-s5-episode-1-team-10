@@ -139,6 +139,19 @@ export function updateTracks(tracks: Track[], boxes: Box[], now: number): Track[
   return live;
 }
 
+// One read that clearly picks the rider's route among the routes at this stop (lib/signMatch.ts, the
+// margin over every other route here): decided on this frame, no second read needed.
+export function decideNow(track: Track, number: string, confidence: number, frame: number): void {
+  if (track.locked) {
+    return;
+  }
+  track.reads = [{ verdict: "yes", confidence: confidence, number: number, frame: frame }];
+  track.votes = ["yes"];
+  track.confs = [confidence];
+  track.decision = "yes";
+  track.locked = true;
+}
+
 // Two reads of the same route number, from different frames, both at confidence >= 0.8.
 // A different number clears the track. A read without a route number is ignored.
 // Once the track is the rider's bus, later reads cannot change that.

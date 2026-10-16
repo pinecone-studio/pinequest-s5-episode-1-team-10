@@ -5,8 +5,9 @@
 //   - never the phone's own voice (it would read Mongolian with a Russian voice): until the Mongolian
 //     voice is ready, a soft loading sound plays instead
 //   - short sounds: aiming ticks, the shutter, the "unsure line" tone, page end
-import { hasClip, say, sharedAudio, stopSpeaking, unlockAudio } from "../speech";
+import { hasClip, say, stopSpeaking, unlockAudio } from "../speech";
 import { isReady, listen, loadModels, synthesize, type SpeechStream } from "./engine";
+import { stretch } from "./stretch";
 
 export interface Clip {
   samples: Float32Array;
@@ -20,8 +21,6 @@ export interface Playing {
   stop: () => void;
 }
 
-// The app's one audio element (lib/speech.ts): unlocked by the first touch, even on the bus screens.
-const audio = sharedAudio();
 let sounds: AudioContext | null = null;
 
 // iPhone: with the ringer switch on silent, Web Audio (the aiming ticks, the loading sound) is muted
@@ -51,34 +50,10 @@ export function unlockPlayer(): void {
   if (sounds && sounds.state === "suspended") {
     sounds.resume().catch(function () {});
   }
-}
-
-function wavUrl(clip: Clip): string {
-  const n = clip.samples.length;
-  const view = new DataView(new ArrayBuffer(44 + n * 2));
-  function text(at: number, s: string): void {
-    for (let i = 0; i < s.length; i++) {
-      view.setUint8(at + i, s.charCodeAt(i));
-    }
+  const v = voiceContext(); // made inside the touch, so the iPhone lets it play
+  if (v && v.state === "suspended" && !current) {
+    v.resume().catch(function () {});
   }
-  text(0, "RIFF");
-  view.setUint32(4, 36 + n * 2, true);
-  text(8, "WAVE");
-  text(12, "fmt ");
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, 1, true);
-  view.setUint32(24, clip.rate, true);
-  view.setUint32(28, clip.rate * 2, true);
-  view.setUint16(32, 2, true);
-  view.setUint16(34, 16, true);
-  text(36, "data");
-  view.setUint32(40, n * 2, true);
-  for (let i = 0; i < n; i++) {
-    const s = Math.max(-1, Math.min(1, clip.samples[i]));
-    view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-  }
-  return URL.createObjectURL(new Blob([view], { type: "audio/wav" }));
 }
 
 let current: Playing | null = null;
@@ -93,97 +68,105 @@ export function stopPlayer(): void {
   stopSpeaking();
 }
 
-// A sentence in the reading voice.
-export function playClip(clip: Clip, speed: number): Playing {
+// The reading voice has its own audio context (unlocked by a touch, unlockPlayer): its pieces are
+// queued back to back on one clock, so there is no gap between phrases or sentences. (One <audio>
+// element swapping a file per phrase stalled briefly at every comma on iPhone.) Pause = the clock stops.
+let voiceOut: AudioContext | null = null;
+function voiceContext(): AudioContext | null {
+  if (!voiceOut && typeof AudioContext !== "undefined") {
+    voiceOut = new AudioContext();
+  }
+  return voiceOut;
+}
+
+const debugOn = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debug") === "1";
+
+// A sentence as it arrives, piece by piece: the first words play while the rest is still being made;
+// each piece is queued right after the one before, at the rider's speed (pitch kept, lib/reader/stretch.ts).
+export function playStream(stream: SpeechStream, speed: number): Playing {
   stopPlayer();
-  const url = wavUrl(clip);
+  const ctx = voiceContext();
+  let stopped = false;
+  let paused = false;
   let finish: (ok: boolean) => void = function () {};
   const done = new Promise<boolean>(function (resolve) {
-    finish = function (ok: boolean) {
-      URL.revokeObjectURL(url);
-      resolve(ok);
-    };
+    finish = resolve;
   });
-  let stopped = false;
-  // A stalled clip (audio focus taken by a call) must never freeze the reading.
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  function guard(): void {
-    if (timer) {
-      clearTimeout(timer);
+  const sources: AudioBufferSourceNode[] = [];
+  let endsAt = 0; // on the context's clock
+  let playing = 0; // pieces queued and not yet ended
+  let made = false; // the last piece has been queued
+  // A clock that stalls (audio taken by a call, the phone's audio session lost) must never freeze the
+  // reading: if nothing ends long after it should have, the sentence counts as said.
+  let guard: ReturnType<typeof setTimeout> | null = null;
+  function watch(): void {
+    if (guard) {
+      clearTimeout(guard);
     }
-    timer = setTimeout(function () {
-      end(true);
-    }, ((clip.samples.length / clip.rate) * 1000) / speed + 3000);
+    guard = null;
+    if (!ctx || paused || stopped) {
+      return;
+    }
+    guard = setTimeout(
+      function () {
+        if (!paused && ctx.state !== "running") {
+          ctx.resume().catch(function () {});
+        }
+        end(true);
+      },
+      Math.max(0, endsAt - ctx.currentTime) * 1000 + 3000,
+    );
   }
   function end(ok: boolean): void {
     if (stopped) {
       return;
     }
     stopped = true;
-    if (timer) {
-      clearTimeout(timer);
+    if (guard) {
+      clearTimeout(guard);
+    }
+    sources.forEach(function (item) {
+      item.onended = null;
+      try {
+        item.stop();
+      } catch {
+        // not started yet
+      }
+      item.disconnect();
+    });
+    if (current === self) {
+      current = null;
     }
     finish(ok);
   }
-  const playing: Playing = {
+  const self: Playing = {
     done,
     pause: function () {
-      if (audio && !stopped) {
-        audio.pause();
-        if (timer) {
-          clearTimeout(timer);
-        }
+      paused = true;
+      if (ctx && !stopped) {
+        ctx.suspend().catch(function () {});
       }
+      watch();
     },
     resume: function () {
-      if (audio && !stopped) {
-        audio.play().catch(function () {
-          end(true);
-        });
-        guard();
+      paused = false;
+      if (ctx && !stopped) {
+        ctx.resume().catch(function () {});
       }
+      watch();
     },
     stop: function () {
-      if (audio && !stopped) {
-        audio.pause();
-      }
       end(false);
     },
   };
-  current = playing;
-  if (!audio) {
+  current = self;
+  if (!ctx) {
     end(true);
-    return playing;
+    return self;
   }
-  audio.onended = function () {
-    end(true);
-  };
-  audio.onerror = function () {
-    end(true);
-  };
-  audio.src = url;
-  audio.playbackRate = speed;
-  if (new URLSearchParams(window.location.search).get("debug") === "1") {
-    console.log("[reader] playing " + (clip.samples.length / clip.rate).toFixed(1) + " s at " + speed + "x");
+  if (ctx.state !== "running") {
+    ctx.resume().catch(function () {});
   }
-  audio.preservesPitch = true;
-  audio.play().catch(function () {
-    end(true);
-  });
-  guard();
-  return playing;
-}
-
-// A sentence as it arrives, piece by piece: the first words play while the rest is still being made.
-// Pause/resume act on the piece playing (or the next one, if paused between pieces).
-export function playStream(stream: SpeechStream, speed: number): Playing {
-  let stopped = false;
-  let paused = false;
-  let piece: Playing | null = null;
-  let finish: (ok: boolean) => void = function () {};
-  const done = new Promise<boolean>(function (resolve) {
-    finish = resolve;
-  });
   (async function () {
     for (let i = 0; ; i++) {
       const next = await stream.piece(i);
@@ -191,42 +174,36 @@ export function playStream(stream: SpeechStream, speed: number): Playing {
         return;
       }
       if (!next) {
-        finish(true);
+        made = true;
+        if (playing === 0) {
+          end(true);
+        }
         return;
       }
-      piece = playClip(next, speed);
-      if (paused) {
-        piece.pause();
+      const samples = stretch(next.samples, speed, next.rate);
+      if (debugOn) {
+        console.log("[reader] piece " + i + ": " + (samples.length / next.rate).toFixed(1) + " s at " + speed + "x" + (i > 0 && endsAt < ctx.currentTime ? ", " + Math.round((ctx.currentTime - endsAt) * 1000) + " ms late" : ""));
       }
-      if (!(await piece.done)) {
-        stopped = true;
-        finish(false);
-        return;
-      }
+      const buffer = ctx.createBuffer(1, samples.length, next.rate);
+      buffer.getChannelData(0).set(samples);
+      const src = ctx.createBufferSource();
+      src.buffer = buffer;
+      src.connect(ctx.destination);
+      const at = Math.max(ctx.currentTime + 0.02, endsAt);
+      src.start(at);
+      endsAt = at + buffer.duration;
+      sources.push(src);
+      playing++;
+      src.onended = function () {
+        playing--;
+        if (made && playing === 0) {
+          end(true);
+        }
+      };
+      watch();
     }
   })();
-  return {
-    done,
-    pause: function () {
-      paused = true;
-      if (piece) {
-        piece.pause();
-      }
-    },
-    resume: function () {
-      paused = false;
-      if (piece) {
-        piece.resume();
-      }
-    },
-    stop: function () {
-      stopped = true;
-      if (piece) {
-        piece.stop();
-      }
-      finish(false);
-    },
-  };
+  return self;
 }
 
 // Resolves true when the Mongolian voice is ready (false if it failed to load; it is then asked to load

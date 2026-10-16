@@ -21,6 +21,7 @@ const eslintConfig = defineConfig([
     "public/ort/**",
     "public/reader-worker.js", // built by scripts/build-reader-worker.mjs
     "public/bus-ocr-worker.js", // built by scripts/build-bus-ocr-worker.mjs
+    "public/sign-ocr-worker.js", // built by scripts/build-sign-ocr-worker.mjs
   ]),
 ]);
 

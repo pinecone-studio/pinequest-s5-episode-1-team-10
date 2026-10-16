@@ -30,11 +30,19 @@ def fake_hamuga(monkeypatch, tmp_path):
 
 
 def test_health_says_what_runs_in_the_browser(monkeypatch):
-    monkeypatch.delenv("SPEECHMATICS_API_KEY", raising=False)
-    monkeypatch.delenv("CHIMEGE_API_KEY", raising=False)
-    assert client.get("/api/health").json() == {"ok": True, "stt": False, "ocr": False, "speech": False, "chimege": False}
+    for name in ("SPEECHMATICS_API_KEY", "CHIMEGE_API_KEY", "GEMINI_API_KEY", "GOOGLE_VISION_API_KEY", "ELEVENLABS_API_KEY", "ELEVENLAB_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    assert client.get("/api/health").json() == {"ok": True, "stt": False, "ocr": False, "speech": False, "chimege": False, "reader_voice": False, "reader_ocr": False}
     monkeypatch.setenv("SPEECHMATICS_API_KEY", "secret")
     assert client.get("/api/health").json()["speech"] is True
+    # The Reader reads pages on the server with either key, Gemini first (server/gemini_ocr.py)
+    monkeypatch.setenv("GOOGLE_VISION_API_KEY", "secret")
+    assert client.get("/api/health").json()["reader_ocr"] is True
+    monkeypatch.delenv("GOOGLE_VISION_API_KEY")
+    monkeypatch.setenv("GEMINI_API_KEY", "secret")
+    assert client.get("/api/health").json()["reader_ocr"] is True
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "secret")
+    assert client.get("/api/health").json()["reader_voice"] is True
 
 
 def test_speech_token_hands_out_a_temporary_key_never_the_account_key(monkeypatch):

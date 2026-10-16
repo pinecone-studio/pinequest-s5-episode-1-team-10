@@ -98,7 +98,18 @@ export function listen(fn: Listener): () => void {
 }
 
 export function isReady(part: Part): boolean {
-  return ready[part];
+  return ready[part] || (part === "voice" && cloud);
+}
+
+// The ElevenLabs voice (server/elevenlabs.py, Eleven v4 Mongolian): soft, reads a sentence as part of the
+// story (the sentences around it are sent too). Used while the server has a key and answers; the first
+// failure (offline, credit used up) switches to the phone's own voice for the rest of the visit.
+let cloud = false;
+export function setCloudVoice(on: boolean): void {
+  cloud = on;
+}
+export function cloudVoice(): boolean {
+  return cloud;
 }
 
 // Drops a worker and the ONNX runtime inside it. On an iPhone the page reader is dropped before the
@@ -167,6 +178,47 @@ export interface Reading {
   cancel: () => void;
 }
 
+// Google Cloud Vision for the page text (server/vision.py): reads Mongolian letters (ө, ү) and
+// punctuation more reliably than the phone's small model. Used while the server has a key; the first
+// failure (offline, quota) switches to the phone's reader for the rest of the visit.
+let cloudText = false;
+export function setCloudOcr(on: boolean): void {
+  cloudText = on;
+}
+export function cloudOcr(): boolean {
+  return cloudText;
+}
+
+// The photo as JPEG, small enough for the server (<= 4 MB).
+async function jpegOf(photo: ImageBitmap): Promise<Blob> {
+  const c = new OffscreenCanvas(photo.width, photo.height);
+  (c.getContext("2d") as OffscreenCanvasRenderingContext2D).drawImage(photo, 0, 0);
+  let blob = await c.convertToBlob({ type: "image/jpeg", quality: 0.9 });
+  if (blob.size > 3.5 * 1024 * 1024) {
+    blob = await c.convertToBlob({ type: "image/jpeg", quality: 0.75 });
+  }
+  return blob;
+}
+
+// The page's lines from the cloud, in reading order; null if that failed (the phone then reads it).
+export async function readPageCloud(photo: ImageBitmap): Promise<PageLine[] | null> {
+  try {
+    const t = performance.now();
+    const jpeg = await jpegOf(photo);
+    const res = await fetch("/api/reader/ocr", { method: "POST", headers: { "Content-Type": "image/jpeg" }, body: jpeg });
+    if (!res.ok) {
+      throw new Error("reader ocr " + res.status);
+    }
+    const body = (await res.json()) as { lines: PageLine[] };
+    console.log("[reader] cloud ocr: " + body.lines.length + " lines, " + Math.round(jpeg.size / 1024) + " KB, " + Math.round(performance.now() - t) + " ms");
+    return body.lines;
+  } catch (e) {
+    console.warn("[reader] cloud ocr failed, the phone reads pages from now on", e);
+    cloudText = false;
+    return null;
+  }
+}
+
 // A captured page: lines arrive in reading order, a few at a time, until `done`.
 export function readPage(
   photo: ImageBitmap,
@@ -224,13 +276,110 @@ export class SpeechStream {
   }
 }
 
-// null: the voice isn't loaded (the reader then waits for it: never the phone's own voice).
-export function synthesize(text: string, urgent: boolean): SpeechStream | null {
+// null: no voice is ready (the reader then waits for it: never the phone's own Russian voice).
+// `around`: the sentences before and after, for the cloud voice's flow.
+export function synthesize(text: string, urgent: boolean, around?: { previous: string; next: string }): SpeechStream | null {
+  if (cloud) {
+    const stream = new SpeechStream();
+    fromCloud(stream, text, urgent, around);
+    return stream;
+  }
   if (!ready.voice) {
     return null;
   }
-  const id = nextId++;
   const stream = new SpeechStream();
+  onPhone(stream, text, urgent);
+  return stream;
+}
+
+let decoder: OfflineAudioContext | null = null;
+
+// ElevenLabs takes 2 requests at a time on the free plan: the rest wait here, the sentence being read
+// first (urgent) before the ones made ahead.
+const CLOUD_AT_ONCE = 2;
+let cloudBusy = 0;
+const cloudWaiting: { urgent: boolean; go: () => void }[] = [];
+function cloudTurn(urgent: boolean): Promise<void> {
+  if (cloudBusy < CLOUD_AT_ONCE) {
+    cloudBusy++;
+    return Promise.resolve();
+  }
+  return new Promise<void>(function (resolve) {
+    const job = { urgent, go: resolve };
+    if (urgent) {
+      cloudWaiting.unshift(job);
+    } else {
+      cloudWaiting.push(job);
+    }
+  });
+}
+function cloudDone(): void {
+  const next = cloudWaiting.shift();
+  if (next) {
+    next.go(); // the place passes on
+  } else {
+    cloudBusy--;
+  }
+}
+
+async function cloudMp3(text: string, urgent: boolean, around?: { previous: string; next: string }): Promise<ArrayBuffer> {
+  for (let attempt = 0; ; attempt++) {
+    await cloudTurn(urgent);
+    let res: Response;
+    try {
+      res = await fetch("/api/reader/voice", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, previous: around?.previous ?? "", next: around?.next ?? "" }),
+      });
+    } finally {
+      cloudDone();
+    }
+    if (res.status === 429 && attempt < 4) {
+      await new Promise(function (resolve) {
+        setTimeout(resolve, 700 * (attempt + 1)); // another request still running there: ask again
+      });
+      continue;
+    }
+    if (!res.ok) {
+      throw new Error("reader voice " + res.status);
+    }
+    return res.arrayBuffer();
+  }
+}
+
+async function fromCloud(stream: SpeechStream, text: string, urgent: boolean, around?: { previous: string; next: string }): Promise<void> {
+  try {
+    const mp3 = await cloudMp3(text, urgent, around);
+    if (!decoder) {
+      decoder = new OfflineAudioContext(1, 1, 44100);
+    }
+    const audio = await decoder.decodeAudioData(mp3);
+    stream.add(audio.getChannelData(0), audio.sampleRate, true);
+  } catch (e) {
+    console.warn("[reader] cloud voice failed, the phone's voice reads from now on", e);
+    cloud = false;
+    // This sentence too, once the phone's voice is loaded.
+    if (ready.voice) {
+      onPhone(stream, text, urgent);
+      return;
+    }
+    const stop = listen(function (msg) {
+      if (msg.type === "ready" && msg.part === "voice") {
+        stop();
+        if (msg.ok) {
+          onPhone(stream, text, urgent);
+        } else {
+          stream.add(null, 16000, true);
+        }
+      }
+    });
+    loadModels(["voice"]);
+  }
+}
+
+function onPhone(stream: SpeechStream, text: string, urgent: boolean): void {
+  const id = nextId++;
   const stop = listen(function (msg) {
     if (msg.type === "audio" && msg.id === id) {
       if (msg.last) {
@@ -240,5 +389,4 @@ export function synthesize(text: string, urgent: boolean): SpeechStream | null {
     }
   });
   send("voice", { type: "speak", id, text, urgent });
-  return stream;
 }

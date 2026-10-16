@@ -1,7 +1,9 @@
 "use client";
 
-// Rider journey: start -> (first time) family number for SOS -> where am I (GPS, or say / type it)
-// -> say or type the destination -> one suggested bus -> camera -> "this is your bus". Every screen
+// Rider journey: start (first launch: with or without a screen reader) -> home ("Автобус" / "Ном унших")
+// -> (first time) lesson and family number for SOS -> where am I (GPS, or say / type it)
+// -> say or type the destination -> one suggested bus -> camera -> "this is your bus". The screens and
+// where "Буцах" goes from each are in lib/journey.ts. Every screen
 // is spoken in Mongolian: its message, then its options (VoiceMenu), so a blind rider always knows
 // what they can do. Anything the rider can say can also be typed (iPhone has no Mongolian speech
 // recognition), and a phone number is always read back digit by digit to confirm.
@@ -19,46 +21,27 @@ import { primeBeacon } from "../lib/beacon";
 import { familyNumber, openLink, saveFamilyNumber, smsUrl, sosMessage, telUrl } from "../lib/family";
 import { callFamily, isCallFamilySpeech, isHelpSpeech } from "../lib/sos";
 import { groupDigits, phoneDigits } from "../lib/phoneWords";
-import { currentSavedReader, saveMode, setCurrentReader, subscribeReader, type Mode, type Reader } from "../lib/mode";
-import { routeLabel } from "../lib/route";
+import { currentSavedReader, savedMode, saveMode, setCurrentReader, subscribeReader, type Mode, type Reader } from "../lib/mode";
+import { backTarget, createRuns, HOME_BUS, HOME_READ, HOME_TITLE, launchStep, primaryWithBack, type BackTarget, type Step, type TypeFor } from "../lib/journey";
+import { routeLabel, routeSpeech } from "../lib/route";
 import { loadDetector } from "../lib/detector";
 import { prefetchStopRoutes } from "../lib/stopRoutes";
 import { loadDoorDetector } from "../lib/doorDetector";
 import type { DoorGuide } from "../lib/door";
-import { beep, phrase, prefetch, rememberClips, say, startWaitingTick, stopSpeaking, unlockAudio, vibrate, type PhraseKey } from "../lib/speech";
+import { beep, phrase, playInstant, prefetch, rememberClips, say, startWaitingTick, stopSpeaking, unlockAudio, vibrate, type Earcon, type PhraseKey } from "../lib/speech";
 import { onSpeedReport, showSpeed, speedCancel, speedMark, speedStart } from "../lib/speed";
 import { wantsReader } from "../lib/reader/commands";
 import BusCamera, { doorSpeech } from "./BusCamera";
 import BusScanner from "./BusScanner";
 import RideGuide, { leftSpeech, type RideInfo } from "./RideGuide";
 import Tutorial, { tutorialNeeded } from "./Tutorial";
+import InstallButton from "./InstallButton";
 import Settings from "./Settings";
 import SrScreen from "./SrScreen";
 import TypeIn from "./TypeIn";
 import VoiceMenu, { type MenuItem } from "./VoiceMenu";
+import { loadRouteData } from "../lib/candidates";
 
-type Step =
-  | "start"
-  | "learn" // first-use lesson: headphones, wearing the phone, gestures, ear check
-  | "locating"
-  | "confirmPlace" // "Таны байршил: X. Зөв үү?" after GPS or a said place: a wrong place means a wrong bus
-  | "where"
-  | "whereListening"
-  | "ask"
-  | "listening"
-  | "working"
-  | "planned"
-  | "camera" // find the bus, then guide to its door
-  | "ride" // on the bus, until the rider's stop
-  | "arrived"
-  | "number" // family phone number for SOS: say it or type it?
-  | "numberListening"
-  | "numberConfirm" // read back digit by digit: correct?
-  | "confirmDest" // the destination was a sound-alike of what was heard: "is it X?" before the trip
-  | "typing" // typing instead of speaking (see typeFor)
-  | "settings"; // helper / screen-reader settings: mode, family number, typed destination
-
-type TypeFor = "number" | "dest" | "where";
 const TYPE_PROMPT: Record<TypeFor, PhraseKey> = { number: "number_type_now", dest: "dest_type_now", where: "where_type_now" };
 const TYPE_LABEL: Record<TypeFor, string> = { number: "Гэр бүлийн утасны дугаар", dest: "Очих газар", where: "Ойролцоох зогсоол" };
 const PHONE_DIGITS = 8; // Mongolian mobile numbers
@@ -163,6 +146,13 @@ export default function RiderFlow() {
   const numberNext = useRef<"find" | "ask">("find"); // where the number setup goes when done
   const numberLater = useRef(false); // "Дараа нь": not asked again until the app is opened again
   const voiceBroken = useRef(false); // this browser can't recognise Mongolian: typing from now on
+  // "Буцах" while a flow waits (GPS, the server, the microphone): that flow stops instead of moving the
+  // screen later (lib/journey.ts createRuns).
+  const [runs] = useState(createRuns);
+  const workingFor = useRef<"ask" | "where">("ask"); // what the wait screen is working on, for "Буцах"
+  const settingsFrom = useRef<"ask" | "where">("ask");
+  // The saved mode is only known after mounting (the server can't read it): until then, no first screen.
+  const [launched, setLaunched] = useState(false);
 
   useEffect(
     function () {
@@ -183,7 +173,10 @@ export default function RiderFlow() {
 
   // The app's Mongolian voice, unless Settings says the screen reader should read the status.
   // On a new screen-reader step the clip starts 600 ms after the heading takes focus.
-  function voice(texts: string[]): Promise<void> {
+  // `earcon`: a camera verdict ("match" / "wrong"): the earcon and the sentence play at once from memory
+  // (lib/speech.ts playInstant), never delayed. With the phone's screen reader reading the screen, only
+  // the earcon plays and the screen reader reads the new status line.
+  function voice(texts: string[], earcon?: Earcon): Promise<void> {
     const joined = texts
       .filter(function (item) {
         return item.trim() !== "";
@@ -195,7 +188,11 @@ export default function RiderFlow() {
     if (modeRef.current === "sr" && readerRef.current === "screen") {
       stopSpeaking();
       delaySpeech.current = false;
-      return Promise.resolve();
+      return earcon ? playInstant(earcon, []) : Promise.resolve();
+    }
+    if (earcon) {
+      delaySpeech.current = false;
+      return playInstant(earcon, texts);
     }
     const wait = delaySpeech.current && modeRef.current === "sr" && readerRef.current === "app";
     delaySpeech.current = false;
@@ -248,7 +245,7 @@ export default function RiderFlow() {
     setLeg(0);
     setStep("planned");
     setMessage(found.speech.join(" "));
-    // The first sentence ("34-р автобусанд суугаарай.") is pre-made, so it plays at once.
+    // The first sentence ("Ч гучин дөрөв автобусанд суугаарай.") is pre-made, so it plays at once.
     say(found.speech.concat(cameraAsk()));
     if (azureScanner()) {
       return; // no models on the phone: BusScanner reads the sign with Azure
@@ -309,13 +306,20 @@ export default function RiderFlow() {
 
   // GPS if it's precise enough; otherwise the rider is asked to say where they are.
   async function findMe(intro: PhraseKey[]): Promise<void> {
+    const alive = runs.ticket();
     setStep("locating");
     if (!testPosition()) {
       await explainPermission("geolocation", setMessage); // the first time the phone asks for location
+      if (!alive()) {
+        return;
+      }
     }
     const gps = testPosition() ? Promise.resolve(testPosition()) : locate();
     await announce(intro);
     const pos = await gps;
+    if (!alive()) {
+      return; // "Буцах" while locating
+    }
     if (!pos || pos.accuracy > GPS_OK_M) {
       setStep("where");
       announce([locationAsk()]);
@@ -324,6 +328,9 @@ export default function RiderFlow() {
     position.current = pos;
     fromGps.current = true;
     const near = await nearestStop(pos.lat, pos.lon);
+    if (!alive()) {
+      return;
+    }
     if (near) {
       setPlaceName(near.name);
       confirmPlace(near.name);
@@ -333,12 +340,11 @@ export default function RiderFlow() {
     announce(["location_ok", welcome()]);
   }
 
-  function begin(chosen: Mode): void {
+  // The mode decides the whole UI; it is saved, so the next launch opens on home (lib/journey.ts launchStep).
+  function applyMode(chosen: Mode): void {
     modeRef.current = chosen;
     setMode(chosen);
     saveMode(chosen);
-    unlockAudio(); // inside the first touch, or iPhones stay silent
-    primeBeacon(); // the lesson's ear check plays the door beacon
     serverCaps().then(function (c) {
       caps.current = c;
       setServerOcr(c.ocr);
@@ -349,6 +355,36 @@ export default function RiderFlow() {
       }
       voiceBroken.current = !canListen(); // nothing can hear Mongolian here: typing instead
     });
+  }
+
+  // The mode chosen on the first screen: then home.
+  function begin(chosen: Mode): void {
+    applyMode(chosen);
+    unlockAudio(); // inside the first touch, or iPhones stay silent
+    goHome();
+  }
+
+  // A saved mode (or ?mode=): straight to home. Back from the reader (/read) lands here too. Read once
+  // after mounting (localStorage), in a timer so the first screen isn't drawn twice in one go.
+  useEffect(function () {
+    const timer = window.setTimeout(function () {
+      const saved = savedMode();
+      if (launchStep(saved) === "home" && saved) {
+        applyMode(saved);
+        setStep("home");
+      }
+      setLaunched(true);
+    }, 0);
+    return function () {
+      window.clearTimeout(timer);
+    };
+  }, []);
+
+  // "Автобус" on home: the bus journey, as it always started (lesson and SOS number the first time).
+  function startBus(): void {
+    unlockAudio(); // inside the double tap, or iPhones stay silent
+    primeBeacon(); // the lesson's ear check plays the door beacon
+    stopSpeaking();
     if (tutorialNeeded()) {
       setStep("learn");
     } else if (needsNumber()) {
@@ -386,10 +422,15 @@ export default function RiderFlow() {
   // It opens during the beep, so the rider can talk right after it, and stops by itself when they
   // stop talking. The words so far are shown for a sighted helper (not in screen-reader mode: the
   // screen reader would read them out into the microphone).
+  // After "Буцах" during the permission prompt the microphone never opens (callers check their own ticket).
   async function hearRider(listeningStep: Step, options?: ListenOptions): Promise<Heard> {
+    const alive = runs.ticket();
     stopSpeaking();
     setStep(listeningStep);
     await explainPermission("microphone", setMessage); // the phone's box is visual: say what's coming
+    if (!alive()) {
+      return { text: "", error: "not-heard", code: "" };
+    }
     setMessage(phrase("listening"));
     const rec = listen(showWords, options);
     listening.current = rec;
@@ -450,14 +491,27 @@ export default function RiderFlow() {
       openTyping("where", "voice_unsupported_type");
       return;
     }
+    const alive = runs.ticket();
     const heard = await hearRider("whereListening");
+    if (!alive()) {
+      return; // "Буцах" stopped the microphone: what it heard is dropped
+    }
     if (!heard.text) {
       setStep("where");
       notHeard(heard, "where");
       return;
     }
+    working("where");
+    const place = await locateByText(heard.text);
+    if (alive()) {
+      applyPlace(place);
+    }
+  }
+
+  // The wait screen, and where its "Буцах" goes.
+  function working(forWhat: "ask" | "where"): void {
+    workingFor.current = forWhat;
     setStep("working");
-    applyPlace(await locateByText(heard.text));
   }
 
   // Latest position: GPS is refreshed (the rider may have walked), a said place is kept.
@@ -478,8 +532,12 @@ export default function RiderFlow() {
   }
 
   async function planTrip(text: string): Promise<void> {
-    setStep("working");
+    const alive = runs.ticket();
+    working("ask");
     const pos = await currentPosition();
+    if (!alive()) {
+      return;
+    }
     if (!pos) {
       setStep("where");
       announce([locationAsk()]);
@@ -487,6 +545,9 @@ export default function RiderFlow() {
     }
     announce(["searching"]);
     const result = await requestPlan(text, pos.lat, pos.lon);
+    if (!alive()) {
+      return; // "Буцах" while the server was planning
+    }
     if (result.ok) {
       planOrAsk(result.plan, text);
     } else {
@@ -499,7 +560,11 @@ export default function RiderFlow() {
       openTyping("dest", "voice_unsupported_type");
       return;
     }
+    const alive = runs.ticket();
     const heard = await hearRider("listening");
+    if (!alive()) {
+      return;
+    }
     if (!heard.text) {
       setStep("ask");
       notHeard(heard, "dest");
@@ -520,10 +585,17 @@ export default function RiderFlow() {
       openTyping("number", "voice_unsupported_type");
       return;
     }
+    const alive = runs.ticket();
     setStep("numberListening");
     setMessage(phrase("number_say_now"));
     await say([phrase("number_say_now")]);
+    if (!alive()) {
+      return;
+    }
     const heard = await hearRider("numberListening", { digits: PHONE_DIGITS });
+    if (!alive()) {
+      return;
+    }
     if (!heard.text) {
       setStep("number");
       notHeard(heard, "number");
@@ -537,7 +609,10 @@ export default function RiderFlow() {
     // Not the whole number (a word misheard, or a pause cut it): two halves of 4 digits, which are
     // heard far better than 8 in one go.
     await say([phrase("number_split")]);
-    const first = await hearDigits("number_first_half");
+    if (!alive()) {
+      return;
+    }
+    const first = await hearDigits("number_first_half", alive);
     if (first === null) {
       return;
     }
@@ -545,7 +620,7 @@ export default function RiderFlow() {
       gotNumber(first); // said the whole number again: fine
       return;
     }
-    const second = await hearDigits("number_second_half");
+    const second = await hearDigits("number_second_half", alive);
     if (second !== null) {
       gotNumber(first + second);
     }
@@ -557,14 +632,20 @@ export default function RiderFlow() {
   }
 
   // Half a number (4 digits), asked once more if it wasn't heard whole. null: still not (the rider is
-  // told; the number screen is back, with typing as the other option).
-  async function hearDigits(ask: PhraseKey): Promise<string | null> {
+  // told; the number screen is back, with typing as the other option), or "Буцах" was pressed.
+  async function hearDigits(ask: PhraseKey, alive: () => boolean): Promise<string | null> {
     for (let attempt = 0; attempt < 2; attempt++) {
       const key: PhraseKey = attempt ? "number_half_again" : ask;
       setStep("numberListening");
       setMessage(phrase(key));
       await say([phrase(key)]);
+      if (!alive()) {
+        return null;
+      }
       const heard = await hearRider("numberListening", { digits: HALF_DIGITS });
+      if (!alive()) {
+        return null;
+      }
       if (!heard.text && heard.error !== "not-heard") {
         setStep("number");
         notHeard(heard, "number");
@@ -614,9 +695,12 @@ export default function RiderFlow() {
   }
   async function numberDone(key: PhraseKey): Promise<void> {
     if (numberNext.current === "find") {
+      const alive = runs.ticket();
       setStep("locating");
       await announce([key]);
-      findMe(["locating"]);
+      if (alive()) {
+        findMe(["locating"]);
+      }
     } else {
       setStep("ask");
       announce([key, welcome()]);
@@ -648,21 +732,17 @@ export default function RiderFlow() {
     } else if (typeFor === "dest") {
       planTrip(text);
     } else {
-      setStep("working");
-      locateByText(text).then(applyPlace);
+      const alive = runs.ticket();
+      working("where");
+      locateByText(text).then(function (place) {
+        if (alive()) {
+          applyPlace(place);
+        }
+      });
     }
   }
   function typedFromMenu(): void {
     typed(typeField.current ? typeField.current.value.trim() : "");
-  }
-  function typingBack(): void {
-    stopSpeaking();
-    if (typeFor === "number") {
-      startNumberSetup(numberNext.current);
-    } else {
-      setStep(typeFor === "dest" ? "ask" : "where");
-      announce([typeFor === "dest" ? welcome() : locationAsk()]);
-    }
   }
 
   const onFound = useCallback(function () {
@@ -729,15 +809,6 @@ export default function RiderFlow() {
   function gotOff(): void {
     onArrived();
   }
-  function backToPlan(): void {
-    stopSpeaking();
-    setStep("planned");
-  }
-  function backToDestination(): void {
-    stopSpeaking();
-    setStep("ask");
-    announce([welcome()]);
-  }
   function hearRoute(): void {
     const p = planRef.current;
     if (!p) {
@@ -745,6 +816,54 @@ export default function RiderFlow() {
     }
     const speech = legRef.current === 1 && p.transfer ? p.transfer.speech : p.speech;
     voice(speech.concat(cameraAsk()));
+  }
+  // "Буцах": one screen back (lib/journey.ts backTarget). Whatever was waiting (GPS, the server, the
+  // microphone) is dropped, so it can't move the screen afterwards.
+  function goBack(): void {
+    const target = backTarget(stepRef.current, {
+      typeFor,
+      numberNext: numberNext.current,
+      located: position.current !== null,
+      placeFromGps: fromGps.current,
+      workingFor: workingFor.current,
+      settingsFrom: settingsFrom.current,
+    });
+    if (target) {
+      goTo(target);
+    }
+  }
+  function goTo(target: BackTarget): void {
+    runs.cancel();
+    stopRecording();
+    stopSpeaking();
+    if (target === "start") {
+      setMessage("");
+      setStep("start");
+    } else if (target === "home") {
+      goHome();
+    } else if (target === "ask") {
+      setStep("ask");
+      announce([welcome()]);
+    } else if (target === "where") {
+      setStep("where");
+      announce([locationAsk()]);
+    } else if (target === "number") {
+      startNumberSetup(numberNext.current);
+    } else {
+      setFound(false);
+      setStep("planned"); // its options are read again; "Дахин сонсох" repeats the route
+    }
+  }
+  // Home: nothing to read but the two buttons. A position is kept; "Автобус" looks again anyway.
+  function goHome(): void {
+    setPlan(null);
+    planRef.current = null;
+    legRef.current = 0;
+    setLeg(0);
+    setFound(false);
+    setGuess(null);
+    setMessage("");
+    setStep("home");
   }
   function startOver(): void {
     setPlan(null);
@@ -762,6 +881,7 @@ export default function RiderFlow() {
   // blind rider holds the phone and listens, so a screen that never gets touched locked after 30 s -
   // 1 min, the locked page was dropped and the app started again from the beginning.
   useEffect(function () {
+    loadRouteData(); // routes + stops for the camera's first-frame match, fetched while the rider plans
     keepScreenOn(true);
     return function () {
       keepScreenOn(false);
@@ -820,6 +940,7 @@ export default function RiderFlow() {
       return;
     }
     speedStart();
+    const alive = runs.ticket();
     wakeServer(); // a sleeping free server starts up while the rider is still talking
     const legNow = plan ? legOf(plan, legRef.current) : null;
     const context = { step, route: legNow ? legNow.route : "", alight: legNow ? legNow.alight.name : "" };
@@ -888,6 +1009,10 @@ export default function RiderFlow() {
       sayWaitIfSlow();
       const result: AskResponse | null = await askByText(heard.text, pos.lat, pos.lon, context);
       clearTimeout(waitTimer);
+      if (!alive()) {
+        speedCancel();
+        return; // "Буцах" while the answer was coming: it would move the screen
+      }
       if (!result) {
         speedCancel();
         announce(["server_down"]);
@@ -995,6 +1120,7 @@ export default function RiderFlow() {
   }
   function openSettings(): void {
     stopSpeaking();
+    settingsFrom.current = stepRef.current === "where" ? "where" : "ask";
     setStep("settings");
   }
   function chooseMode(m: Mode): void {
@@ -1019,13 +1145,23 @@ export default function RiderFlow() {
     startNumberSetup("ask");
   }
 
-  // Each screen: a heading saying where you are, and at most three things to do. Everything else is
-  // by voice (press and hold, or "Дуугаар асуух" with a screen reader).
+  // Each screen: a heading saying where you are, and at most three things to do, then "Буцах".
+  // Everything else is by voice (press and hold, or "Дуугаар асуух" with a screen reader).
   let title = "";
+  // What VoiceOver / TalkBack read instead of a title with a route code in it ("Ч:29Б" -> "Ч хорин ес Б").
+  let spokenTitle = "";
   let actions: MenuItem[] = [];
   let primary: number | undefined = 0;
   const cur = plan ? legOf(plan, leg) : null; // the bus the rider is taking now
-  if (step === "locating" || step === "working") {
+  const routeWords = cur ? routeSpeech(cur.route) : ""; // "" when it has no route number: the title as shown
+  if (step === "home") {
+    // Screen reader: heading, "Автобус", "Ном унших" (one swipe each); install and back after them.
+    title = HOME_TITLE;
+    actions = [
+      { id: "bus", label: HOME_BUS, onActivate: startBus },
+      { id: "read", label: HOME_READ, onActivate: openReader },
+    ];
+  } else if (step === "locating" || step === "working") {
     title = step === "locating" ? "Байршил тогтоож байна" : "Түр хүлээнэ үү";
   } else if (step === "confirmPlace") {
     title = place.replace(/\s*\/[^/]*\//g, "") + ": зөв үү?";
@@ -1079,7 +1215,6 @@ export default function RiderFlow() {
     title = TYPE_LABEL[typeFor];
     // Screen-reader mode: the form's own "Болсон" button; app-reads mode: also a menu option.
     actions = mode === "sr" ? [] : [{ ...label("typed", "menu_done"), onActivate: typedFromMenu }];
-    actions = actions.concat({ ...label("type-back", "menu_back"), onActivate: typingBack });
   } else if (step === "numberListening") {
     title = mode === "sr" ? "Яаралтай тусламжийн дугаар" : "Сонсож байна";
     actions = [{ ...label(mode === "sr" ? "number-say" : "stop", "menu_stop_listening"), onActivate: stopRecording }];
@@ -1091,25 +1226,38 @@ export default function RiderFlow() {
     actions = [{ ...label(mode === "sr" ? asked : "stop", "menu_stop_listening"), onActivate: stopRecording }];
   } else if (step === "planned" && cur) {
     title = routeLabel(cur.route) + " автобус";
-    actions = [{ ...label("camera", "menu_open_camera"), onActivate: openCamera }];
+    spokenTitle = routeWords && routeWords + " автобус";
+    actions = [
+      { ...label("camera", "menu_open_camera"), onActivate: openCamera },
+      { ...label("plan-again", "menu_hear_again"), onActivate: hearRoute },
+    ];
   } else if (step === "camera" && cur && !found) {
     title = routeLabel(cur.route) + " автобус хайж байна";
-    primary = undefined; // an accidental double tap mustn't close the camera
-    actions = [{ ...label("back", "menu_back"), onActivate: backToPlan }];
+    spokenTitle = routeWords && routeWords + " автобус хайж байна";
+    primary = undefined; // an accidental double tap mustn't close the camera ("Буцах" is its only option)
   } else if (step === "camera" && cur) {
     title = routeLabel(cur.route) + " ирлээ: хаалга руу";
+    spokenTitle = routeWords && routeWords + " ирлээ: хаалга руу";
     primary = 1; // "after you sit down, double tap" (door_close) -> "I'm on the bus"
     actions = [{ ...label("door", "menu_door"), onActivate: whereIsDoor }, { ...label("boarded", "menu_boarded"), onActivate: boarded }];
   } else if (step === "ride" && cur) {
     title = routeLabel(cur.route) + " автобусанд явж байна";
+    spokenTitle = routeWords && routeWords + " автобусанд явж байна";
     actions = [{ ...label("left", "menu_stops_left"), onActivate: stopsLeft }, { ...label("off", "menu_got_off"), onActivate: gotOff }];
   } else if (step === "arrived" && plan) {
     title = (plan.transfer ? plan.transfer.alight_stop : plan.alight_stop).name.replace(/\s*\/[^/]*\//g, "") + ": ирлээ";
     primary = undefined;
     actions = [{ ...label("restart", "menu_start_over"), onActivate: startOver }];
   }
+  // "Буцах" on every screen, after the screen's own options (so the numbered button clips still fit) and
+  // never the double-tap default. Not over the SOS menu: it has its own "Болих".
+  primary = primaryWithBack(primary, actions.length);
+  if (!sos) {
+    actions = actions.concat({ ...label("back", "menu_back"), onActivate: goBack });
+  }
   if (sos) {
     title = "Яаралтай тусламж";
+    spokenTitle = "";
     primary = sos.mode === "sms" ? 0 : 1;
     actions = [
       { ...label("sos-send", "menu_sos_send"), onActivate: sosSend },
@@ -1124,7 +1272,8 @@ export default function RiderFlow() {
     actions = actions.concat({ ...label("help", "menu_help"), onActivate: sayHelp });
   }
   const setupNow = step === "number" || step === "numberConfirm" || step === "typing";
-  if (mode === "sr" && !sos && !listeningNow && !setupNow && step !== "locating" && step !== "working") {
+  const waitingNow = step === "locating" || step === "working";
+  if (mode === "sr" && !sos && !listeningNow && !setupNow && !waitingNow && step !== "home") {
     actions = actions.concat(
       { id: "talk", label: "Дуугаар асуух", onActivate: startTalk },
       { id: "sos", label: "Яаралтай тусламж", onActivate: sosButton },
@@ -1133,16 +1282,15 @@ export default function RiderFlow() {
       actions = actions.concat({ id: "settings", label: "Тохиргоо", onActivate: openSettings });
     }
   }
-  if (step === "planned" && cur && !sos) {
-    actions = actions.concat(
-      { ...label("plan-back", "menu_back"), onActivate: backToDestination },
-      { ...label("plan-again", "menu_hear_again"), onActivate: hearRoute },
-    );
+
+  if (step === "start" && !launched) {
+    return <main className="flow start-screen" />; // a saved mode opens home: don't flash the choice first
   }
 
   if (step === "start") {
     // Two equal halves. The screen-reader choice is first, so a VoiceOver user's first swipe
     // lands there. The big "Эхлэх" used to open the gesture screen, which VoiceOver blocks.
+    // Install is offered on home, after its two buttons.
     return (
       <main className="flow start-screen">
         <button
@@ -1168,9 +1316,27 @@ export default function RiderFlow() {
   }
 
   if (step === "learn") {
+    // "Буцах" under the lesson. In app-reads mode a finger tap there is a lesson gesture that missed the
+    // surface, so it answers only a screen reader, a keyboard or a mouse (like the lesson's "Алгасах").
     return (
       <main className="flow">
         <Tutorial onDone={onLearned} mode={mode} />
+        <button
+          type="button"
+          className="action"
+          onPointerUp={function (e) {
+            if (mode !== "sr" && e.pointerType === "mouse") {
+              goBack();
+            }
+          }}
+          onClick={function (e) {
+            if (mode === "sr" || e.detail === 0) {
+              goBack();
+            }
+          }}
+        >
+          {phrase("menu_back")}
+        </button>
       </main>
     );
   }
@@ -1185,7 +1351,7 @@ export default function RiderFlow() {
           onReader={chooseReader}
           onDestination={typedDestination}
           onTutorial={replayTutorial}
-          onBack={startOver}
+          onBack={goBack}
         />
       </main>
     );
@@ -1234,10 +1400,13 @@ export default function RiderFlow() {
       <main className="flow">
         <SrScreen
           title={title}
+          spokenTitle={spokenTitle}
           stepId={sos ? "sos" : step}
-          status={speedLine ? message + " [" + speedLine + "]" : message}
+          status={step === "home" && !sos ? "" : speedLine ? message + " [" + speedLine + "]" : message}
           live={reader === "screen"}
           actions={actions}
+          large={step === "home" && !sos ? 2 : 0}
+          footer={step === "home" && <InstallButton />}
         >
           {typing}
           {view}
@@ -1268,6 +1437,7 @@ export default function RiderFlow() {
       >
         {view}
       </VoiceMenu>
+      {step === "home" && <InstallButton />}
       {(step === "ask" || step === "where") && (
         <button className="helper-link" onClick={openSettings}>
           Тохиргоо (туслагчид)

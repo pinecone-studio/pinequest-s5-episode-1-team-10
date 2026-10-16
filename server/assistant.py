@@ -70,6 +70,12 @@ def _sign(route_no):
     return nl[0] + nl[1] if nl else route_no.strip()
 
 
+def _say_sign(sign):
+    """A sign as the voice says it: '29Б' -> 'хорин ес Б' (numwords.route_words). Only a number that is no
+    route number (outside 1..99, e.g. a misheard '100') is left as written."""
+    return numwords.route_words(sign) or sign.upper()
+
+
 def _sign_key(sign):
     m = re.match(r"\d+", sign)
     return (int(m.group()) if m else 999, sign)
@@ -127,14 +133,14 @@ def _say_meters(m):
 def _buses_at(stop, here):
     signs = sorted({_sign(r) for r in stop["routes"]}, key=_sign_key)
     where = "Энэ зогсоол" if here else planner.stop_name(stop["name"]) + " зогсоол"
-    return [f"{where} дээр {len(signs)} автобус зогсдог:", ", ".join(signs) + "."]
+    return [f"{where} дээр {len(signs)} автобус зогсдог:", ", ".join(_say_sign(s) for s in signs) + "."]
 
 
 def _route_info(sign, lat, lon):
     """Where bus `sign` goes: its two ends, and from the nearest stop it serves, how many stops to the end."""
     routes = _routes_of_sign(sign)
     if not routes:
-        return [f"{sign.upper()} дугаартай автобус олдсонгүй."]
+        return [f"{_say_sign(sign)} дугаартай автобус олдсонгүй."]
     names = _names()
     near = [s for s in bus_api.nearest_stops(lat, lon, WALK_M, 20) if set(s["routes"]) & routes]
     if near:
@@ -153,25 +159,29 @@ def _route_info(sign, lat, lon):
     bus_api.load_route_directions(rids[:1])
     orders = bus_api.route_directions(rids[0]) if rids else []
     if not orders:
-        return [f"{sign.upper()} автобусны чиглэл олдсонгүй."]
+        return [f"{_say_sign(sign)} автобусны чиглэл олдсонгүй."]
     a, b = planner.stop_name(names.get(orders[0][0], "")), planner.stop_name(names.get(orders[0][-1], ""))
     return [f"{planner.spoken_route(route)} {a} - {b} хооронд явдаг.", "Таны ойролцоо энэ автобус зогсдоггүй."]
 
 
 def _direct_options(named, lat, lon):
-    """[(stops, sign, origin)]: every direct bus from the rider's nearby stops to the place, best first."""
-    origins = bus_api.nearest_stops(lat, lon, WALK_M, planner.ORIGIN_LIMIT)
-    bus_api.load_route_directions(rid for st in origins + named for rids in st["route_ids"].values() for rid in rids)
+    """[(stops, sign, origin)]: every direct bus from a stop within the walk to the place, best first the
+    way the planner picks (planner._best_direct): shortest walk in WALK_STEP_M steps, then fewest stops.
+    Every stop within the walk, like the planner: else "Үгүй" for the very bus the trip plan suggests."""
+    origins = planner._within(lat, lon, WALK_M)
+    to_place = {r for st in named for r in st["routes"]}
+    bus_api.load_route_directions(rid for st in origins + named for r, rids in st["route_ids"].items() if r in to_place
+                                  for rid in rids)
     best = {}
     for o in origins:
         for d in named:
-            for route in set(o["routes"]) & set(d["routes"]):
+            for route in sorted(set(o["routes"]) & set(d["routes"])):
                 n = bus_api.stops_between(o["route_ids"][route], o["stop_id"], d["stop_id"])
                 if n is not None:
                     sign = _sign(route)
-                    cost = n + o["distance_m"] / planner.WALK_COST_M
-                    if sign not in best or cost < best[sign][0]:
-                        best[sign] = (cost, n, o)
+                    rank = (o["distance_m"] // planner.WALK_STEP_M, n, n + o["distance_m"] / planner.WALK_COST_M)
+                    if sign not in best or rank < best[sign][0]:
+                        best[sign] = (rank, n, o)
     ranked = sorted(best.items(), key=lambda item: item[1][0])
     return [(n, sign, o) for sign, (_, n, o) in ranked]
 
@@ -180,16 +190,16 @@ def _buses_to(named, place, lat, lon):
     options = _direct_options(named, lat, lon)
     if not options:
         return [f"Таны ойролцоох зогсоолоос {place} руу шууд автобус алга."]
-    listed = ", ".join(f"{sign} {n} зогсоол" for n, sign, _ in options[:4])
+    listed = ", ".join(f"{_say_sign(sign)} {n} зогсоол" for n, sign, _ in options[:4])
     return [f"{place} руу шууд явдаг автобус:", listed + "."]
 
 
 def _bus_goes_to(sign, named, place, lat, lon):
     for n, s, o in _direct_options(named, lat, lon):
         if s.upper() == sign.upper():
-            return [f"Тийм. {sign.upper()} автобус {place} руу явдаг.",
+            return [f"Тийм. {_say_sign(sign)} автобус {place} руу явдаг.",
                     f"{planner.stop_name(o['name'])} зогсоолоос {n} зогсоол."]
-    return [f"Үгүй. {sign.upper()} автобус таны ойролцооноос {place} руу явдаггүй."]
+    return [f"Үгүй. {_say_sign(sign)} автобус таны ойролцооноос {place} руу явдаггүй."]
 
 
 def _how_far(named, place, lat, lon):

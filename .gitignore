@@ -38,3 +38,9 @@ deploy/mp3cache/
 
 # Reader model build downloads (deploy/reader_models.py)
 deploy/reader_work/
+
+# local keys (Azure etc.), never committed
+.env*.local
+app/public/sign-ocr-worker.js
+# real bus photos (bystanders' faces): local only, for /debug/ocr-bench
+app/public/test-fixtures/
