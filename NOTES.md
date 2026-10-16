@@ -4,7 +4,7 @@ Read this first every session. Before `/clear`, update all three sections:
 ## Morning report (night run 2026-10-16, branch `app-shell`, not pushed, Production untouched)
 Start point tagged `demo-safe` (105beb4). Everything below is on `app-shell` in small commits (`git log demo-safe..app-shell`).
 
-**Preview:** PREVIEW_URL
+**Preview:** https://avtobus-khotoch-2b2t25y1v-khaliunbolortuya-7802s-projects.vercel.app (built from fcbe9ae + deploy fix d3cabee; clips made before ~04:40 only)
 - Protected by **Vercel login (SSO), not a password**: on the phone, sign in to Vercel first. Automation uses the project's existing "Protection Bypass for Automation" secret (never written anywhere).
 - Vercel Toolbar turned off for Preview deployments (`VERCEL_PREVIEW_FEEDBACK_ENABLED=0`, Preview env only). Why: our COEP header blocks its script (console errors) and it adds a floating control VoiceOver lands on. Undo: `cd deploy/out && vercel env rm VERCEL_PREVIEW_FEEDBACK_ENABLED preview`.
 
@@ -20,7 +20,10 @@ Start point tagged `demo-safe` (105beb4). Everything below is on `app-shell` in 
 **Matcher decision made tonight (please confirm):** the offline report found 1 wrong "yes": a stray bare "72" next to an advert ("… VIP KEC 72") was taken as Ч:72 by the sign parser (`?scanner=azure`) and by the number rules (default camera). signMatch already ignores bare numbers (your 3f94106 rule). Fix only where the two are combined (`lib/signVerdict.ts`, `BusCamera.judge`): with route data, a parser/number-rule "yes" needs signMatch to agree, else "unsure". Stricter only; MARGIN, prefix and insert/delete rules untouched; right yes unchanged (2/31). Revert = commit 8fd1cea.
 
 **Test results**
-TEST_RESULTS
+- `npx tsc --noEmit` exit 0 · `npm run lint` exit 0 (1 old warning: unused `awake`, Reader.tsx) · `npm run build` exit 0 · `npm test` 112/112 · server pytest 135 passed.
+- `npm run match-report` (36 night photos + 6 whole-frame reads, cached OCR, no live calls): wrong yes 0 on both paths, right yes 2/31 (weak evidence: the on-device crops rarely contain the sign).
+- Playwright, iPhone 13 (WebKit) + Pixel 7 (Chromium), local `next start`: 10/10 pass.
+- Playwright against the Preview (bypass secret): 8/10 pass. Both bus-flow runs fail on one thing only: `/api/tts` 404 for "Ч хорин ес Б автобус ирлээ. Энэ таны автобус." — that clip was not made yet when deployed (see Voice clips). **Not done: redeploy after the clips + rerun.**
 
 **TODOs and decisions for you**
 - Wording (none written by me): iPhone install steps (`app/lib/installSteps.ts`, then phrases.json + `make_speech.py --fixed`); walking guidance to the stop (only "Зогсоол руу N метр алхана" exists); "Автобус"/"Ном унших" have no pre-made clips (live/phone voice in voice mode); optional sentence "the stop with your bus is X" (location vs boarding stop); reader back label "Автобус руу буцах" now lands on home — keep or "Буцах"?
@@ -30,11 +33,12 @@ TEST_RESULTS
 - Ultra-wide: confirm 108° and sign-reading range at a real stop (`?debug=1` vs `&cam=main`); Android zoom permission prompt; ultra-wide darker at night. `?scanner=azure` (BusScanner) still opens the default camera.
 - Reader: iPhone full-resolution photo needs `<input capture>` (breaks auto-aim) — your call; sideways-photo fallback may cost detail (OCR turns pages itself).
 - App name: "bus-khutuch" (NIGHT_PLAN) vs "Автобус хөтөч" (your chat answer).
-- Voice clips: CLIPS_STATUS
+- Voice clips: route sentences have new text, so their clips must be remade. Overnight run (`server/tts_cache`, take/found first, then fixed, then transfers) reached only 180/466 by 11:06 (it stalled, probably sleep). To finish: `cd server && set -a && . ../.env && set +a && .venv/bin/python make_speech.py` (server on :8000 stopped), then `deploy/vercel.sh --preview` and `BASE_URL=<preview> VERCEL_AUTOMATION_BYPASS_SECRET=… npx playwright test` in app/. Until then the free-hosting server answers 404 for unmade clips and the phone voice reads them (in words, no digits).
 - Existing, not tonight: "numberConfirm" heading shows digits; other digits in sentences (stop counts, metres) are still read by the voice model's normaliser; `assistant` list "далан тав 2 зогсоол" runs together.
 - Phone checks still needed (no device here): VoiceOver/TalkBack after installing, camera choices, Android photo orientation.
 
 ## Next
+- [ ] **Finish the night run** (see Morning report): remake the remaining voice clips, redeploy the Preview, rerun e2e on it (expect 10/10), then phone tests with VoiceOver/TalkBack.
 - [ ] **Azure scanner's LED cropper misses most real night signs** (bench on 36 real photos, /debug/ocr-bench): in 26 of 28 labelled photos the 2 "LED" crops were the red bus body or red-lit pavement, not the sign; only the front signs of 3386/3387 were cut. Needs ranking boxes by text-like contrast (thin bright strokes) instead of area, or cutting inside the YOLO bus box. Until then on-device OCR can't win (it only reads LED crops).
 - [ ] **Phone test of the hkg1 Preview at a real stop** (https://avtobus-khotoch-8qcfhse49-khaliunbolortuya-7802s-projects.vercel.app; sign in to Vercel on the phone, it's a protected preview; add `?scanner=azure&debug=1` for the Azure scanner). When OK: `cd deploy/out && vercel promote <url>`, check /api/health on avtobus-khotoch.vercel.app, then delete the 2 measurement previews (icn1 https://avtobus-khotoch-2xsd3lmzm-khaliunbolortuya-7802s-projects.vercel.app, hkg1 https://avtobus-khotoch-rbazzfikx-khaliunbolortuya-7802s-projects.vercel.app).
 - [ ] **Azure sign scanner (opt-in `?scanner=azure`), before anyone relies on it**: (1) put the F0 key in `app/.env.local` (`AZURE_VISION_ENDPOINT=https://<name>.cognitiveservices.azure.com`, `AZURE_VISION_KEY=...`, never in chat or git) and, for the live site, in Vercel env (Khaliun); (2) one real call on `tov_nomyn_san_1.png` (other PC): does Azure read Mongolian Cyrillic "Ч:55"/"Ч55" (not confirmed: Microsoft's language page didn't load here), and photo 2 never yes; (3) on a phone at a real stop with `&debug=1`: time to yes, wrong "yes" = 0, round trip (phone -> icn1 -> Azure region); (4) on the deploy, check `/api/read-sign` answers (not swallowed by the root `api/index.py`). No door guidance or "bus moving" warning in this mode (BusCamera owns them): hand over to door guidance after the yes if the scanner stays.
